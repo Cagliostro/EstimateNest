@@ -1,0 +1,30 @@
+{
+  "name": "@estimatenest/infrastructure",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "deploy": "cdk deploy --all --require-approval never",
+    "destroy": "cdk destroy --all",
+    "synth": "cdk synth",
+    "diff": "cdk diff --all",
+    "bootstrap": "cdk bootstrap",
+    "lint": "eslint . --ext ts --report-unused-disable-directives --max-warnings 0",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.124.0",
+    "constructs": "^10.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "aws-cdk": "^2.124.0",
+    "esbuild": "^0.20.1",
+    "eslint": "^8.56.0",
+    "typescript": "^5.4.5"
+  },
+  "peerDependencies": {
+    "aws-cdk": "^2.124.0"
+  }
+}

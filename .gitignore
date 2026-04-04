@@ -1,0 +1,48 @@
+# Dependencies
+node_modules
+*/node_modules
+
+# Build outputs
+dist
+build
+*.log
+coverage
+*.tsbuildinfo
+
+# AWS CDK
+cdk.out
+*.js
+*.d.ts
+!jest.config.js
+
+# Environment variables
+.env
+.env.local
+.env.development
+.env.production
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp
+temp
+
+# Frontend specific
+frontend/dist
+frontend/.env
+
+# Backend specific
+backend/dist
+backend/.env
+
+# Infrastructure specific
+infrastructure/cdk.out
+infrastructure/.env
