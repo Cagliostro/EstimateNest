@@ -78,10 +78,39 @@ jobs:
         run: npm run bootstrap --workspace=infrastructure -- --context env=${{ steps.env.outputs.env }}
 
       - name: Deploy infrastructure
-        run: npm run deploy:${{ steps.env.outputs.env }} --workspace=infrastructure
+        run: npm run deploy:${{ steps.env.outputs.env }}
 
-      - name: Deploy frontend
+      - name: Get deployment outputs
+        id: outputs
+        run: |
+          STACK_NAME="EstimateNest-${{ steps.env.outputs.env }}"
+
+          # Get bucket name from CloudFormation outputs
+          BUCKET_NAME=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" \
+            --output text)
+          echo "bucket_name=$BUCKET_NAME" >> $GITHUB_OUTPUT
+
+          # Get CloudFront distribution ID from outputs
+          DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" \
+            --output text)
+          echo "distribution_id=$DISTRIBUTION_ID" >> $GITHUB_OUTPUT
+
+          echo "Bucket: $BUCKET_NAME"
+          echo "Distribution: $DISTRIBUTION_ID"
+
+      - name: Build frontend
         run: npm run build --workspace=frontend
-        # Upload to S3 via AWS CLI (CDK already deployed the bucket)
-        # This step would be added after we have the bucket name from CDK outputs.
-        # For now, we just build.
+
+      - name: Upload frontend to S3
+        run: |
+          aws s3 sync frontend/dist s3://${{ steps.outputs.outputs.bucket_name }} --delete
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ steps.outputs.outputs.distribution_id }} \
+            --paths "/*"

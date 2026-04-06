@@ -332,6 +332,10 @@ export class EstimateNestStack extends cdk.Stack {
       value: frontendBucket.bucketName,
     });
 
+    new cdk.CfnOutput(this, 'CloudFrontDistributionId', {
+      value: distribution.distributionId,
+    });
+
     new cdk.CfnOutput(this, 'RestApiUrl', {
       value: restApi.url,
     });
