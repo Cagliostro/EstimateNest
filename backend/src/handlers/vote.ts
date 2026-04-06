@@ -9,7 +9,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { v4 as uuidv4 } from 'uuid';
-import { Vote, Round, WebSocketMessage } from '@estimatenest/shared';
+import { Vote, Round, WebSocketMessage, Participant } from '@estimatenest/shared';
 import { broadcastToRoom } from '../utils/broadcast';
 
 const client = new DynamoDBClient({});
@@ -263,6 +263,54 @@ async function handleReveal(
   return { message: 'Votes revealed' };
 }
 
+async function handleJoin(
+  event: APIGatewayProxyEvent,
+  _message: WebSocketMessage & { type: 'join' }
+) {
+  const { connectionId } = event.requestContext;
+
+  // Find participant by connectionId
+  const queryResult = await docClient.send(
+    new QueryCommand({
+      TableName: PARTICIPANTS_TABLE,
+      IndexName: 'ConnectionIdIndex',
+      KeyConditionExpression: 'connectionId = :cid',
+      ExpressionAttributeValues: {
+        ':cid': connectionId,
+      },
+      Limit: 1,
+    })
+  );
+
+  const participant = queryResult.Items?.[0] as Participant | undefined;
+  if (!participant) {
+    throw new Error('Participant not found');
+  }
+
+  const { roomId } = participant;
+
+  // Fetch all participants in the room
+  const participantsResult = await docClient.send(
+    new QueryCommand({
+      TableName: PARTICIPANTS_TABLE,
+      KeyConditionExpression: 'roomId = :roomId',
+      ExpressionAttributeValues: {
+        ':roomId': roomId,
+      },
+    })
+  );
+
+  const participants = (participantsResult.Items as Participant[]) || [];
+
+  // Broadcast participant list to everyone in the room
+  await broadcastToRoom(event, roomId, {
+    type: 'participantList',
+    payload: { participants },
+  });
+
+  return { message: 'Joined' };
+}
+
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   let message: WebSocketMessage;
 
@@ -283,6 +331,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         break;
       case 'reveal':
         result = await handleReveal(event, message);
+        break;
+      case 'join':
+        result = await handleJoin(event, message);
         break;
       default:
         return {

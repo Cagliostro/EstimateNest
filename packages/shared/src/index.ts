@@ -77,7 +77,7 @@ export const DEFAULT_DECKS: CardDeck[] = [
 // ====================
 
 export type WebSocketMessage =
-  | { type: 'join'; payload: { roomCode: string; name: string; avatarSeed?: string } }
+  | { type: 'join'; payload?: { roomCode?: string; name?: string; avatarSeed?: string } }
   | { type: 'leave'; payload: { participantId: string } }
   | { type: 'vote'; payload: { roundId: string; value: number | string } }
   | { type: 'reveal'; payload: { roundId: string } }

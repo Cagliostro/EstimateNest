@@ -184,9 +184,16 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       isModerator: p.isModerator,
     }));
 
+    // CORS headers
+    const origin = event.headers.origin || event.headers.Origin;
+    const headers = {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': origin || '*',
+    };
+
     return {
       statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         roomId,
         participantId,
@@ -201,8 +208,15 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     };
   } catch (error) {
     console.error('Join room error:', error);
+    // CORS headers for error response
+    const origin = event.headers.origin || event.headers.Origin;
+    const headers = {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': origin || '*',
+    };
     return {
       statusCode: 500,
+      headers,
       body: JSON.stringify({ error: 'Internal server error' }),
     };
   }

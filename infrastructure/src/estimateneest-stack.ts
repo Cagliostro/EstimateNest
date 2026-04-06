@@ -153,6 +153,13 @@ export class EstimateNestStack extends cdk.Stack {
       ),
     });
 
+    webSocketApi.addRoute('join', {
+      integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
+        'JoinIntegration',
+        voteHandler
+      ),
+    });
+
     const webSocketStage = new apigatewayv2.WebSocketStage(this, 'WebSocketStage', {
       webSocketApi,
       stageName: props.envName,
@@ -243,6 +250,8 @@ export class EstimateNestStack extends cdk.Stack {
       defaultCorsPreflightOptions: {
         allowOrigins: apigateway.Cors.ALL_ORIGINS,
         allowMethods: apigateway.Cors.ALL_METHODS,
+        allowHeaders: ['*'],
+        allowCredentials: false,
       },
     });
 

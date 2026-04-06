@@ -26,7 +26,9 @@ export async function broadcastToRoom(
 ): Promise<void> {
   const { domainName, stage } = event.requestContext;
   const endpoint = `https://${domainName}/${stage}`;
-  console.log(`Broadcast endpoint: ${endpoint}, room: ${roomId}, exclude: ${excludeConnectionId}`);
+  console.log(
+    `Broadcast endpoint: domainName=${domainName}, stage=${stage}, endpoint=${endpoint}, room: ${roomId}, exclude: ${excludeConnectionId}`
+  );
   const apiGatewayClient = new ApiGatewayManagementApiClient({ endpoint });
 
   // Fetch all participants in the room
@@ -113,6 +115,9 @@ export async function sendToConnection(
 ): Promise<void> {
   const { domainName, stage } = event.requestContext;
   const endpoint = `https://${domainName}/${stage}`;
+  console.log(
+    `SendToConnection constructing endpoint: domainName=${domainName}, stage=${stage}, endpoint=${endpoint}`
+  );
   const apiGatewayClient = new ApiGatewayManagementApiClient({ endpoint });
   console.log(`SendToConnection endpoint: ${endpoint}, connection: ${connectionId}`);
 

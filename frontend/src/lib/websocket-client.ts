@@ -50,6 +50,12 @@ export class WebSocketClient {
       console.log('WebSocket connected');
       this.setState('connected');
       this.reconnectCount = 0;
+      // Send join message to trigger participant list broadcast
+      try {
+        this.send({ type: 'join', payload: {} });
+      } catch (error) {
+        console.warn('Failed to send join message:', error);
+      }
     };
 
     this.ws.onmessage = (event) => {

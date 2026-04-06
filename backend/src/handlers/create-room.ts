@@ -54,9 +54,16 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       })
     );
 
+    // CORS headers
+    const origin = event.headers.origin || event.headers.Origin;
+    const headers = {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': origin || '*',
+    };
+
     return {
       statusCode: 201,
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         roomId,
         shortCode,
@@ -66,8 +73,15 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     };
   } catch (error) {
     console.error('Create room error:', error);
+    // CORS headers for error response too
+    const origin = event.headers.origin || event.headers.Origin;
+    const headers = {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': origin || '*',
+    };
     return {
       statusCode: 500,
+      headers,
       body: JSON.stringify({ error: 'Internal server error' }),
     };
   }
