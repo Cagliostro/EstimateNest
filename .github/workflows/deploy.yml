@@ -35,10 +35,10 @@ jobs:
           cache: 'npm'
 
       - name: Clean node_modules
-        run: rm -rf node_modules
+        run: rm -rf node_modules package-lock.json
 
       - name: Install dependencies
-        run: npm ci --include=optional
+        run: npm install --no-audit --no-fund
 
       - name: Lint
         run: npm run lint
@@ -75,10 +75,10 @@ jobs:
           cache: 'npm'
 
       - name: Clean node_modules
-        run: rm -rf node_modules
+        run: rm -rf node_modules package-lock.json
 
       - name: Install dependencies
-        run: npm ci --include=optional
+        run: npm install --no-audit --no-fund
 
       - name: Build packages
         run: npm run build
