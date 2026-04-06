@@ -7,7 +7,7 @@
     "dev": "tsup --watch",
     "dev:server": "tsx src/local-server.ts",
     "build": "tsup",
-    "test": "vitest",
+    "test": "vitest run",
     "test:coverage": "vitest --coverage",
     "lint": "eslint . --ext ts --report-unused-disable-directives --max-warnings 0"
   },

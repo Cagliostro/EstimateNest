@@ -12,7 +12,7 @@
     "packages/shared"
   ],
   "scripts": {
-    "build": "npm run build --workspaces",
+    "build": "npm run build --workspace=packages/shared && npm run build --workspace=backend && npm run build --workspace=frontend && npm run build --workspace=infrastructure",
     "dev": "concurrently \"npm run dev --workspace=frontend\" \"npm run dev:server --workspace=backend\"",
     "test": "npm run test --workspaces",
     "lint": "npm run lint --workspaces",
