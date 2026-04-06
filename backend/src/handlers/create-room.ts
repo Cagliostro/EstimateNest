@@ -13,12 +13,7 @@ const ROOM_CODES_TABLE = process.env.ROOM_CODES_TABLE!;
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   try {
     const body = event.body ? JSON.parse(event.body) : {};
-    const {
-      moderatorPassword,
-      allowAllParticipantsToReveal = false,
-      maxParticipants = 50,
-      deck = 'fibonacci',
-    } = body;
+    const { allowAllParticipantsToReveal = false, maxParticipants = 50, deck = 'fibonacci' } = body;
 
     const roomId = uuidv4();
     const shortCode = generateShortCode();
@@ -36,25 +31,28 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     };
 
     // Write room record
-    await docClient.send(new PutCommand({
-      TableName: ROOMS_TABLE,
-      Item: {
-        id: roomId,
-        sk: 'META',
-        ...room,
-      },
-    }));
+    await docClient.send(
+      new PutCommand({
+        TableName: ROOMS_TABLE,
+        Item: {
+          ...room,
+          sk: 'META',
+        },
+      })
+    );
 
     // Write code mapping
-    await docClient.send(new PutCommand({
-      TableName: ROOM_CODES_TABLE,
-      Item: {
-        shortCode,
-        roomId,
-        createdAt: now,
-        expiresAt,
-      },
-    }));
+    await docClient.send(
+      new PutCommand({
+        TableName: ROOM_CODES_TABLE,
+        Item: {
+          shortCode,
+          roomId,
+          createdAt: now,
+          expiresAt,
+        },
+      })
+    );
 
     return {
       statusCode: 201,

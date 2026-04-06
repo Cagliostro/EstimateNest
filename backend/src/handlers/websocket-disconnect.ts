@@ -1,0 +1,95 @@
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
+import { broadcastToRoom } from '../utils/broadcast';
+import { Participant } from '@estimatenest/shared';
+
+const client = new DynamoDBClient({});
+const docClient = DynamoDBDocumentClient.from(client);
+
+const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
+
+export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+  const { connectionId } = event.requestContext;
+
+  try {
+    // Find participant by connectionId using GSI
+    const queryResult = await docClient.send(
+      new QueryCommand({
+        TableName: PARTICIPANTS_TABLE,
+        IndexName: 'ConnectionIdIndex',
+        KeyConditionExpression: 'connectionId = :cid',
+        ExpressionAttributeValues: {
+          ':cid': connectionId,
+        },
+        Limit: 1,
+      })
+    );
+
+    const participant = queryResult.Items?.[0];
+    if (!participant) {
+      // No participant found with this connectionId, just return success
+      return { statusCode: 200, body: JSON.stringify({ message: 'Disconnected' }) };
+    }
+
+    const { roomId, participantId } = participant;
+
+    // Clear connectionId from participant record
+    await docClient.send(
+      new UpdateCommand({
+        TableName: PARTICIPANTS_TABLE,
+        Key: { roomId, participantId },
+        UpdateExpression: 'REMOVE connectionId SET lastSeenAt = :now',
+        ExpressionAttributeValues: {
+          ':now': new Date().toISOString(),
+        },
+      })
+    );
+
+    // Fetch all participants in the room
+    const participantsResult = await docClient.send(
+      new QueryCommand({
+        TableName: PARTICIPANTS_TABLE,
+        KeyConditionExpression: 'roomId = :roomId',
+        ExpressionAttributeValues: {
+          ':roomId': roomId,
+        },
+      })
+    );
+
+    const participants = (participantsResult.Items as Participant[]) || [];
+
+    // Broadcast updated participant list to everyone in the room
+    await broadcastToRoom(
+      event,
+      roomId,
+      {
+        type: 'participantList',
+        payload: { participants },
+      },
+      connectionId
+    );
+
+    // Also send a leave notification for clients that track individual leaves
+    await broadcastToRoom(
+      event,
+      roomId,
+      {
+        type: 'leave',
+        payload: { participantId },
+      },
+      connectionId
+    );
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ message: 'Disconnected' }),
+    };
+  } catch (error) {
+    console.error('WebSocket disconnect error:', error);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: 'Internal server error' }),
+    };
+  }
+};

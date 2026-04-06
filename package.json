@@ -8,11 +8,12 @@
   "workspaces": [
     "frontend",
     "backend",
-    "infrastructure"
+    "infrastructure",
+    "packages/shared"
   ],
   "scripts": {
     "build": "npm run build --workspaces",
-    "dev": "concurrently \"npm run dev --workspace=frontend\" \"npm run dev --workspace=backend\"",
+    "dev": "concurrently \"npm run dev --workspace=frontend\" \"npm run dev:server --workspace=backend\"",
     "test": "npm run test --workspaces",
     "lint": "npm run lint --workspaces",
     "format": "prettier --write .",

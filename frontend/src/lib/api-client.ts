@@ -1,0 +1,101 @@
+import { config } from './config';
+import { Participant, Round, Vote } from '@estimatenest/shared';
+
+export interface CreateRoomRequest {
+  moderatorPassword?: string;
+  allowAllParticipantsToReveal?: boolean;
+  maxParticipants?: number;
+  deck?: string;
+}
+
+export interface CreateRoomResponse {
+  roomId: string;
+  shortCode: string;
+  joinUrl: string;
+  expiresAt: string;
+}
+
+export interface JoinRoomResponse {
+  roomId: string;
+  participantId: string;
+  name: string;
+  avatarSeed: string;
+  webSocketUrl: string;
+  participants?: Participant[];
+  round?: Round | null;
+  votes?: Vote[];
+  isNewParticipant?: boolean;
+}
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public statusCode?: number,
+    public details?: unknown
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+/**
+ * REST API client for EstimateNest backend
+ */
+export const apiClient = {
+  /**
+   * Create a new planning poker room
+   */
+  async createRoom(request: CreateRoomRequest): Promise<CreateRoomResponse> {
+    const response = await fetch(`${config.apiUrl}/rooms`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      let errorMessage = `Failed to create room: ${response.status}`;
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.error || errorMessage;
+      } catch {
+        // Ignore JSON parse errors
+      }
+      throw new ApiError(errorMessage, response.status);
+    }
+
+    return response.json();
+  },
+
+  /**
+   * Join an existing room
+   * @param code Room short code (e.g., "ABC123")
+   * @param name Participant display name
+   * @param participantId Optional participant ID for polling (skip creating new participant)
+   */
+  async joinRoom(code: string, name?: string, participantId?: string): Promise<JoinRoomResponse> {
+    const url = new URL(`${config.apiUrl}/rooms/${code}`);
+    if (name) {
+      url.searchParams.set('name', name);
+    }
+    if (participantId) {
+      url.searchParams.set('participantId', participantId);
+    }
+
+    const response = await fetch(url.toString());
+
+    if (!response.ok) {
+      let errorMessage = `Failed to join room: ${response.status}`;
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.error || errorMessage;
+      } catch {
+        // Ignore JSON parse errors
+      }
+      throw new ApiError(errorMessage, response.status);
+    }
+
+    return response.json();
+  },
+};

@@ -1,14 +1,50 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { v4 as uuidv4 } from 'uuid';
-import { createAvatarSeed, Participant } from '@estimatenest/shared';
+import { createAvatarSeed, Participant, Round, Vote } from '@estimatenest/shared';
 
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
 
 const ROOM_CODES_TABLE = process.env.ROOM_CODES_TABLE!;
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
+const ROUNDS_TABLE = process.env.ROUNDS_TABLE!;
+const VOTES_TABLE = process.env.VOTES_TABLE!;
+
+// Helper function to create participant record
+async function createParticipantRecord(
+  roomId: string,
+  participantId: string,
+  name: string,
+  avatarSeed: string
+) {
+  const participant: Participant = {
+    id: participantId,
+    roomId,
+    connectionId: 'REST',
+    name,
+    avatarSeed,
+    joinedAt: new Date().toISOString(),
+    lastSeenAt: new Date().toISOString(),
+    isModerator: false,
+  };
+  await docClient.send(
+    new PutCommand({
+      TableName: PARTICIPANTS_TABLE,
+      Item: {
+        ...participant,
+        participantId: participant.id,
+      },
+    })
+  );
+}
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   try {
@@ -21,10 +57,12 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     }
 
     // Look up room by short code
-    const codeResult = await docClient.send(new GetCommand({
-      TableName: ROOM_CODES_TABLE,
-      Key: { shortCode: code.toUpperCase() },
-    }));
+    const codeResult = await docClient.send(
+      new GetCommand({
+        TableName: ROOM_CODES_TABLE,
+        Key: { shortCode: code.toUpperCase() },
+      })
+    );
 
     if (!codeResult.Item) {
       return {
@@ -41,30 +79,109 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       };
     }
 
-    // For REST join, we just return room info and a token for WebSocket connection
-    const participantId = uuidv4();
-    const name = event.queryStringParameters?.name || 'Anonymous';
-    const avatarSeed = createAvatarSeed(name);
+    // Determine participant ID (provided for polling, or new)
+    const providedParticipantId = event.queryStringParameters?.participantId;
+    const providedName = event.queryStringParameters?.name || 'Anonymous';
+    let participantId: string;
+    let name: string;
+    let avatarSeed: string;
+    let isNewParticipant = false;
 
-    const participant: Participant = {
-      id: participantId,
-      roomId,
-      connectionId: 'REST', // placeholder, real connection ID comes from WebSocket
-      name,
-      avatarSeed,
-      joinedAt: new Date().toISOString(),
-      lastSeenAt: new Date().toISOString(),
-      isModerator: false, // determined later via moderator password
-    };
+    if (providedParticipantId) {
+      // Try to fetch existing participant
+      const existingParticipantResult = await docClient.send(
+        new GetCommand({
+          TableName: PARTICIPANTS_TABLE,
+          Key: { roomId, participantId: providedParticipantId },
+        })
+      );
+      const existingParticipant = existingParticipantResult.Item;
+      if (existingParticipant) {
+        // Participant exists - use stored details
+        participantId = providedParticipantId;
+        name = existingParticipant.name;
+        avatarSeed = existingParticipant.avatarSeed;
+        // Update lastSeenAt
+        await docClient.send(
+          new UpdateCommand({
+            TableName: PARTICIPANTS_TABLE,
+            Key: { roomId, participantId: providedParticipantId },
+            UpdateExpression: 'SET lastSeenAt = :now',
+            ExpressionAttributeValues: {
+              ':now': new Date().toISOString(),
+            },
+          })
+        );
+      } else {
+        // Participant not found - treat as new participant
+        isNewParticipant = true;
+        participantId = uuidv4();
+        name = providedName;
+        avatarSeed = createAvatarSeed(name);
+        await createParticipantRecord(roomId, participantId, name, avatarSeed);
+      }
+    } else {
+      // New participant joining
+      isNewParticipant = true;
+      participantId = uuidv4();
+      name = providedName;
+      avatarSeed = createAvatarSeed(name);
+      await createParticipantRecord(roomId, participantId, name, avatarSeed);
+    }
 
-    // Store participant (optional for REST join, but we might want to pre‑register)
-    await docClient.send(new PutCommand({
-      TableName: PARTICIPANTS_TABLE,
-      Item: {
-        roomId,
-        participantId,
-        ...participant,
-      },
+    // Fetch all participants in the room (including the one we just added)
+    const participantsResult = await docClient.send(
+      new QueryCommand({
+        TableName: PARTICIPANTS_TABLE,
+        KeyConditionExpression: 'roomId = :roomId',
+        ExpressionAttributeValues: {
+          ':roomId': roomId,
+        },
+      })
+    );
+
+    const participants = (participantsResult.Items as Participant[]) || [];
+
+    // Fetch active round (not revealed)
+    const roundsResult = await docClient.send(
+      new QueryCommand({
+        TableName: ROUNDS_TABLE,
+        KeyConditionExpression: 'roomId = :roomId',
+        FilterExpression: 'isRevealed = :false',
+        ExpressionAttributeValues: {
+          ':roomId': roomId,
+          ':false': false,
+        },
+        Limit: 1,
+      })
+    );
+
+    let round: Round | null = null;
+    let votes: Vote[] = [];
+
+    if (roundsResult.Items && roundsResult.Items.length > 0) {
+      round = roundsResult.Items[0] as Round;
+      const votesResult = await docClient.send(
+        new QueryCommand({
+          TableName: VOTES_TABLE,
+          KeyConditionExpression: 'roundId = :roundId',
+          ExpressionAttributeValues: {
+            ':roundId': round.id,
+          },
+        })
+      );
+      votes = (votesResult.Items as Vote[]) || [];
+    }
+
+    // Remove connectionId from response for privacy/security
+    const participantsWithoutConnection = participants.map((p) => ({
+      id: p.id,
+      roomId: p.roomId,
+      name: p.name,
+      avatarSeed: p.avatarSeed,
+      joinedAt: p.joinedAt,
+      lastSeenAt: p.lastSeenAt,
+      isModerator: p.isModerator,
     }));
 
     return {
@@ -75,7 +192,11 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         participantId,
         name,
         avatarSeed,
+        isNewParticipant,
         webSocketUrl: process.env.WEBSOCKET_URL || 'wss://example.com',
+        participants: participantsWithoutConnection,
+        round,
+        votes,
       }),
     };
   } catch (error) {

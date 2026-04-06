@@ -3,7 +3,7 @@ import { defineConfig } from 'tsup';
 export default defineConfig({
   entry: ['src/**/*.ts'],
   outDir: 'dist',
-  format: 'cjs',
+  format: 'esm',
   target: 'node20',
   bundle: true,
   minify: false,
