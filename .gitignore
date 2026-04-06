@@ -46,3 +46,7 @@ backend/.env
 # Infrastructure specific
 infrastructure/cdk.out
 infrastructure/.env
+
+# Design files (binary)
+EstimateNest UI Design.make
+tmp-design/
