@@ -78,9 +78,7 @@ export class EstimateNestStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_20_X,
       entry: '../backend/src/handlers/create-room.ts',
       handler: 'handler',
-      bundling: {
-        externalModules: ['@estimatenest/shared'],
-      },
+
       environment: {
         ROOMS_TABLE: roomsTable.tableName,
         ROOM_CODES_TABLE: roomCodesTable.tableName,
@@ -95,9 +93,6 @@ export class EstimateNestStack extends cdk.Stack {
         runtime: lambda.Runtime.NODEJS_20_X,
         entry: '../backend/src/handlers/websocket-connect.ts',
         handler: 'handler',
-        bundling: {
-          externalModules: ['@estimatenest/shared'],
-        },
         environment: {
           PARTICIPANTS_TABLE: participantsTable.tableName,
         },
@@ -111,9 +106,6 @@ export class EstimateNestStack extends cdk.Stack {
         runtime: lambda.Runtime.NODEJS_20_X,
         entry: '../backend/src/handlers/websocket-disconnect.ts',
         handler: 'handler',
-        bundling: {
-          externalModules: ['@estimatenest/shared'],
-        },
         environment: {
           PARTICIPANTS_TABLE: participantsTable.tableName,
         },
@@ -124,9 +116,7 @@ export class EstimateNestStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_20_X,
       entry: '../backend/src/handlers/vote.ts',
       handler: 'handler',
-      bundling: {
-        externalModules: ['@estimatenest/shared'],
-      },
+
       environment: {
         VOTES_TABLE: votesTable.tableName,
         ROUNDS_TABLE: roundsTable.tableName,
@@ -182,9 +172,7 @@ export class EstimateNestStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_20_X,
       entry: '../backend/src/handlers/join-room.ts',
       handler: 'handler',
-      bundling: {
-        externalModules: ['@estimatenest/shared'],
-      },
+
       environment: {
         ROOM_CODES_TABLE: roomCodesTable.tableName,
         PARTICIPANTS_TABLE: participantsTable.tableName,
