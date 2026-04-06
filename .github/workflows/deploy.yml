@@ -20,16 +20,11 @@ jobs:
     env:
       ROLLUP_NATIVE: 0
       NODE_OPTIONS: --max-old-space-size=4096
-      npm_config_optional: false
-      npm_config_omit: optional
+      npm_config_optional: true
       SHARP_IGNORE_GLOBAL_LIBVIPS: 1
-      npm_config_platform: linux
-      npm_config_arch: x64
-      npm_config_build_from_source: false
-      npm_config_skip_build: true
       SHARP_DIST_BASE_URL: https://github.com/lovell/sharp-libvips/releases/download
-      npm_config_sharp_libvips_binary_host: https://github.com/lovell/sharp-libvips/releases/download
-      npm_config_sharp_binary_host: https://github.com/lovell/sharp/releases/download
+      SHARP_BINARY_HOST: https://github.com/lovell/sharp/releases/download
+      SHARP_LIBVIPS_BINARY_HOST: https://github.com/lovell/sharp-libvips/releases/download
     steps:
       - uses: actions/checkout@v4
 
@@ -40,7 +35,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci --omit=optional
+        run: npm ci --include=optional
 
       - name: Lint
         run: npm run lint
@@ -61,16 +56,11 @@ jobs:
     env:
       ROLLUP_NATIVE: 0
       NODE_OPTIONS: --max-old-space-size=4096
-      npm_config_optional: false
-      npm_config_omit: optional
+      npm_config_optional: true
       SHARP_IGNORE_GLOBAL_LIBVIPS: 1
-      npm_config_platform: linux
-      npm_config_arch: x64
-      npm_config_build_from_source: false
-      npm_config_skip_build: true
       SHARP_DIST_BASE_URL: https://github.com/lovell/sharp-libvips/releases/download
-      npm_config_sharp_libvips_binary_host: https://github.com/lovell/sharp-libvips/releases/download
-      npm_config_sharp_binary_host: https://github.com/lovell/sharp/releases/download
+      SHARP_BINARY_HOST: https://github.com/lovell/sharp/releases/download
+      SHARP_LIBVIPS_BINARY_HOST: https://github.com/lovell/sharp-libvips/releases/download
 
     steps:
       - uses: actions/checkout@v4
@@ -82,7 +72,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci --omit=optional
+        run: npm ci --include=optional
 
       - name: Build packages
         run: npm run build
