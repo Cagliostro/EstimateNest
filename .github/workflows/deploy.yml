@@ -58,6 +58,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build packages
+        run: npm run build
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -78,10 +81,67 @@ jobs:
         run: npm run bootstrap --workspace=infrastructure -- --context env=${{ steps.env.outputs.env }}
 
       - name: Deploy infrastructure
-        run: npm run deploy:${{ steps.env.outputs.env }} --workspace=infrastructure
+        run: npm run deploy:${{ steps.env.outputs.env }}
 
-      - name: Deploy frontend
-        run: npm run build --workspace=frontend
-        # Upload to S3 via AWS CLI (CDK already deployed the bucket)
-        # This step would be added after we have the bucket name from CDK outputs.
-        # For now, we just build.
+      - name: Get deployment outputs
+        id: outputs
+        run: |
+          STACK_NAME="EstimateNest-${{ steps.env.outputs.env }}"
+
+          # Get bucket name from CloudFormation outputs
+          BUCKET_NAME=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" \
+            --output text)
+          echo "bucket_name=$BUCKET_NAME" >> $GITHUB_OUTPUT
+
+          # Get CloudFront distribution ID from outputs
+          DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" \
+            --output text)
+          echo "distribution_id=$DISTRIBUTION_ID" >> $GITHUB_OUTPUT
+
+          # Get REST API URL
+          REST_API_URL=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='RestApiUrl'].OutputValue" \
+            --output text)
+          echo "rest_api_url=$REST_API_URL" >> $GITHUB_OUTPUT
+
+          # Get WebSocket URL  
+          WEBSOCKET_URL=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='WebSocketUrl'].OutputValue" \
+            --output text)
+          echo "websocket_url=$WEBSOCKET_URL" >> $GITHUB_OUTPUT
+
+          # Get Frontend URL (CloudFront domain)
+          FRONTEND_URL=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendUrl'].OutputValue" \
+            --output text)
+          echo "frontend_url=$FRONTEND_URL" >> $GITHUB_OUTPUT
+
+          echo "Bucket: $BUCKET_NAME"
+          echo "Distribution: $DISTRIBUTION_ID"
+          echo "REST API: $REST_API_URL"
+          echo "WebSocket: $WEBSOCKET_URL"
+          echo "Frontend: $FRONTEND_URL"
+
+      - name: Build frontend
+        run: |
+          export VITE_API_URL="${{ steps.outputs.outputs.rest_api_url }}"
+          export VITE_WEBSOCKET_URL="${{ steps.outputs.outputs.websocket_url }}"
+          export VITE_FRONTEND_URL="${{ steps.outputs.outputs.frontend_url }}"
+          npm run build --workspace=frontend
+
+      - name: Upload frontend to S3
+        run: |
+          aws s3 sync frontend/dist s3://${{ steps.outputs.outputs.bucket_name }} --delete
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ steps.outputs.outputs.distribution_id }} \
+            --paths "/*"
