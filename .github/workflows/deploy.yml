@@ -18,7 +18,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     env:
-      ROLLUP_NATIVE: false
+      ROLLUP_NATIVE: 0
     steps:
       - uses: actions/checkout@v4
 
@@ -48,7 +48,7 @@ jobs:
       id-token: write
       contents: read
     env:
-      ROLLUP_NATIVE: false
+      ROLLUP_NATIVE: 0
 
     steps:
       - uses: actions/checkout@v4
