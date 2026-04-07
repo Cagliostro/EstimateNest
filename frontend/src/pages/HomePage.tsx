@@ -130,6 +130,19 @@ export default function HomePage() {
             <p className="mb-6 text-gray-500 dark:text-gray-400">
               Start a new estimation session and invite your team with a simple link.
             </p>
+            <div className="mb-6">
+              <label htmlFor="creatorName" className="block text-left mb-2 font-medium">
+                Your Name (optional)
+              </label>
+              <input
+                id="creatorName"
+                type="text"
+                value={participantName}
+                onChange={(e) => setParticipantName(e.target.value)}
+                placeholder="Anonymous"
+                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              />
+            </div>
             <button
               onClick={handleCreateRoom}
               disabled={isCreating}
