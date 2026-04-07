@@ -24,7 +24,7 @@ async function handleVote(
   message: WebSocketMessage & { type: 'vote' }
 ) {
   const { connectionId } = event.requestContext;
-  const { roundId: requestedRoundId, value } = message.payload;
+  const { roundId: requestedRoundId = '', value } = message.payload;
 
   if (value === undefined) {
     throw new Error('Missing vote value');
