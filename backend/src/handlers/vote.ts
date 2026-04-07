@@ -318,6 +318,11 @@ async function handleJoin(
 }
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+  console.log('Vote handler invoked', { 
+    connectionId: event.requestContext.connectionId,
+    routeKey: event.requestContext.routeKey,
+    body: event.body
+  });
   let message: WebSocketMessage;
 
   try {
