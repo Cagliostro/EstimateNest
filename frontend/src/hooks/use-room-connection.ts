@@ -171,7 +171,18 @@ export function useRoomConnection() {
         // The roomId is in response, but short code is the input roomCode
         setRoom(joinResponse.roomId, roomCode.toUpperCase());
 
-        // 4. Connect WebSocket
+        // 4. Update room state with initial data from join response
+        if (joinResponse.participants) {
+          setParticipants(joinResponse.participants);
+        }
+        if (joinResponse.round) {
+          setCurrentRound(joinResponse.round);
+        }
+        if (joinResponse.votes) {
+          setVotes(joinResponse.votes);
+        }
+
+        // 5. Connect WebSocket
         const wsClient = new WebSocketClient({
           roomId: joinResponse.roomId,
           participantId: joinResponse.participantId,
@@ -207,6 +218,9 @@ export function useRoomConnection() {
       setError,
       setParticipant,
       setRoom,
+      setParticipants,
+      setCurrentRound,
+      setVotes,
       handleWebSocketMessage,
       startPolling,
     ]

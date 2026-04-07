@@ -106,7 +106,7 @@ app.post('/rooms', (req, res) => {
 app.get('/rooms/:code', (req, res) => {
   try {
     const { code } = req.params;
-    const { name } = req.query;
+    const { name, participantId } = req.query;
 
     // Find room by short code
     const room = Array.from(rooms.values()).find((r) => r.shortCode === code.toUpperCase());
@@ -114,35 +114,95 @@ app.get('/rooms/:code', (req, res) => {
       return res.status(404).json({ error: 'Room not found' });
     }
 
-    const participantId = uuidv4();
-    const connectionId = uuidv4(); // Temporary for response, real one set on WS connect
-    const now = new Date().toISOString();
+    let finalParticipantId: string;
+    let finalName: string;
+    let avatarSeed: string;
+    let isNewParticipant = false;
 
-    const participant: Participant = {
-      id: participantId,
-      roomId: room.id,
-      connectionId, // Will be updated on WebSocket connection
-      name: (name as string) || `Participant ${participantId.slice(0, 4)}`,
-      avatarSeed: createAvatarSeed(name as string),
-      joinedAt: now,
-      lastSeenAt: now,
-      isModerator: false, // First participant becomes moderator
-    };
-
-    // First participant becomes moderator
-    const roomParticipants = Array.from(participants.values()).filter((p) => p.roomId === room.id);
-    if (roomParticipants.length === 0) {
-      participant.isModerator = true;
+    if (participantId && typeof participantId === 'string') {
+      // Try to fetch existing participant
+      const existingParticipant = participants.get(participantId);
+      if (existingParticipant && existingParticipant.roomId === room.id) {
+        // Participant exists - use stored details
+        finalParticipantId = participantId;
+        finalName = existingParticipant.name;
+        avatarSeed = existingParticipant.avatarSeed;
+        // Update lastSeenAt
+        existingParticipant.lastSeenAt = new Date().toISOString();
+        participants.set(participantId, existingParticipant);
+      } else {
+        // Participant not found - treat as new participant
+        isNewParticipant = true;
+        finalParticipantId = uuidv4();
+        finalName = (name as string) || `Participant ${finalParticipantId.slice(0, 4)}`;
+        avatarSeed = createAvatarSeed(name as string);
+      }
+    } else {
+      // New participant joining
+      isNewParticipant = true;
+      finalParticipantId = uuidv4();
+      finalName = (name as string) || `Participant ${finalParticipantId.slice(0, 4)}`;
+      avatarSeed = createAvatarSeed(name as string);
     }
 
-    participants.set(participantId, participant);
+    // Create new participant record if new
+    if (isNewParticipant) {
+      const connectionId = uuidv4(); // Temporary for response, real one set on WS connect
+      const now = new Date().toISOString();
+      const participant: Participant = {
+        id: finalParticipantId,
+        roomId: room.id,
+        connectionId,
+        name: finalName,
+        avatarSeed,
+        joinedAt: now,
+        lastSeenAt: now,
+        isModerator: false,
+      };
+
+      // First participant becomes moderator
+      const roomParticipants = Array.from(participants.values()).filter((p) => p.roomId === room.id);
+      if (roomParticipants.length === 0) {
+        participant.isModerator = true;
+      }
+
+      participants.set(finalParticipantId, participant);
+    }
+
+    // Fetch all participants in the room (including the one we just added)
+    const roomParticipants = Array.from(participants.values()).filter((p) => p.roomId === room.id);
+
+    // Fetch active round (not revealed)
+    const roomRounds = Array.from(rounds.values()).filter(
+      (r) => r.roomId === room.id && !r.isRevealed
+    );
+    const round = roomRounds.length > 0 ? roomRounds[0] : null;
+    let roundVotes: Vote[] = [];
+    if (round) {
+      roundVotes = Array.from(votes.values()).filter((v) => v.roundId === round.id);
+    }
+
+    // Remove connectionId from response for privacy/security
+    const participantsWithoutConnection = roomParticipants.map((p) => ({
+      id: p.id,
+      roomId: p.roomId,
+      name: p.name,
+      avatarSeed: p.avatarSeed,
+      joinedAt: p.joinedAt,
+      lastSeenAt: p.lastSeenAt,
+      isModerator: p.isModerator,
+    }));
 
     res.json({
       roomId: room.id,
-      participantId,
-      name: participant.name,
-      avatarSeed: participant.avatarSeed,
-      webSocketUrl: `ws://localhost:${wsPort}?roomId=${room.id}&participantId=${participantId}`,
+      participantId: finalParticipantId,
+      name: finalName,
+      avatarSeed,
+      isNewParticipant,
+      webSocketUrl: `ws://localhost:${wsPort}?roomId=${room.id}&participantId=${finalParticipantId}`,
+      participants: participantsWithoutConnection,
+      round,
+      votes: roundVotes,
     });
   } catch (error) {
     console.error('Error joining room:', error);
@@ -294,7 +354,7 @@ async function handleWebSocketMessage(
       votes.set(voteId, vote);
 
       // Broadcast round update
-      const round = rounds.get(activeRoundId);
+      const round = rounds.get(activeRoundId)!;
       const roundVotes = Array.from(votes.values()).filter((v) => v.roundId === activeRoundId);
 
       broadcastToRoom(roomId, {
