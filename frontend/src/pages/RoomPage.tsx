@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useRoomStore } from '../store/room-store';
 import { useParticipantStore } from '../store/participant-store';
@@ -15,7 +15,7 @@ export default function RoomPage() {
   const { roomId, shortCode, participants, currentRound, votes, isRevealed } = useRoomStore();
   const { participantId, name: participantName } = useParticipantStore();
   const { state: connectionState, error } = useConnectionStore();
-  const { sendVote, revealVotes, disconnect } = useRoomConnection();
+  const { sendVote, revealVotes, disconnect, joinRoom } = useRoomConnection();
 
   // Local state
   const [selectedValue, setSelectedValue] = useState<number | string | null>(null);
@@ -31,14 +31,21 @@ export default function RoomPage() {
     });
   };
 
-  // Redirect to home if not connected
+  // Auto-join when landing on room page with a room code but no connection
+  const hasAttemptedAutoJoin = useRef(false);
   useEffect(() => {
-    if (connectionState === 'disconnected' && !roomId && roomCode) {
-      // We have a room code but no connection - attempt to join?
-      // For now, redirect to home with room code prefilled?
-      // Let's keep them on page but show connection error
+    if (connectionState === 'disconnected' && !roomId && roomCode && !hasAttemptedAutoJoin.current) {
+      hasAttemptedAutoJoin.current = true;
+      const name = participantName || 'Anonymous';
+      joinRoom(roomCode, name).catch((error) => {
+        console.error('Auto-join failed:', error);
+        // Reset the flag after some time to allow retry
+        setTimeout(() => {
+          hasAttemptedAutoJoin.current = false;
+        }, 3000);
+      });
     }
-  }, [connectionState, roomId, roomCode]);
+  }, [connectionState, roomId, roomCode, joinRoom, participantName]);
 
   // Handle page leave
   useEffect(() => {

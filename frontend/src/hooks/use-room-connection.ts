@@ -160,11 +160,19 @@ export function useRoomConnection() {
         console.log('[EstimateNest] WebSocket URL:', joinResponse.webSocketUrl);
 
         // 2. Store participant info
+        // Determine if participant is moderator by checking the participants array
+        let isModerator = false;
+        if (joinResponse.participants) {
+          const participant = joinResponse.participants.find(
+            (p) => p.id === joinResponse.participantId
+          );
+          isModerator = participant?.isModerator || false;
+        }
         setParticipant(
           joinResponse.participantId,
           joinResponse.name,
           joinResponse.avatarSeed,
-          false
+          isModerator
         );
 
         // 3. Extract room ID from response (we don't have short code yet)

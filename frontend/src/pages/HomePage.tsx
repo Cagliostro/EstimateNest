@@ -21,12 +21,35 @@ export default function HomePage() {
     try {
       const result = await createRoom();
       setCreatedRoom(result);
-      // Navigate to room page
-      navigate(`/${result.shortCode}`);
+      
+      // Moderator also needs to join the room as a participant
+      const name = participantName.trim() || 'Anonymous';
+      try {
+        await joinRoom(result.shortCode, name);
+        // Navigate to room page on successful join
+        navigate(`/${result.shortCode}`);
+      } catch (joinError) {
+        console.error('Failed to join room after creation:', joinError);
+        // Don't navigate - user can click "Enter Room" to retry
+        // The room is created, so we stay on the success screen
+      }
     } catch (error) {
       console.error('Failed to create room:', error);
     } finally {
       setIsCreating(false);
+    }
+  };
+
+  const handleEnterCreatedRoom = async () => {
+    if (!createdRoom) return;
+    
+    const name = participantName.trim() || 'Anonymous';
+    try {
+      await joinRoom(createdRoom.shortCode, name);
+      navigate(`/${createdRoom.shortCode}`);
+    } catch (error) {
+      console.error('Failed to join created room:', error);
+      alert('Failed to join room. Please try again.');
     }
   };
 
@@ -95,7 +118,7 @@ export default function HomePage() {
               </button>
             </div>
             <button
-              onClick={() => navigate(`/${createdRoom.shortCode}`)}
+              onClick={handleEnterCreatedRoom}
               className="bg-primary-600 hover:bg-primary-700 text-white font-bold py-3 px-8 rounded-lg transition-colors"
             >
               Enter Room

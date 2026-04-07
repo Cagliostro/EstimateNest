@@ -23,7 +23,8 @@ async function createParticipantRecord(
   roomId: string,
   participantId: string,
   name: string,
-  avatarSeed: string
+  avatarSeed: string,
+  isModerator: boolean = false
 ) {
   const participant: Participant = {
     id: participantId,
@@ -33,7 +34,7 @@ async function createParticipantRecord(
     avatarSeed,
     joinedAt: new Date().toISOString(),
     lastSeenAt: new Date().toISOString(),
-    isModerator: false,
+    isModerator,
   };
   await docClient.send(
     new PutCommand({
@@ -79,6 +80,18 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       };
     }
 
+    // Fetch all participants in the room (for moderator determination)
+    const participantsResult = await docClient.send(
+      new QueryCommand({
+        TableName: PARTICIPANTS_TABLE,
+        KeyConditionExpression: 'roomId = :roomId',
+        ExpressionAttributeValues: {
+          ':roomId': roomId,
+        },
+      })
+    );
+    const existingParticipants = (participantsResult.Items as Participant[]) || [];
+
     // Determine participant ID (provided for polling, or new)
     const providedParticipantId = event.queryStringParameters?.participantId;
     const providedName = event.queryStringParameters?.name || 'Anonymous';
@@ -86,6 +99,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     let name: string;
     let avatarSeed: string;
     let isNewParticipant = false;
+    let isModerator = false;
+
+    // Start with existing participants as our base list
+    const participants = [...existingParticipants];
 
     if (providedParticipantId) {
       // Try to fetch existing participant
@@ -101,6 +118,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         participantId = providedParticipantId;
         name = existingParticipant.name;
         avatarSeed = existingParticipant.avatarSeed;
+        isModerator = existingParticipant.isModerator || false;
         // Update lastSeenAt
         await docClient.send(
           new UpdateCommand({
@@ -112,13 +130,33 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
             },
           })
         );
+        // Update participant in our local list
+        const participantIndex = participants.findIndex(p => p.id === participantId);
+        if (participantIndex >= 0) {
+          participants[participantIndex] = {
+            ...participants[participantIndex],
+            lastSeenAt: new Date().toISOString(),
+          };
+        }
       } else {
         // Participant not found - treat as new participant
         isNewParticipant = true;
         participantId = uuidv4();
         name = providedName;
         avatarSeed = createAvatarSeed(name);
-        await createParticipantRecord(roomId, participantId, name, avatarSeed);
+        isModerator = existingParticipants.length === 0;
+        await createParticipantRecord(roomId, participantId, name, avatarSeed, isModerator);
+        // Add new participant to our list
+        participants.push({
+          id: participantId,
+          roomId,
+          connectionId: 'REST',
+          name,
+          avatarSeed,
+          joinedAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+          isModerator,
+        });
       }
     } else {
       // New participant joining
@@ -126,21 +164,20 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       participantId = uuidv4();
       name = providedName;
       avatarSeed = createAvatarSeed(name);
-      await createParticipantRecord(roomId, participantId, name, avatarSeed);
+      isModerator = existingParticipants.length === 0;
+      await createParticipantRecord(roomId, participantId, name, avatarSeed, isModerator);
+      // Add new participant to our list
+      participants.push({
+        id: participantId,
+        roomId,
+        connectionId: 'REST',
+        name,
+        avatarSeed,
+        joinedAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+        isModerator,
+      });
     }
-
-    // Fetch all participants in the room (including the one we just added)
-    const participantsResult = await docClient.send(
-      new QueryCommand({
-        TableName: PARTICIPANTS_TABLE,
-        KeyConditionExpression: 'roomId = :roomId',
-        ExpressionAttributeValues: {
-          ':roomId': roomId,
-        },
-      })
-    );
-
-    const participants = (participantsResult.Items as Participant[]) || [];
 
     // Fetch active round (not revealed)
     const roundsResult = await docClient.send(
