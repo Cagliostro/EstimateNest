@@ -44,6 +44,7 @@ export class WebSocketClient {
     wsUrl.searchParams.set('roomId', roomId);
     wsUrl.searchParams.set('participantId', participantId);
 
+    console.log('[EstimateNest] Connecting to WebSocket:', wsUrl.toString());
     this.ws = new WebSocket(wsUrl.toString());
 
     this.ws.onopen = () => {

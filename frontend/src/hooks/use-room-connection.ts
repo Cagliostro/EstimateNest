@@ -146,10 +146,18 @@ export function useRoomConnection() {
   const joinRoom = useCallback(
     async (roomCode: string, name: string) => {
       try {
+        console.log('[EstimateNest] Joining room:', roomCode, 'as', name);
         setConnecting();
 
         // 1. Join via REST API
         const joinResponse = await apiClient.joinRoom(roomCode, name);
+        console.log(
+          '[EstimateNest] Joined room:',
+          joinResponse.roomId,
+          'participant:',
+          joinResponse.participantId
+        );
+        console.log('[EstimateNest] WebSocket URL:', joinResponse.webSocketUrl);
 
         // 2. Store participant info
         setParticipant(
@@ -169,6 +177,7 @@ export function useRoomConnection() {
           participantId: joinResponse.participantId,
           onMessage: handleWebSocketMessage,
           onStateChange: (state) => {
+            console.log('[EstimateNest] WebSocket state change:', state);
             if (state === 'connected') {
               setConnected();
             } else if (state === 'disconnected' || state === 'error') {
@@ -185,6 +194,7 @@ export function useRoomConnection() {
 
         return joinResponse;
       } catch (error) {
+        console.error('[EstimateNest] Failed to join room:', error);
         setError(error instanceof Error ? error.message : 'Failed to join room');
         setDisconnected();
         throw error;
