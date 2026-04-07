@@ -54,7 +54,7 @@ async function handleVote(
   // Determine active round
   let roundId = requestedRoundId;
   let round: Round;
-
+  console.log('RoundId provided:', roundId);
   if (roundId) {
     // Get the specified round
     const roundResult = await docClient.send(
@@ -71,6 +71,7 @@ async function handleVote(
       throw new Error('Round is already revealed');
     }
   } else {
+    console.log('No roundId provided, finding or creating active round');
     // Find or create active round
     const activeRoundsResult = await docClient.send(
       new QueryCommand({
@@ -86,10 +87,12 @@ async function handleVote(
     );
 
     if (activeRoundsResult.Items && activeRoundsResult.Items.length > 0) {
+      console.log('Active round found:', activeRoundsResult.Items[0].id);
       round = activeRoundsResult.Items[0] as Round;
       roundId = round.id;
     } else {
       // Create new round
+      console.log('No active round, creating new round');
       roundId = uuidv4();
       const now = new Date().toISOString();
       round = {
@@ -114,6 +117,7 @@ async function handleVote(
     throw new Error('roundId is undefined');
   }
   // Create vote
+  console.log('Creating vote with roundId:', roundId, 'participantId:', participantId);
   const voteId = uuidv4();
   const votedAt = new Date().toISOString();
   const vote: Vote = {
