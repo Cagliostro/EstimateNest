@@ -47,7 +47,7 @@ async function handleVote(
   if (!participant) {
     throw new Error('Participant not found');
   }
-  console.log('Found participant:', participant);
+  console.log('Found participant:', { participantId: participant.participantId, roomId: participant.roomId, isModerator: participant.isModerator, connectionId: participant.connectionId });
 
   const { roomId, participantId } = participant;
 
@@ -169,11 +169,17 @@ async function handleVote(
 
   const votes = (votesResult.Items as Vote[]) || [];
 
+  console.log('Broadcasting round update', { roomId, roundId, votesCount: votes.length });
+  const { domainName, stage } = event.requestContext;
+  console.log('Endpoint info:', { domainName, stage });
+
   // Broadcast round update to all participants
   await broadcastToRoom(event, roomId, {
     type: 'roundUpdate',
     payload: { round, votes },
   });
+
+  console.log('Broadcast completed');
 
   return { message: 'Vote recorded' };
 }

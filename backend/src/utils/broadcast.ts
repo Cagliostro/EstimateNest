@@ -48,6 +48,7 @@ export async function broadcastToRoom(
     (p) => p.connectionId && p.connectionId !== 'REST' && p.connectionId !== excludeConnectionId
   );
   console.log(`Broadcast: ${activeParticipants.length} active connections to send to`);
+  console.log('Active participants:', activeParticipants.map(p => ({ participantId: p.participantId, connectionId: p.connectionId })));
 
   // Send message to each active WebSocket connection
   const promises = activeParticipants.map(async (participant) => {
