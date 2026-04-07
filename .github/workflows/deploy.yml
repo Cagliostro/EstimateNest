@@ -165,9 +165,24 @@ jobs:
           export VITE_API_URL="${{ steps.outputs.outputs.rest_api_url }}"
           export VITE_WEBSOCKET_URL="${{ steps.outputs.outputs.websocket_url }}"
           export VITE_FRONTEND_URL="${{ steps.outputs.outputs.frontend_url }}"
+          echo "Building frontend with env:"
+          echo "VITE_API_URL=$VITE_API_URL"
+          echo "VITE_WEBSOCKET_URL=$VITE_WEBSOCKET_URL"
+          echo "VITE_FRONTEND_URL=$VITE_FRONTEND_URL"
           # Clean previous build and ensure correct working directory for PostCSS
           rm -rf frontend/dist
           cd frontend && npm run build
+          echo "Build complete. Checking generated files:"
+          ls -la dist/assets/
+          echo "CSS size:"
+          CSS_SIZE=$(wc -c < dist/assets/*.css)
+          echo "CSS file size: $CSS_SIZE bytes"
+          if [ "$CSS_SIZE" -lt 10000 ]; then
+            echo "ERROR: CSS file too small ($CSS_SIZE bytes). TailwindCSS likely failed to process."
+            echo "Contents of CSS file (first 500 chars):"
+            head -c 500 dist/assets/*.css
+            exit 1
+          fi
 
       - name: Upload frontend to S3
         run: |
