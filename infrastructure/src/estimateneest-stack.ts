@@ -13,6 +13,7 @@ import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
+import * as path from 'path';
 
 export interface EstimateNestStackProps extends cdk.StackProps {
   envName: string;
@@ -76,13 +77,18 @@ export class EstimateNestStack extends cdk.Stack {
 
     const createRoomHandler = new lambdaNodejs.NodejsFunction(this, 'CreateRoomHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
-      entry: '../backend/src/handlers/create-room.ts',
+      entry: '../backend/dist/handlers/create-room.js',
       handler: 'handler',
+      projectRoot: path.join(__dirname, '..', '..'),
+      depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
 
       environment: {
         ROOMS_TABLE: roomsTable.tableName,
         ROOM_CODES_TABLE: roomCodesTable.tableName,
         DOMAIN_NAME: props.domainName || 'example.com',
+      },
+      bundling: {
+        format: lambdaNodejs.OutputFormat.ESM,
       },
     });
 
@@ -91,10 +97,15 @@ export class EstimateNestStack extends cdk.Stack {
       'WebSocketConnectHandler',
       {
         runtime: lambda.Runtime.NODEJS_20_X,
-        entry: '../backend/src/handlers/websocket-connect.ts',
+        entry: '../backend/dist/handlers/websocket-connect.js',
         handler: 'handler',
+        projectRoot: path.join(__dirname, '..', '..'),
+        depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
         environment: {
           PARTICIPANTS_TABLE: participantsTable.tableName,
+        },
+        bundling: {
+          format: lambdaNodejs.OutputFormat.ESM,
         },
       }
     );
@@ -104,23 +115,33 @@ export class EstimateNestStack extends cdk.Stack {
       'WebSocketDisconnectHandler',
       {
         runtime: lambda.Runtime.NODEJS_20_X,
-        entry: '../backend/src/handlers/websocket-disconnect.ts',
+        entry: '../backend/dist/handlers/websocket-disconnect.js',
         handler: 'handler',
+        projectRoot: path.join(__dirname, '..', '..'),
+        depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
         environment: {
           PARTICIPANTS_TABLE: participantsTable.tableName,
+        },
+        bundling: {
+          format: lambdaNodejs.OutputFormat.ESM,
         },
       }
     );
 
     const voteHandler = new lambdaNodejs.NodejsFunction(this, 'VoteHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
-      entry: '../backend/src/handlers/vote.ts',
+      entry: '../backend/dist/handlers/vote.js',
       handler: 'handler',
+      projectRoot: path.join(__dirname, '..', '..'),
+      depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
 
       environment: {
         VOTES_TABLE: votesTable.tableName,
         ROUNDS_TABLE: roundsTable.tableName,
         PARTICIPANTS_TABLE: participantsTable.tableName,
+      },
+      bundling: {
+        format: lambdaNodejs.OutputFormat.ESM,
       },
     });
 
@@ -170,8 +191,10 @@ export class EstimateNestStack extends cdk.Stack {
 
     const joinRoomHandler = new lambdaNodejs.NodejsFunction(this, 'JoinRoomHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
-      entry: '../backend/src/handlers/join-room.ts',
+      entry: '../backend/dist/handlers/join-room.js',
       handler: 'handler',
+      projectRoot: path.join(__dirname, '..', '..'),
+      depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
 
       environment: {
         ROOM_CODES_TABLE: roomCodesTable.tableName,
@@ -179,6 +202,9 @@ export class EstimateNestStack extends cdk.Stack {
         WEBSOCKET_URL: webSocketStage.url,
         ROUNDS_TABLE: roundsTable.tableName,
         VOTES_TABLE: votesTable.tableName,
+      },
+      bundling: {
+        format: lambdaNodejs.OutputFormat.ESM,
       },
     });
 
