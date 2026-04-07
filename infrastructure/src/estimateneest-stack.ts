@@ -225,50 +225,7 @@ export class EstimateNestStack extends cdk.Stack {
     webSocketApi.grantManageConnections(websocketConnectHandler);
     webSocketApi.grantManageConnections(websocketDisconnectHandler);
     webSocketApi.grantManageConnections(voteHandler);
-
-    // Explicit permissions for execute-api:ManageConnections (additional safety)
-    websocketConnectHandler.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['execute-api:ManageConnections'],
-        resources: [
-          cdk.Arn.format(
-            {
-              service: 'execute-api',
-              resource: `${webSocketApi.apiId}/${webSocketStage.stageName}/POST/@connections/*`,
-            },
-            this
-          ),
-        ],
-      })
-    );
-    websocketDisconnectHandler.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['execute-api:ManageConnections'],
-        resources: [
-          cdk.Arn.format(
-            {
-              service: 'execute-api',
-              resource: `${webSocketApi.apiId}/${webSocketStage.stageName}/POST/@connections/*`,
-            },
-            this
-          ),
-        ],
-      })
-    );
-    voteHandler.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['execute-api:ManageConnections'],
-        resources: [
-          cdk.Arn.format(
-            {
-              service: 'execute-api',
-              resource: `${webSocketApi.apiId}/${webSocketStage.stageName}/POST/@connections/*`,
-            },
-            this
-          ),
-        ],
-      })
-    );
+    webSocketApi.grantManageConnections(joinRoomHandler);
 
     // ====================
     // API Gateway (REST)
