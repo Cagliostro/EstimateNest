@@ -44,7 +44,12 @@ jobs:
         run: npm run lint
 
       - name: Build
-        run: npm run build
+        run: |
+          # Build all packages for testing (frontend with dummy env vars)
+          export VITE_API_URL="https://example.com/api"
+          export VITE_WEBSOCKET_URL="wss://example.com/ws"
+          export VITE_FRONTEND_URL="https://example.com"
+          npm run build
 
       - name: Test
         run: npm run test
@@ -81,7 +86,11 @@ jobs:
         run: npm install --no-audit --no-fund
 
       - name: Build packages
-        run: npm run build
+        run: |
+          # Build shared, backend, and infrastructure - frontend needs environment variables
+          npm run build --workspace=packages/shared
+          npm run build --workspace=backend
+          npm run build --workspace=infrastructure
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -156,7 +165,9 @@ jobs:
           export VITE_API_URL="${{ steps.outputs.outputs.rest_api_url }}"
           export VITE_WEBSOCKET_URL="${{ steps.outputs.outputs.websocket_url }}"
           export VITE_FRONTEND_URL="${{ steps.outputs.outputs.frontend_url }}"
-          npm run build --workspace=frontend
+          # Clean previous build and ensure correct working directory for PostCSS
+          rm -rf frontend/dist
+          cd frontend && npm run build
 
       - name: Upload frontend to S3
         run: |
