@@ -161,7 +161,9 @@ app.get('/rooms/:code', (req, res) => {
       };
 
       // First participant becomes moderator
-      const roomParticipants = Array.from(participants.values()).filter((p) => p.roomId === room.id);
+      const roomParticipants = Array.from(participants.values()).filter(
+        (p) => p.roomId === room.id
+      );
       if (roomParticipants.length === 0) {
         participant.isModerator = true;
       }
