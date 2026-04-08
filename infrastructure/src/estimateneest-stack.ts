@@ -182,6 +182,13 @@ export class EstimateNestStack extends cdk.Stack {
       ),
     });
 
+    webSocketApi.addRoute('$default', {
+      integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
+        'DefaultIntegration',
+        voteHandler
+      ),
+    });
+
     const webSocketStage = new apigatewayv2.WebSocketStage(this, 'WebSocketStage', {
       webSocketApi,
       stageName: props.envName,
