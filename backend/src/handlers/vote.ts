@@ -1,3 +1,4 @@
+// Vote handler for WebSocket messages
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
   DynamoDBDocumentClient,
@@ -597,6 +598,7 @@ async function handleUpdateRound(
 }
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+  console.log('Vote handler updated for new message types');
   console.log('Vote handler invoked', {
     connectionId: event.requestContext.connectionId,
     routeKey: event.requestContext.routeKey,
