@@ -208,8 +208,22 @@ export function useRoomConnection() {
           removeParticipant(message.payload.participantId);
           break;
 
+        case 'participantUpdated':
+          console.log(`[EstimateNest] [${hookId}] participantUpdated received:`, message.payload);
+          // Optionally show a success message to user
+          if (message.payload.success) {
+            console.log(`[EstimateNest] [${hookId}] Name updated to:`, message.payload.name);
+          }
+          break;
+
+        case 'error':
+          console.error(`[EstimateNest] [${hookId}] WebSocket error:`, message.payload);
+          setError(message.payload.message);
+          break;
+
         // Note: 'join' messages are handled via participantList updates
-        // 'error' messages could be displayed to user
+        default:
+          console.log(`[EstimateNest] [${hookId}] Unhandled message type:`, message.type);
       }
     },
     [
@@ -219,6 +233,7 @@ export function useRoomConnection() {
       removeParticipant,
       revealVotesInStore,
       setParticipant,
+      setError,
       hookId,
     ]
   );

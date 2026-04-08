@@ -11,7 +11,7 @@ import {
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { v4 as uuidv4 } from 'uuid';
 import { Vote, Round, WebSocketMessage, Participant, createAvatarSeed } from '@estimatenest/shared';
-import { broadcastToRoom } from '../utils/broadcast';
+import { broadcastToRoom, sendToConnection } from '../utils/broadcast';
 
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
@@ -447,6 +447,17 @@ async function handleUpdateParticipant(
   });
   console.log('Broadcast completed');
 
+  // Send confirmation to the sender
+  try {
+    await sendToConnection(event, connectionId, {
+      type: 'participantUpdated',
+      payload: { success: true, name },
+    });
+    console.log('Confirmation sent to sender');
+  } catch (error) {
+    console.error('Failed to send confirmation:', error);
+  }
+
   return { message: 'Participant updated' };
 }
 
@@ -630,7 +641,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
   try {
     message = JSON.parse(event.body || '{}');
-  } catch {
+    console.log('Parsed message:', { type: message.type, payload: message.payload });
+  } catch (error) {
+    console.error('Failed to parse JSON:', error, 'body:', event.body);
     return {
       statusCode: 400,
       body: JSON.stringify({ error: 'Invalid JSON message' }),
@@ -639,6 +652,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
   try {
     let result;
+    console.log('Processing message type:', message.type);
     switch (message.type) {
       case 'vote':
         result = await handleVote(event, message);

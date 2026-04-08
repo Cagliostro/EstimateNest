@@ -86,6 +86,7 @@ export type WebSocketMessage =
   | { type: 'updateRound'; payload: { roundId: string; title?: string; description?: string } }
   | { type: 'participantList'; payload: { participants: Participant[] } }
   | { type: 'roundUpdate'; payload: { round: Round; votes: Vote[] } }
+  | { type: 'participantUpdated'; payload: { success: boolean; name: string } }
   | { type: 'error'; payload: { message: string; code?: string } };
 
 // ====================

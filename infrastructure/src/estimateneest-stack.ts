@@ -182,6 +182,27 @@ export class EstimateNestStack extends cdk.Stack {
       ),
     });
 
+    webSocketApi.addRoute('updateParticipant', {
+      integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
+        'UpdateParticipantIntegration',
+        voteHandler
+      ),
+    });
+
+    webSocketApi.addRoute('newRound', {
+      integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
+        'NewRoundIntegration',
+        voteHandler
+      ),
+    });
+
+    webSocketApi.addRoute('updateRound', {
+      integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
+        'UpdateRoundIntegration',
+        voteHandler
+      ),
+    });
+
     webSocketApi.addRoute('$default', {
       integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
         'DefaultIntegration',
