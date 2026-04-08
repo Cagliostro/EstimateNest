@@ -158,9 +158,25 @@ export function useRoomConnection() {
   const handleWebSocketMessage = useCallback(
     (message: WebSocketMessage) => {
       switch (message.type) {
-        case 'participantList':
+        case 'participantList': {
           setParticipants(message.payload.participants);
+          // Update participant store if current participant is in the list
+          const { participantId: currentParticipantId } = useParticipantStore.getState();
+          if (currentParticipantId) {
+            const updatedParticipant = message.payload.participants.find(
+              (p) => p.id === currentParticipantId
+            );
+            if (updatedParticipant) {
+              const { name, avatarSeed, isModerator } = updatedParticipant;
+              console.log(
+                `[EstimateNest] [${hookId}] Updating participant store with new name:`,
+                name
+              );
+              setParticipant(currentParticipantId, name, avatarSeed, isModerator);
+            }
+          }
           break;
+        }
 
         case 'roundUpdate':
           console.log(`[EstimateNest] [${hookId}] roundUpdate received:`, {
@@ -184,7 +200,15 @@ export function useRoomConnection() {
         // 'error' messages could be displayed to user
       }
     },
-    [setParticipants, setCurrentRound, setVotes, removeParticipant, revealVotesInStore, hookId]
+    [
+      setParticipants,
+      setCurrentRound,
+      setVotes,
+      removeParticipant,
+      revealVotesInStore,
+      setParticipant,
+      hookId,
+    ]
   );
 
   /**
