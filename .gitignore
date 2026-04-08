@@ -54,3 +54,6 @@ design-extract/
 
 # Backup directories
 node_modules.backup/
+
+# Test scripts
+backend/test-vote.cjs
