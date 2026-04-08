@@ -414,6 +414,7 @@ async function handleUpdateParticipant(
       ExpressionAttributeValues: {
         ':roomId': roomId,
       },
+      ConsistentRead: true,
     })
   );
 

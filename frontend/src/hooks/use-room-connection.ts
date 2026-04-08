@@ -162,6 +162,12 @@ export function useRoomConnection() {
           setParticipants(message.payload.participants);
           // Update participant store if current participant is in the list
           const { participantId: currentParticipantId } = useParticipantStore.getState();
+          console.log(
+            `[EstimateNest] [${hookId}] participantList received, currentParticipantId:`,
+            currentParticipantId,
+            'participants:',
+            message.payload.participants
+          );
           if (currentParticipantId) {
             const updatedParticipant = message.payload.participants.find(
               (p) => p.id === currentParticipantId
@@ -173,7 +179,13 @@ export function useRoomConnection() {
                 name
               );
               setParticipant(currentParticipantId, name, avatarSeed, isModerator);
+            } else {
+              console.log(
+                `[EstimateNest] [${hookId}] Current participant not found in participant list`
+              );
             }
+          } else {
+            console.log(`[EstimateNest] [${hookId}] No current participant ID in store`);
           }
           break;
         }

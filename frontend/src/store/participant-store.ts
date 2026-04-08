@@ -22,8 +22,15 @@ export const useParticipantStore = create<ParticipantState>((set) => ({
   avatarSeed: null,
   isModerator: false,
 
-  setParticipant: (participantId, name, avatarSeed, isModerator = false) =>
-    set({ participantId, name, avatarSeed, isModerator }),
+  setParticipant: (participantId, name, avatarSeed, isModerator = false) => {
+    console.log('[ParticipantStore] Setting participant:', {
+      participantId,
+      name,
+      avatarSeed,
+      isModerator,
+    });
+    return set({ participantId, name, avatarSeed, isModerator });
+  },
 
   clearParticipant: () =>
     set({ participantId: null, name: null, avatarSeed: null, isModerator: false }),

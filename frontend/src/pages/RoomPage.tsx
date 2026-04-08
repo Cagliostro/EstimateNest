@@ -24,6 +24,9 @@ export default function RoomPage() {
     setRoundHistory,
   } = useRoomStore();
   const { participantId, name: participantName } = useParticipantStore();
+  useEffect(() => {
+    console.log('[RoomPage] participantName changed:', participantName);
+  }, [participantName]);
   const { state: connectionState, error, setError } = useConnectionStore();
   const {
     sendVote,
