@@ -25,11 +25,24 @@ export default function RoomPage() {
   } = useRoomStore();
   const { participantId, name: participantName } = useParticipantStore();
   const { state: connectionState, error, setError } = useConnectionStore();
-  const { sendVote, revealVotes, disconnect, joinRoom } = useRoomConnection();
+  const {
+    sendVote,
+    revealVotes,
+    disconnect,
+    joinRoom,
+    updateParticipant,
+    createNewRound,
+    updateRound,
+  } = useRoomConnection();
 
   // Local state
   const [selectedValue, setSelectedValue] = useState<number | string | null>(null);
   const [isRevealing, setIsRevealing] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [isEditingRound, setIsEditingRound] = useState(false);
+  const [roundTitle, setRoundTitle] = useState('');
+  const [roundDescription, setRoundDescription] = useState('');
 
   // Fibonacci deck (default)
   const deck = DEFAULT_DECKS.find((d: { id: string }) => d.id === 'fibonacci') || DEFAULT_DECKS[0];
@@ -39,6 +52,29 @@ export default function RoomPage() {
     navigator.clipboard.writeText(roomLink).then(() => {
       alert('Room link copied to clipboard!');
     });
+  };
+
+  const handleUpdateName = () => {
+    if (!newName.trim()) return;
+    try {
+      updateParticipant(newName.trim());
+      setIsEditingName(false);
+      setNewName('');
+    } catch (error) {
+      console.error('Failed to update name:', error);
+      alert('Failed to update name. Please try again.');
+    }
+  };
+
+  const handleUpdateRound = () => {
+    if (!currentRound) return;
+    try {
+      updateRound(currentRound.id, roundTitle || undefined, roundDescription || undefined);
+      setIsEditingRound(false);
+    } catch (error) {
+      console.error('Failed to update round:', error);
+      alert('Failed to update round. Please try again.');
+    }
   };
 
   // Auto-join when landing on room page with a room code but no connection
@@ -130,8 +166,12 @@ export default function RoomPage() {
   };
 
   const handleNewRound = () => {
-    // Not implemented in Phase 1
-    alert('New round functionality coming soon!');
+    try {
+      createNewRound();
+    } catch (error) {
+      console.error('Failed to create new round:', error);
+      alert('Failed to create new round. Please try again.');
+    }
   };
 
   // Calculate statistics
@@ -240,13 +280,78 @@ export default function RoomPage() {
             {/* Story/Topic Panel */}
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow p-6">
               <div className="flex items-start justify-between">
-                <div>
-                  <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100 mb-2">
-                    {currentRound?.title || 'New Estimation Round'}
-                  </h3>
-                  <p className="text-gray-600 dark:text-gray-400">
-                    {currentRound?.description || 'Add a description for the item being estimated'}
-                  </p>
+                <div className="flex-1">
+                  {isEditingRound && currentRound ? (
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        value={roundTitle}
+                        onChange={(e) => setRoundTitle(e.target.value)}
+                        placeholder="Round title"
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900"
+                        autoFocus
+                      />
+                      <textarea
+                        value={roundDescription}
+                        onChange={(e) => setRoundDescription(e.target.value)}
+                        placeholder="Round description"
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900"
+                        rows={2}
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handleUpdateRound}
+                          className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm"
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={() => setIsEditingRound(false)}
+                          className="bg-gray-300 dark:bg-gray-700 hover:bg-gray-400 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 px-3 py-1 rounded text-sm"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100 mb-2">
+                          {currentRound?.title || 'New Estimation Round'}
+                        </h3>
+                        {currentRound && (
+                          <button
+                            onClick={() => {
+                              setIsEditingRound(true);
+                              setRoundTitle(currentRound.title || '');
+                              setRoundDescription(currentRound.description || '');
+                            }}
+                            className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
+                            title="Edit round details"
+                          >
+                            <svg
+                              className="w-4 h-4"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                              xmlns="http://www.w3.org/2000/svg"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                              />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-gray-600 dark:text-gray-400">
+                        {currentRound?.description ||
+                          'Add a description for the item being estimated'}
+                      </p>
+                    </div>
+                  )}
                 </div>
                 <div className="text-right">
                   <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">Round</div>
@@ -358,11 +463,62 @@ export default function RoomPage() {
                         <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-white dark:border-gray-800"></div>
                       </div>
                       <div className="flex-1 flex items-center justify-between">
-                        <span className={participant.id === participantId ? 'font-bold' : ''}>
-                          {participant.name}
-                          {participant.id === participantId && ' (You)'}
-                          {participant.isModerator && ' 👑'}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          {isEditingName && participant.id === participantId ? (
+                            <>
+                              <input
+                                type="text"
+                                value={newName}
+                                onChange={(e) => setNewName(e.target.value)}
+                                className="px-2 py-1 border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900"
+                                autoFocus
+                              />
+                              <button
+                                onClick={handleUpdateName}
+                                className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm"
+                              >
+                                Save
+                              </button>
+                              <button
+                                onClick={() => setIsEditingName(false)}
+                                className="bg-gray-300 dark:bg-gray-700 hover:bg-gray-400 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 px-3 py-1 rounded text-sm"
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <span className={participant.id === participantId ? 'font-bold' : ''}>
+                              {participant.name}
+                              {participant.id === participantId && ' (You)'}
+                              {participant.isModerator && ' 👑'}
+                            </span>
+                          )}
+                          {participant.id === participantId && !isEditingName && (
+                            <button
+                              onClick={() => {
+                                setIsEditingName(true);
+                                setNewName(participant.name);
+                              }}
+                              className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
+                              title="Edit name"
+                            >
+                              <svg
+                                className="w-4 h-4"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                                xmlns="http://www.w3.org/2000/svg"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                                />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
                         {/* Vote status indicator */}
                         {!isRevealed && (
                           <div

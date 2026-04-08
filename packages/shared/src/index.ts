@@ -78,10 +78,12 @@ export const DEFAULT_DECKS: CardDeck[] = [
 
 export type WebSocketMessage =
   | { type: 'join'; payload?: { roomCode?: string; name?: string; avatarSeed?: string } }
+  | { type: 'updateParticipant'; payload: { name: string } }
   | { type: 'leave'; payload: { participantId: string } }
   | { type: 'vote'; payload: { roundId: string; value: number | string } }
   | { type: 'reveal'; payload: { roundId: string } }
-  | { type: 'newRound'; payload: { title?: string } }
+  | { type: 'newRound'; payload: { title?: string; description?: string } }
+  | { type: 'updateRound'; payload: { roundId: string; title?: string; description?: string } }
   | { type: 'participantList'; payload: { participants: Participant[] } }
   | { type: 'roundUpdate'; payload: { round: Round; votes: Vote[] } }
   | { type: 'error'; payload: { message: string; code?: string } };

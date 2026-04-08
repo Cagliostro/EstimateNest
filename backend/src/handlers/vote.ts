@@ -9,7 +9,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { v4 as uuidv4 } from 'uuid';
-import { Vote, Round, WebSocketMessage, Participant } from '@estimatenest/shared';
+import { Vote, Round, WebSocketMessage, Participant, createAvatarSeed } from '@estimatenest/shared';
 import { broadcastToRoom } from '../utils/broadcast';
 
 const client = new DynamoDBClient({});
@@ -47,7 +47,12 @@ async function handleVote(
   if (!participant) {
     throw new Error('Participant not found');
   }
-  console.log('Found participant:', { participantId: participant.participantId, roomId: participant.roomId, isModerator: participant.isModerator, connectionId: participant.connectionId });
+  console.log('Found participant:', {
+    participantId: participant.participantId,
+    roomId: participant.roomId,
+    isModerator: participant.isModerator,
+    connectionId: participant.connectionId,
+  });
 
   const { roomId, participantId } = participant;
 
@@ -121,7 +126,7 @@ async function handleVote(
         startedAt: now,
         isRevealed: false,
       };
-       await docClient.send(
+      await docClient.send(
         new PutCommand({
           TableName: ROUNDS_TABLE,
           Item: {
@@ -352,11 +357,250 @@ async function handleJoin(
   return { message: 'Joined' };
 }
 
+async function handleUpdateParticipant(
+  event: APIGatewayProxyEvent,
+  message: WebSocketMessage & { type: 'updateParticipant' }
+) {
+  const { connectionId } = event.requestContext;
+  const { name } = message.payload;
+
+  if (!name || typeof name !== 'string') {
+    throw new Error('Invalid name');
+  }
+
+  // Find participant by connectionId
+  const queryResult = await docClient.send(
+    new QueryCommand({
+      TableName: PARTICIPANTS_TABLE,
+      IndexName: 'ConnectionIdIndex',
+      KeyConditionExpression: 'connectionId = :cid',
+      ExpressionAttributeValues: {
+        ':cid': connectionId,
+      },
+      Limit: 1,
+    })
+  );
+
+  const participant = queryResult.Items?.[0] as Participant | undefined;
+  if (!participant) {
+    throw new Error('Participant not found');
+  }
+
+  const { roomId, participantId } = participant;
+  const avatarSeed = createAvatarSeed(name);
+
+  // Update participant name and avatarSeed
+  await docClient.send(
+    new UpdateCommand({
+      TableName: PARTICIPANTS_TABLE,
+      Key: { roomId, participantId },
+      UpdateExpression: 'SET #name = :name, avatarSeed = :avatarSeed',
+      ExpressionAttributeNames: {
+        '#name': 'name',
+      },
+      ExpressionAttributeValues: {
+        ':name': name,
+        ':avatarSeed': avatarSeed,
+      },
+    })
+  );
+
+  // Fetch all participants in the room
+  const participantsResult = await docClient.send(
+    new QueryCommand({
+      TableName: PARTICIPANTS_TABLE,
+      KeyConditionExpression: 'roomId = :roomId',
+      ExpressionAttributeValues: {
+        ':roomId': roomId,
+      },
+    })
+  );
+
+  const participants = (participantsResult.Items as Participant[]) || [];
+
+  // Broadcast participant list to everyone in the room
+  await broadcastToRoom(event, roomId, {
+    type: 'participantList',
+    payload: { participants },
+  });
+
+  return { message: 'Participant updated' };
+}
+
+async function handleNewRound(
+  event: APIGatewayProxyEvent,
+  message: WebSocketMessage & { type: 'newRound' }
+) {
+  const { connectionId } = event.requestContext;
+  const { title, description } = message.payload;
+
+  // Find participant by connectionId
+  const queryResult = await docClient.send(
+    new QueryCommand({
+      TableName: PARTICIPANTS_TABLE,
+      IndexName: 'ConnectionIdIndex',
+      KeyConditionExpression: 'connectionId = :cid',
+      ExpressionAttributeValues: {
+        ':cid': connectionId,
+      },
+      Limit: 1,
+    })
+  );
+
+  const participant = queryResult.Items?.[0] as Participant | undefined;
+  if (!participant) {
+    throw new Error('Participant not found');
+  }
+
+  const { roomId } = participant;
+  const roundId = uuidv4();
+  const now = new Date().toISOString();
+  const round: Round = {
+    id: roundId,
+    roomId,
+    title,
+    description,
+    startedAt: now,
+    isRevealed: false,
+  };
+
+  // Create new round
+  await docClient.send(
+    new PutCommand({
+      TableName: ROUNDS_TABLE,
+      Item: {
+        ...round,
+        roundId,
+      },
+    })
+  );
+
+  // Broadcast round update with empty votes
+  await broadcastToRoom(event, roomId, {
+    type: 'roundUpdate',
+    payload: { round, votes: [] },
+  });
+
+  return { message: 'New round created' };
+}
+
+async function handleUpdateRound(
+  event: APIGatewayProxyEvent,
+  message: WebSocketMessage & { type: 'updateRound' }
+) {
+  const { connectionId } = event.requestContext;
+  const { roundId, title, description } = message.payload;
+
+  if (!roundId) {
+    throw new Error('Missing roundId');
+  }
+
+  // Find participant by connectionId
+  const queryResult = await docClient.send(
+    new QueryCommand({
+      TableName: PARTICIPANTS_TABLE,
+      IndexName: 'ConnectionIdIndex',
+      KeyConditionExpression: 'connectionId = :cid',
+      ExpressionAttributeValues: {
+        ':cid': connectionId,
+      },
+      Limit: 1,
+    })
+  );
+
+  const participant = queryResult.Items?.[0] as Participant | undefined;
+  if (!participant) {
+    throw new Error('Participant not found');
+  }
+
+  const { roomId } = participant;
+
+  // Verify round belongs to room
+  const roundResult = await docClient.send(
+    new GetCommand({
+      TableName: ROUNDS_TABLE,
+      Key: { roomId, roundId },
+    })
+  );
+
+  const item = roundResult.Item;
+  if (!item) {
+    throw new Error('Round not found');
+  }
+
+  // Build update expression dynamically based on provided fields
+  const updateExpressions: string[] = [];
+  const expressionAttributeNames: Record<string, string> = {};
+  const expressionAttributeValues: Record<string, string> = {};
+
+  if (title !== undefined) {
+    updateExpressions.push('#title = :title');
+    expressionAttributeNames['#title'] = 'title';
+    expressionAttributeValues[':title'] = title;
+  }
+  if (description !== undefined) {
+    updateExpressions.push('#description = :description');
+    expressionAttributeNames['#description'] = 'description';
+    expressionAttributeValues[':description'] = description;
+  }
+
+  if (updateExpressions.length === 0) {
+    throw new Error('No fields to update');
+  }
+
+  await docClient.send(
+    new UpdateCommand({
+      TableName: ROUNDS_TABLE,
+      Key: { roomId, roundId },
+      UpdateExpression: `SET ${updateExpressions.join(', ')}`,
+      ExpressionAttributeNames: expressionAttributeNames,
+      ExpressionAttributeValues: expressionAttributeValues,
+    })
+  );
+
+  // Fetch updated round and votes
+  const updatedRoundResult = await docClient.send(
+    new GetCommand({
+      TableName: ROUNDS_TABLE,
+      Key: { roomId, roundId },
+    })
+  );
+  const updatedItem = updatedRoundResult.Item!;
+  const round: Round = {
+    id: updatedItem.roundId || updatedItem.id,
+    roomId: updatedItem.roomId,
+    title: updatedItem.title,
+    description: updatedItem.description,
+    startedAt: updatedItem.startedAt,
+    revealedAt: updatedItem.revealedAt,
+    isRevealed: updatedItem.isRevealed,
+  };
+
+  const votesResult = await docClient.send(
+    new QueryCommand({
+      TableName: VOTES_TABLE,
+      KeyConditionExpression: 'roundId = :roundId',
+      ExpressionAttributeValues: {
+        ':roundId': roundId,
+      },
+    })
+  );
+  const votes = (votesResult.Items as Vote[]) || [];
+
+  // Broadcast round update
+  await broadcastToRoom(event, roomId, {
+    type: 'roundUpdate',
+    payload: { round, votes },
+  });
+
+  return { message: 'Round updated' };
+}
+
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
-  console.log('Vote handler invoked', { 
+  console.log('Vote handler invoked', {
     connectionId: event.requestContext.connectionId,
     routeKey: event.requestContext.routeKey,
-    body: event.body
+    body: event.body,
   });
   let message: WebSocketMessage;
 
@@ -380,6 +624,15 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         break;
       case 'join':
         result = await handleJoin(event, message);
+        break;
+      case 'updateParticipant':
+        result = await handleUpdateParticipant(event, message);
+        break;
+      case 'newRound':
+        result = await handleNewRound(event, message);
+        break;
+      case 'updateRound':
+        result = await handleUpdateRound(event, message);
         break;
       default:
         return {

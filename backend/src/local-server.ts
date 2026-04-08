@@ -398,6 +398,68 @@ async function handleWebSocketMessage(
       break;
     }
 
+    case 'updateParticipant': {
+      const { name } = message.payload;
+      const participant = participants.get(participantId);
+      if (!participant) {
+        ws.send(
+          JSON.stringify({
+            type: 'error',
+            payload: { message: 'Participant not found' },
+          })
+        );
+        break;
+      }
+      participant.name = name;
+      participant.avatarSeed = createAvatarSeed(name);
+      participants.set(participantId, participant);
+      broadcastParticipantList(roomId);
+      break;
+    }
+
+    case 'newRound': {
+      const { title, description } = message.payload;
+      const roundId = uuidv4();
+      const now = new Date().toISOString();
+      const round: Round = {
+        id: roundId,
+        roomId,
+        title,
+        description,
+        startedAt: now,
+        isRevealed: false,
+      };
+      rounds.set(roundId, round);
+      broadcastToRoom(roomId, {
+        type: 'roundUpdate',
+        payload: { round, votes: [] },
+      });
+      break;
+    }
+
+    case 'updateRound': {
+      const { roundId, title, description } = message.payload;
+      const round = rounds.get(roundId);
+      if (!round || round.roomId !== roomId) {
+        ws.send(
+          JSON.stringify({
+            type: 'error',
+            payload: { message: 'Round not found' },
+          })
+        );
+        break;
+      }
+      if (title !== undefined) round.title = title;
+      if (description !== undefined) round.description = description;
+      rounds.set(roundId, round);
+      const roundVotes = Array.from(votes.values()).filter((v) => v.roundId === roundId);
+      broadcastToRoom(roomId, {
+        type: 'roundUpdate',
+        payload: { round, votes: roundVotes },
+      });
+      break;
+    }
+
     default:
       ws.send(
         JSON.stringify({

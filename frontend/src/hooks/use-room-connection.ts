@@ -84,6 +84,75 @@ export function useRoomConnection() {
   }, [hookId]);
 
   /**
+   * Update participant name
+   */
+  const updateParticipant = useCallback(
+    (name: string) => {
+      const wsClient = useConnectionStore.getState().wsClient;
+      console.log(
+        `[EstimateNest] [${hookId}] updateParticipant called, wsClient from store:`,
+        wsClient
+      );
+      if (!wsClient) {
+        console.error(`[EstimateNest] [${hookId}] wsClient is null, throwing Not connected`);
+        throw new Error('Not connected');
+      }
+
+      console.log(`[EstimateNest] [${hookId}] Calling wsClient.send for updateParticipant`);
+      wsClient.send({
+        type: 'updateParticipant',
+        payload: { name },
+      });
+    },
+    [hookId]
+  );
+
+  /**
+   * Create a new round
+   */
+  const createNewRound = useCallback(
+    (title?: string, description?: string) => {
+      const wsClient = useConnectionStore.getState().wsClient;
+      console.log(
+        `[EstimateNest] [${hookId}] createNewRound called, wsClient from store:`,
+        wsClient
+      );
+      if (!wsClient) {
+        console.error(`[EstimateNest] [${hookId}] wsClient is null, throwing Not connected`);
+        throw new Error('Not connected');
+      }
+
+      console.log(`[EstimateNest] [${hookId}] Calling wsClient.send for newRound`);
+      wsClient.send({
+        type: 'newRound',
+        payload: { title, description },
+      });
+    },
+    [hookId]
+  );
+
+  /**
+   * Update round details
+   */
+  const updateRound = useCallback(
+    (roundId: string, title?: string, description?: string) => {
+      const wsClient = useConnectionStore.getState().wsClient;
+      console.log(`[EstimateNest] [${hookId}] updateRound called, wsClient from store:`, wsClient);
+      if (!wsClient) {
+        console.error(`[EstimateNest] [${hookId}] wsClient is null, throwing Not connected`);
+        throw new Error('Not connected');
+      }
+
+      console.log(`[EstimateNest] [${hookId}] Calling wsClient.send for updateRound`);
+      wsClient.send({
+        type: 'updateRound',
+        payload: { roundId, title, description },
+      });
+    },
+    [hookId]
+  );
+
+  /**
    * Handle incoming WebSocket messages
    */
   const handleWebSocketMessage = useCallback(
@@ -346,5 +415,8 @@ export function useRoomConnection() {
     disconnect,
     sendVote,
     revealVotes,
+    updateParticipant,
+    createNewRound,
+    updateRound,
   };
 }
