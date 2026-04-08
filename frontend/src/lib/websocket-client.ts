@@ -7,6 +7,7 @@ type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 export interface ConnectionOptions {
   roomId: string;
   participantId: string;
+  hookId?: string;
   onMessage?: MessageHandler;
   onStateChange?: (state: ConnectionState) => void;
   reconnectAttempts?: number;
@@ -28,11 +29,27 @@ export class WebSocketClient {
     };
   }
 
+  private log(message: string, ...args: unknown[]) {
+    const prefix = this.options.hookId ? `[EstimateNest] [${this.options.hookId}]` : '[EstimateNest]';
+    console.log(prefix, message, ...args);
+  }
+
+  private error(message: string, ...args: unknown[]) {
+    const prefix = this.options.hookId ? `[EstimateNest] [${this.options.hookId}]` : '[EstimateNest]';
+    console.error(prefix, message, ...args);
+  }
+
+  private warn(message: string, ...args: unknown[]) {
+    const prefix = this.options.hookId ? `[EstimateNest] [${this.options.hookId}]` : '[EstimateNest]';
+    console.warn(prefix, message, ...args);
+  }
+
   /**
    * Connect to the WebSocket server
    */
-  connect(): void {
+   connect(): void {
     if (this.state === 'connecting' || this.state === 'connected') {
+      this.log('WebSocket already connecting or connected, state:', this.state);
       return;
     }
 
@@ -44,18 +61,19 @@ export class WebSocketClient {
     wsUrl.searchParams.set('roomId', roomId);
     wsUrl.searchParams.set('participantId', participantId);
 
-    console.log('[EstimateNest] Connecting to WebSocket:', wsUrl.toString());
+    this.log('Connecting to WebSocket:', wsUrl.toString());
     this.ws = new WebSocket(wsUrl.toString());
 
     this.ws.onopen = () => {
-      console.log('WebSocket connected');
+      this.log('WebSocket connected');
       this.setState('connected');
       this.reconnectCount = 0;
       // Send join message to trigger participant list broadcast
       try {
+        this.log('Sending join message');
         this.send({ type: 'join', payload: {} });
       } catch (error) {
-        console.warn('Failed to send join message:', error);
+        this.warn('Failed to send join message:', error);
       }
     };
 
@@ -64,17 +82,17 @@ export class WebSocketClient {
         const message = JSON.parse(event.data) as WebSocketMessage;
         this.options.onMessage?.(message);
       } catch (error) {
-        console.error('Failed to parse WebSocket message:', error, event.data);
+        this.error('Failed to parse WebSocket message:', error, event.data);
       }
     };
 
     this.ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
+      this.error('WebSocket error:', error);
       this.setState('error');
     };
 
     this.ws.onclose = (event) => {
-      console.log('WebSocket closed:', event.code, event.reason);
+      this.log('WebSocket closed:', event.code, event.reason);
       this.setState('disconnected');
       this.attemptReconnect();
     };
@@ -84,12 +102,14 @@ export class WebSocketClient {
    * Disconnect from the WebSocket server
    */
   disconnect(): void {
+    this.log('WebSocketClient.disconnect called');
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
 
     if (this.ws) {
+      this.log('Closing WebSocket connection');
       this.ws.close(1000, 'Client disconnect');
       this.ws = null;
     }
@@ -102,7 +122,9 @@ export class WebSocketClient {
    * Note: API Gateway WebSocket API uses the 'action' field to route messages
    */
   send(message: WebSocketMessage): void {
+    console.log('[EstimateNest] WebSocket send attempt:', message.type, 'state:', this.state, 'ws exists:', !!this.ws);
     if (this.state !== 'connected' || !this.ws) {
+      console.error('[EstimateNest] WebSocket not connected, state:', this.state);
       throw new Error('WebSocket is not connected');
     }
 
@@ -112,6 +134,7 @@ export class WebSocketClient {
       ...message,
     };
 
+    console.log('[EstimateNest] Sending WebSocket message:', wrappedMessage);
     this.ws.send(JSON.stringify(wrappedMessage));
   }
 
@@ -124,6 +147,7 @@ export class WebSocketClient {
 
   private setState(newState: ConnectionState): void {
     if (this.state !== newState) {
+      this.log('WebSocket state change:', this.state, '->', newState);
       this.state = newState;
       this.options.onStateChange?.(newState);
     }

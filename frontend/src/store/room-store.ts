@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { Participant, Round, Vote } from '@estimatenest/shared';
+import { RoundHistoryItem } from '../lib/api-client';
 
 interface RoomState {
   // Room metadata
@@ -16,6 +17,9 @@ interface RoomState {
   votes: Vote[];
   isRevealed: boolean;
 
+  // Round history (revealed rounds)
+  roundHistory: RoundHistoryItem[];
+
   // Actions
   setRoom: (roomId: string, shortCode: string) => void;
   setParticipants: (participants: Participant[]) => void;
@@ -25,6 +29,7 @@ interface RoomState {
   addVote: (vote: Vote) => void;
   setVotes: (votes: Vote[]) => void;
   revealVotes: () => void;
+  setRoundHistory: (rounds: RoundHistoryItem[]) => void;
   clearRoom: () => void;
 }
 
@@ -35,6 +40,7 @@ export const useRoomStore = create<RoomState>((set) => ({
   currentRound: null,
   votes: [],
   isRevealed: false,
+  roundHistory: [],
 
   setRoom: (roomId, shortCode) => set({ roomId, shortCode }),
 
@@ -50,7 +56,12 @@ export const useRoomStore = create<RoomState>((set) => ({
       participants: state.participants.filter((p) => p.id !== participantId),
     })),
 
-  setCurrentRound: (round) => set({ currentRound: round, votes: [], isRevealed: false }),
+  setCurrentRound: (round) =>
+    set((state) => ({
+      currentRound: round,
+      votes: round?.id === state.currentRound?.id ? state.votes : [],
+      isRevealed: round?.isRevealed || false,
+    })),
 
   addVote: (vote) =>
     set((state) => ({
@@ -61,6 +72,8 @@ export const useRoomStore = create<RoomState>((set) => ({
 
   revealVotes: () => set({ isRevealed: true }),
 
+  setRoundHistory: (rounds) => set({ roundHistory: rounds }),
+
   clearRoom: () =>
     set({
       roomId: null,
@@ -69,5 +82,6 @@ export const useRoomStore = create<RoomState>((set) => ({
       currentRound: null,
       votes: [],
       isRevealed: false,
+      roundHistory: [],
     }),
 }));

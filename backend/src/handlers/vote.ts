@@ -63,10 +63,20 @@ async function handleVote(
         Key: { roomId, roundId },
       })
     );
-    round = roundResult.Item as Round;
-    if (!round) {
+    const item = roundResult.Item;
+    if (!item) {
       throw new Error('Round not found');
     }
+    // Map DynamoDB attributes to Round interface
+    round = {
+      id: item.roundId || item.id,
+      roomId: item.roomId,
+      title: item.title,
+      description: item.description,
+      startedAt: item.startedAt,
+      revealedAt: item.revealedAt,
+      isRevealed: item.isRevealed,
+    };
     if (round.isRevealed) {
       throw new Error('Round is already revealed');
     }
@@ -87,8 +97,18 @@ async function handleVote(
     );
 
     if (activeRoundsResult.Items && activeRoundsResult.Items.length > 0) {
-      console.log('Active round found:', activeRoundsResult.Items[0].id);
-      round = activeRoundsResult.Items[0] as Round;
+      const item = activeRoundsResult.Items[0];
+      console.log('Active round found:', item.roundId || item.id);
+      // Map DynamoDB attributes to Round interface
+      round = {
+        id: item.roundId || item.id,
+        roomId: item.roomId,
+        title: item.title,
+        description: item.description,
+        startedAt: item.startedAt,
+        revealedAt: item.revealedAt,
+        isRevealed: item.isRevealed,
+      };
       roundId = round.id;
     } else {
       // Create new round
@@ -101,11 +121,12 @@ async function handleVote(
         startedAt: now,
         isRevealed: false,
       };
-      await docClient.send(
+       await docClient.send(
         new PutCommand({
           TableName: ROUNDS_TABLE,
           Item: {
             ...round,
+            roundId,
           },
         })
       );
@@ -224,10 +245,20 @@ async function handleReveal(
     })
   );
 
-  const round = roundResult.Item as Round;
-  if (!round) {
+  const item = roundResult.Item;
+  if (!item) {
     throw new Error('Round not found');
   }
+  // Map DynamoDB attributes to Round interface
+  const round = {
+    id: item.roundId || item.id,
+    roomId: item.roomId,
+    title: item.title,
+    description: item.description,
+    startedAt: item.startedAt,
+    revealedAt: item.revealedAt,
+    isRevealed: item.isRevealed,
+  };
 
   if (round.isRevealed) {
     throw new Error('Round is already revealed');

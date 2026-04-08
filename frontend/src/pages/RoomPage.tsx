@@ -6,15 +6,25 @@ import { useConnectionStore } from '../store/connection-store';
 import { useRoomConnection } from '../hooks/use-room-connection';
 import { DEFAULT_DECKS } from '@estimatenest/shared';
 import { config } from '../lib/config';
+import { apiClient } from '../lib/api-client';
 
 export default function RoomPage() {
   const { roomCode } = useParams<{ roomCode: string }>();
   const navigate = useNavigate();
 
   // Stores
-  const { roomId, shortCode, participants, currentRound, votes, isRevealed } = useRoomStore();
+  const {
+    roomId,
+    shortCode,
+    participants,
+    currentRound,
+    votes,
+    isRevealed,
+    roundHistory,
+    setRoundHistory,
+  } = useRoomStore();
   const { participantId, name: participantName } = useParticipantStore();
-  const { state: connectionState, error } = useConnectionStore();
+  const { state: connectionState, error, setError } = useConnectionStore();
   const { sendVote, revealVotes, disconnect, joinRoom } = useRoomConnection();
 
   // Local state
@@ -34,18 +44,41 @@ export default function RoomPage() {
   // Auto-join when landing on room page with a room code but no connection
   const hasAttemptedAutoJoin = useRef(false);
   useEffect(() => {
-    if (connectionState === 'disconnected' && !roomId && roomCode && !hasAttemptedAutoJoin.current) {
+    if (
+      connectionState === 'disconnected' &&
+      !roomId &&
+      roomCode &&
+      !hasAttemptedAutoJoin.current
+    ) {
+      console.log('[EstimateNest] Auto-join triggered:', {
+        roomCode,
+        participantName,
+        hasRoomId: !!roomId,
+        connectionState,
+      });
       hasAttemptedAutoJoin.current = true;
       const name = participantName || 'Anonymous';
+      console.log('[EstimateNest] Attempting joinRoom with name:', name);
       joinRoom(roomCode, name).catch((error) => {
-        console.error('Auto-join failed:', error);
+        console.error('[EstimateNest] Auto-join failed:', error);
+        setError(error instanceof Error ? error.message : 'Failed to join room');
         // Reset the flag after some time to allow retry
         setTimeout(() => {
           hasAttemptedAutoJoin.current = false;
         }, 3000);
       });
     }
-  }, [connectionState, roomId, roomCode, joinRoom, participantName]);
+  }, [connectionState, roomId, roomCode, joinRoom, participantName, setError]);
+
+  // Fetch round history when room is joined
+  useEffect(() => {
+    if (roomCode && connectionState === 'connected') {
+      apiClient
+        .fetchRoundHistory(roomCode)
+        .then((history) => setRoundHistory(history))
+        .catch((err) => console.error('Failed to fetch round history:', err));
+    }
+  }, [roomCode, connectionState, setRoundHistory]);
 
   // Handle page leave
   useEffect(() => {
@@ -86,6 +119,16 @@ export default function RoomPage() {
     navigate('/');
   };
 
+  const handleRetryJoin = () => {
+    if (!roomCode) return;
+    hasAttemptedAutoJoin.current = false;
+    const name = participantName || 'Anonymous';
+    joinRoom(roomCode, name).catch((error) => {
+      console.error('[EstimateNest] Retry join failed:', error);
+      setError(error instanceof Error ? error.message : 'Failed to join room');
+    });
+  };
+
   const handleNewRound = () => {
     // Not implemented in Phase 1
     alert('New round functionality coming soon!');
@@ -102,6 +145,7 @@ export default function RoomPage() {
       : null;
 
   const hasVoted = votes.some((v) => v.participantId === participantId);
+  const roundNumber = roundHistory.length + (currentRound ? 1 : 0);
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-4">
@@ -171,6 +215,20 @@ export default function RoomPage() {
         <div className="max-w-6xl mx-auto mb-6">
           <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl p-4 text-red-700 dark:text-red-300">
             <p className="font-medium">Error: {error}</p>
+            <div className="flex gap-3 mt-3">
+              <button
+                onClick={handleRetryJoin}
+                className="bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+              >
+                Retry Join
+              </button>
+              <button
+                onClick={() => navigate('/')}
+                className="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-medium py-2 px-4 rounded-lg transition-colors"
+              >
+                Go to Home
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -184,15 +242,15 @@ export default function RoomPage() {
               <div className="flex items-start justify-between">
                 <div>
                   <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100 mb-2">
-                    Sprint Backlog Item #123
+                    {currentRound?.title || 'New Estimation Round'}
                   </h3>
                   <p className="text-gray-600 dark:text-gray-400">
-                    Implement user authentication flow with OAuth2 and session management
+                    {currentRound?.description || 'Add a description for the item being estimated'}
                   </p>
                 </div>
                 <div className="text-right">
                   <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">Round</div>
-                  <div className="text-2xl font-bold text-primary-600">1</div>
+                  <div className="text-2xl font-bold text-primary-600">{roundNumber || 1}</div>
                 </div>
               </div>
               <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
@@ -200,12 +258,18 @@ export default function RoomPage() {
                   <div>
                     <span className="text-gray-500 dark:text-gray-400">Status:</span>{' '}
                     <span className="font-medium text-gray-800 dark:text-gray-200">
-                      Ready for estimation
+                      {isRevealed
+                        ? 'Revealed'
+                        : currentRound
+                          ? 'Ready for estimation'
+                          : 'No active round'}
                     </span>
                   </div>
                   <div>
                     <span className="text-gray-500 dark:text-gray-400">Priority:</span>{' '}
-                    <span className="font-medium text-gray-800 dark:text-gray-200">High</span>
+                    <span className="font-medium text-gray-800 dark:text-gray-200">
+                      {currentRound ? 'To be estimated' : 'N/A'}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -246,9 +310,11 @@ export default function RoomPage() {
               ) : (
                 <>
                   <p className="text-gray-500 dark:text-gray-400 mb-6">
-                    {hasVoted
-                      ? 'You have voted. Waiting for others...'
-                      : 'Select your estimate below.'}
+                    {connectionState !== 'connected'
+                      ? 'Connecting...'
+                      : hasVoted
+                        ? 'You have voted. Waiting for others...'
+                        : 'Select your estimate below.'}
                     {votes.length > 0 && ` ${votes.length} vote(s) cast.`}
                   </p>
                   <div className="grid grid-cols-4 md:grid-cols-6 gap-4">
@@ -256,7 +322,7 @@ export default function RoomPage() {
                       <button
                         key={value}
                         onClick={() => handleVote(value)}
-                        disabled={hasVoted}
+                        disabled={hasVoted || connectionState !== 'connected'}
                         className={`bg-primary-100 dark:bg-primary-900 hover:bg-primary-200 dark:hover:bg-primary-800 text-primary-800 dark:text-primary-200 font-bold py-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                           selectedValue === value
                             ? 'ring-4 ring-primary-400 dark:ring-primary-600'
@@ -318,7 +384,7 @@ export default function RoomPage() {
               {!isRevealed && (
                 <button
                   onClick={handleReveal}
-                  disabled={isRevealing || votes.length === 0}
+                  disabled={isRevealing || votes.length === 0 || connectionState !== 'connected'}
                   className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white font-bold py-3 rounded-lg mb-3 transition-colors"
                 >
                   {isRevealing ? 'Revealing...' : 'Reveal Votes'}
@@ -347,28 +413,37 @@ export default function RoomPage() {
             {/* Round History */}
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow p-6 mt-6">
               <h2 className="text-xl font-bold mb-4">Round History</h2>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
-                  <div>
-                    <div className="font-medium">Round 1</div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400">Story #123</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="font-bold text-primary-600">13</div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400">Average</div>
-                  </div>
+              {roundHistory.length === 0 ? (
+                <p className="text-gray-500 dark:text-gray-400 py-4 text-center">
+                  No round history yet.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {roundHistory.map((round, index) => (
+                    <div
+                      key={round.id}
+                      className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900 rounded-lg"
+                    >
+                      <div>
+                        <div className="font-medium">Round {index + 1}</div>
+                        <div className="text-sm text-gray-500 dark:text-gray-400">
+                          {round.revealedAt
+                            ? new Date(round.revealedAt).toLocaleDateString()
+                            : 'Not revealed'}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold text-primary-600">
+                          {round.average?.toFixed(1) ?? '-'}
+                        </div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">
+                          {round.voteCount} vote{round.voteCount !== 1 ? 's' : ''}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900 rounded-lg opacity-50">
-                  <div>
-                    <div className="font-medium">Round 2</div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400">In progress</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="font-bold text-gray-400">-</div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400">Not revealed</div>
-                  </div>
-                </div>
-              </div>
+              )}
               <button className="w-full mt-4 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 font-medium py-2 rounded-lg transition-colors">
                 View all history →
               </button>

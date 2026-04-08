@@ -207,6 +207,23 @@ export class EstimateNestStack extends cdk.Stack {
       },
     });
 
+    const roundHistoryHandler = new lambdaNodejs.NodejsFunction(this, 'RoundHistoryHandler', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: '../backend/dist/handlers/round-history.js',
+      handler: 'handler',
+      projectRoot: path.join(__dirname, '..', '..'),
+      depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+
+      environment: {
+        ROOM_CODES_TABLE: roomCodesTable.tableName,
+        ROUNDS_TABLE: roundsTable.tableName,
+        VOTES_TABLE: votesTable.tableName,
+      },
+      bundling: {
+        format: lambdaNodejs.OutputFormat.ESM,
+      },
+    });
+
     // Grant permissions
     roomsTable.grantReadWriteData(createRoomHandler);
     roomCodesTable.grantReadWriteData(createRoomHandler);
@@ -214,6 +231,9 @@ export class EstimateNestStack extends cdk.Stack {
     participantsTable.grantReadWriteData(joinRoomHandler);
     roundsTable.grantReadData(joinRoomHandler);
     votesTable.grantReadData(joinRoomHandler);
+    roomCodesTable.grantReadData(roundHistoryHandler);
+    roundsTable.grantReadData(roundHistoryHandler);
+    votesTable.grantReadData(roundHistoryHandler);
     participantsTable.grantReadWriteData(websocketConnectHandler);
     participantsTable.grantReadWriteData(websocketDisconnectHandler);
     votesTable.grantReadWriteData(voteHandler);
@@ -242,9 +262,10 @@ export class EstimateNestStack extends cdk.Stack {
 
     const roomsResource = restApi.root.addResource('rooms');
     roomsResource.addMethod('POST', new apigateway.LambdaIntegration(createRoomHandler));
-    roomsResource
-      .addResource('{code}')
-      .addMethod('GET', new apigateway.LambdaIntegration(joinRoomHandler));
+    const roomByCodeResource = roomsResource.addResource('{code}');
+    roomByCodeResource.addMethod('GET', new apigateway.LambdaIntegration(joinRoomHandler));
+    const roomHistoryResource = roomByCodeResource.addResource('history');
+    roomHistoryResource.addMethod('GET', new apigateway.LambdaIntegration(roundHistoryHandler));
 
     // ====================
     // API Gateway (WebSocket)
@@ -270,6 +291,11 @@ export class EstimateNestStack extends cdk.Stack {
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
       },
       errorResponses: [
+        {
+          httpStatus: 403,
+          responseHttpStatus: 200,
+          responsePagePath: '/index.html',
+        },
         {
           httpStatus: 404,
           responseHttpStatus: 200,

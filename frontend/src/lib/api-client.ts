@@ -27,6 +27,11 @@ export interface JoinRoomResponse {
   isNewParticipant?: boolean;
 }
 
+export interface RoundHistoryItem extends Round {
+  voteCount: number;
+  average?: number;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -87,6 +92,27 @@ export const apiClient = {
 
     if (!response.ok) {
       let errorMessage = `Failed to join room: ${response.status}`;
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.error || errorMessage;
+      } catch {
+        // Ignore JSON parse errors
+      }
+      throw new ApiError(errorMessage, response.status);
+    }
+
+    return response.json();
+  },
+
+  /**
+   * Fetch round history for a room
+   * @param code Room short code
+   */
+  async fetchRoundHistory(code: string): Promise<RoundHistoryItem[]> {
+    const response = await fetch(`${config.apiUrl}/rooms/${code}/history`);
+
+    if (!response.ok) {
+      let errorMessage = `Failed to fetch round history: ${response.status}`;
       try {
         const errorData = await response.json();
         errorMessage = errorData.error || errorMessage;

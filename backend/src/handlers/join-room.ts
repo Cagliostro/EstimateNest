@@ -131,7 +131,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           })
         );
         // Update participant in our local list
-        const participantIndex = participants.findIndex(p => p.id === participantId);
+        const participantIndex = participants.findIndex((p) => p.id === participantId);
         if (participantIndex >= 0) {
           participants[participantIndex] = {
             ...participants[participantIndex],
@@ -179,8 +179,12 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       });
     }
 
-    // Fetch active round (not revealed)
-    const roundsResult = await docClient.send(
+    // Fetch latest round (active or most recent revealed)
+    let round: Round | null = null;
+    let votes: Vote[] = [];
+
+    // First try to get active round (not revealed)
+    const activeRoundsResult = await docClient.send(
       new QueryCommand({
         TableName: ROUNDS_TABLE,
         KeyConditionExpression: 'roomId = :roomId',
@@ -193,11 +197,41 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       })
     );
 
-    let round: Round | null = null;
-    let votes: Vote[] = [];
+    let roundItem = activeRoundsResult.Items?.[0];
 
-    if (roundsResult.Items && roundsResult.Items.length > 0) {
-      round = roundsResult.Items[0] as Round;
+    // If no active round, get the most recent round (by startedAt)
+    if (!roundItem) {
+      const allRoundsResult = await docClient.send(
+        new QueryCommand({
+          TableName: ROUNDS_TABLE,
+          KeyConditionExpression: 'roomId = :roomId',
+          ExpressionAttributeValues: {
+            ':roomId': roomId,
+          },
+        })
+      );
+
+      if (allRoundsResult.Items && allRoundsResult.Items.length > 0) {
+        // Find most recent round by startedAt
+        roundItem = allRoundsResult.Items.reduce((latest, current) => {
+          const latestDate = new Date(latest.startedAt || 0).getTime();
+          const currentDate = new Date(current.startedAt || 0).getTime();
+          return currentDate > latestDate ? current : latest;
+        });
+      }
+    }
+
+    if (roundItem) {
+      // Map DynamoDB attributes to Round interface
+      round = {
+        id: roundItem.roundId || roundItem.id,
+        roomId: roundItem.roomId,
+        title: roundItem.title,
+        description: roundItem.description,
+        startedAt: roundItem.startedAt,
+        revealedAt: roundItem.revealedAt,
+        isRevealed: roundItem.isRevealed,
+      };
       const votesResult = await docClient.send(
         new QueryCommand({
           TableName: VOTES_TABLE,
