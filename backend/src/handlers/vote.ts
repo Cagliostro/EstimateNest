@@ -362,10 +362,15 @@ async function handleUpdateParticipant(
   event: APIGatewayProxyEvent,
   message: WebSocketMessage & { type: 'updateParticipant' }
 ) {
+  console.log('handleUpdateParticipant called', {
+    connectionId: event.requestContext.connectionId,
+    name: message.payload.name,
+  });
   const { connectionId } = event.requestContext;
   const { name } = message.payload;
 
   if (!name || typeof name !== 'string') {
+    console.error('Invalid name in updateParticipant:', name);
     throw new Error('Invalid name');
   }
 
@@ -384,13 +389,25 @@ async function handleUpdateParticipant(
 
   const participant = queryResult.Items?.[0] as Participant | undefined;
   if (!participant) {
+    console.error('Participant not found for connectionId:', connectionId);
     throw new Error('Participant not found');
   }
 
+  console.log('Found participant:', {
+    participantId: participant.participantId,
+    roomId: participant.roomId,
+    currentName: participant.name,
+  });
   const { roomId, participantId } = participant;
   const avatarSeed = createAvatarSeed(name);
 
   // Update participant name and avatarSeed
+  console.log('Updating participant in DynamoDB:', {
+    roomId,
+    participantId,
+    newName: name,
+    avatarSeed,
+  });
   await docClient.send(
     new UpdateCommand({
       TableName: PARTICIPANTS_TABLE,
@@ -405,6 +422,7 @@ async function handleUpdateParticipant(
       },
     })
   );
+  console.log('Participant updated successfully');
 
   // Fetch all participants in the room
   const participantsResult = await docClient.send(
@@ -419,12 +437,15 @@ async function handleUpdateParticipant(
   );
 
   const participants = (participantsResult.Items as Participant[]) || [];
+  console.log('Fetched participants for broadcast:', participants.length, 'participants');
 
   // Broadcast participant list to everyone in the room
+  console.log('Broadcasting participantList to room:', roomId);
   await broadcastToRoom(event, roomId, {
     type: 'participantList',
     payload: { participants },
   });
+  console.log('Broadcast completed');
 
   return { message: 'Participant updated' };
 }

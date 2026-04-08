@@ -30,24 +30,30 @@ export class WebSocketClient {
   }
 
   private log(message: string, ...args: unknown[]) {
-    const prefix = this.options.hookId ? `[EstimateNest] [${this.options.hookId}]` : '[EstimateNest]';
+    const prefix = this.options.hookId
+      ? `[EstimateNest] [${this.options.hookId}]`
+      : '[EstimateNest]';
     console.log(prefix, message, ...args);
   }
 
   private error(message: string, ...args: unknown[]) {
-    const prefix = this.options.hookId ? `[EstimateNest] [${this.options.hookId}]` : '[EstimateNest]';
+    const prefix = this.options.hookId
+      ? `[EstimateNest] [${this.options.hookId}]`
+      : '[EstimateNest]';
     console.error(prefix, message, ...args);
   }
 
   private warn(message: string, ...args: unknown[]) {
-    const prefix = this.options.hookId ? `[EstimateNest] [${this.options.hookId}]` : '[EstimateNest]';
+    const prefix = this.options.hookId
+      ? `[EstimateNest] [${this.options.hookId}]`
+      : '[EstimateNest]';
     console.warn(prefix, message, ...args);
   }
 
   /**
    * Connect to the WebSocket server
    */
-   connect(): void {
+  connect(): void {
     if (this.state === 'connecting' || this.state === 'connected') {
       this.log('WebSocket already connecting or connected, state:', this.state);
       return;
@@ -122,7 +128,14 @@ export class WebSocketClient {
    * Note: API Gateway WebSocket API uses the 'action' field to route messages
    */
   send(message: WebSocketMessage): void {
-    console.log('[EstimateNest] WebSocket send attempt:', message.type, 'state:', this.state, 'ws exists:', !!this.ws);
+    console.log(
+      '[EstimateNest] WebSocket send attempt:',
+      message.type,
+      'state:',
+      this.state,
+      'ws exists:',
+      !!this.ws
+    );
     if (this.state !== 'connected' || !this.ws) {
       console.error('[EstimateNest] WebSocket not connected, state:', this.state);
       throw new Error('WebSocket is not connected');
@@ -143,6 +156,13 @@ export class WebSocketClient {
    */
   getState(): ConnectionState {
     return this.state;
+  }
+
+  /**
+   * Update the message handler
+   */
+  setOnMessage(handler: MessageHandler): void {
+    this.options.onMessage = handler;
   }
 
   private setState(newState: ConnectionState): void {

@@ -445,6 +445,14 @@ export function useRoomConnection() {
     }
   }, [hookId]);
 
+  // Update WebSocket client message handler when handleWebSocketMessage changes
+  useEffect(() => {
+    if (wsClientRef.current) {
+      console.log(`[EstimateNest] [${hookId}] Updating WebSocket client message handler`);
+      wsClientRef.current.setOnMessage(handleWebSocketMessage);
+    }
+  }, [handleWebSocketMessage, hookId]);
+
   return {
     createRoom,
     joinRoom,
