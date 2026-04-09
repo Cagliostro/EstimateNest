@@ -1,12 +1,10 @@
 import { create } from 'zustand';
-import { WebSocketClient } from '../lib/websocket-client';
 
 type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
 interface ConnectionStore {
   state: ConnectionState;
   error: string | null;
-  wsClient: WebSocketClient | null;
 
   // Actions
   setConnecting: () => void;
@@ -14,13 +12,11 @@ interface ConnectionStore {
   setDisconnected: () => void;
   setError: (error: string) => void;
   clearError: () => void;
-  setWsClient: (client: WebSocketClient | null) => void;
 }
 
 export const useConnectionStore = create<ConnectionStore>((set) => ({
   state: 'disconnected',
   error: null,
-  wsClient: null,
 
   setConnecting: () => set({ state: 'connecting', error: null }),
 
@@ -31,6 +27,4 @@ export const useConnectionStore = create<ConnectionStore>((set) => ({
   setError: (error) => set({ state: 'error', error }),
 
   clearError: () => set({ error: null }),
-
-  setWsClient: (wsClient) => set({ wsClient }),
 }));

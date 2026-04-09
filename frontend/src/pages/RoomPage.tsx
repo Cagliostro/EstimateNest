@@ -61,10 +61,6 @@ export default function RoomPage() {
     console.log('[EstimateNest] handleUpdateName called', { newName, connectionState });
     if (!newName.trim()) return;
 
-    // Check WebSocket connection
-    const wsClient = useConnectionStore.getState().wsClient;
-    console.log('[EstimateNest] WebSocket client:', wsClient);
-
     try {
       updateParticipant(newName.trim());
       setIsEditingName(false);

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { apiClient } from '../lib/api-client';
-import { WebSocketClient } from '../lib/websocket-client';
+import { WebSocketService } from '../lib/websocket-service';
 import { WebSocketMessage } from '@estimatenest/shared';
 import { useRoomStore } from '../store/room-store';
 import { useParticipantStore } from '../store/participant-store';
@@ -11,18 +11,13 @@ export interface UseRoomConnectionOptions {
 }
 
 export function useRoomConnection() {
-  const wsClientRef = useRef<WebSocketClient | null>(null);
-  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const hookIdRef = useRef(Math.random().toString(36).substr(2, 9));
   const hookId = hookIdRef.current;
+  const serviceRef = useRef(WebSocketService.getInstance());
+  const service = serviceRef.current;
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const storeWsClient = useConnectionStore.getState().wsClient;
-  console.log(
-    `[EstimateNest] useRoomConnection hook created, id: ${hookId}, wsClientRef.current:`,
-    wsClientRef.current,
-    'store wsClient:',
-    storeWsClient
-  );
+  console.log(`[EstimateNest] [${hookId}] useRoomConnection hook created`);
 
   // Store states
   const {
@@ -35,122 +30,7 @@ export function useRoomConnection() {
     clearRoom,
   } = useRoomStore();
   const { setParticipant, clearParticipant } = useParticipantStore();
-  const { setConnecting, setConnected, setDisconnected, setError, setWsClient } =
-    useConnectionStore();
-
-  /**
-   * Create a new room
-   */
-  const createRoom = useCallback(
-    async (options?: { deck?: string }) => {
-      try {
-        const response = await apiClient.createRoom({
-          deck: options?.deck || 'fibonacci',
-        });
-
-        // Room created, but participant still needs to join via joinRoom
-        return response;
-      } catch (error) {
-        setError(error instanceof Error ? error.message : 'Failed to create room');
-        throw error;
-      }
-    },
-    [setError]
-  );
-
-  /**
-   * Reveal votes (moderator only)
-   */
-  const revealVotes = useCallback(() => {
-    const wsClient = useConnectionStore.getState().wsClient;
-    console.log(`[EstimateNest] [${hookId}] revealVotes called, wsClient from store:`, wsClient);
-    if (!wsClient) {
-      console.error(`[EstimateNest] [${hookId}] wsClient is null, throwing Not connected`);
-      throw new Error('Not connected');
-    }
-
-    // Get current round ID from store
-    const { currentRound } = useRoomStore.getState();
-    console.log(`[EstimateNest] [${hookId}] currentRound:`, currentRound);
-    if (!currentRound) {
-      throw new Error('No active round');
-    }
-
-    console.log(`[EstimateNest] [${hookId}] Calling wsClient.send for reveal`);
-    wsClient.send({
-      type: 'reveal',
-      payload: { roundId: currentRound.id },
-    });
-  }, [hookId]);
-
-  /**
-   * Update participant name
-   */
-  const updateParticipant = useCallback(
-    (name: string) => {
-      const wsClient = useConnectionStore.getState().wsClient;
-      console.log(
-        `[EstimateNest] [${hookId}] updateParticipant called, wsClient from store:`,
-        wsClient
-      );
-      if (!wsClient) {
-        console.error(`[EstimateNest] [${hookId}] wsClient is null, throwing Not connected`);
-        throw new Error('Not connected');
-      }
-
-      console.log(`[EstimateNest] [${hookId}] Calling wsClient.send for updateParticipant`);
-      wsClient.send({
-        type: 'updateParticipant',
-        payload: { name },
-      });
-    },
-    [hookId]
-  );
-
-  /**
-   * Create a new round
-   */
-  const createNewRound = useCallback(
-    (title?: string, description?: string) => {
-      const wsClient = useConnectionStore.getState().wsClient;
-      console.log(
-        `[EstimateNest] [${hookId}] createNewRound called, wsClient from store:`,
-        wsClient
-      );
-      if (!wsClient) {
-        console.error(`[EstimateNest] [${hookId}] wsClient is null, throwing Not connected`);
-        throw new Error('Not connected');
-      }
-
-      console.log(`[EstimateNest] [${hookId}] Calling wsClient.send for newRound`);
-      wsClient.send({
-        type: 'newRound',
-        payload: { title, description },
-      });
-    },
-    [hookId]
-  );
-
-  /**
-   * Update round details
-   */
-  const updateRound = useCallback(
-    (roundId: string, title?: string, description?: string) => {
-      const wsClient = useConnectionStore.getState().wsClient;
-      console.log(`[EstimateNest] [${hookId}] updateRound called, wsClient from store:`, wsClient);
-      if (!wsClient) {
-        console.error(`[EstimateNest] [${hookId}] wsClient is null, throwing Not connected`);
-        throw new Error('Not connected');
-      }
-
-      console.log(`[EstimateNest] [${hookId}] Calling wsClient.send for updateRound`);
-      wsClient.send({
-        type: 'updateRound',
-        payload: { roundId, title, description },
-      });
-    },
-    [hookId]
-  );
+  const { setConnecting, setConnected, setDisconnected, setError } = useConnectionStore();
 
   /**
    * Handle incoming WebSocket messages
@@ -159,15 +39,14 @@ export function useRoomConnection() {
     (message: WebSocketMessage) => {
       switch (message.type) {
         case 'participantList': {
+          console.log(`[EstimateNest] [${hookId}] participantList received:`, {
+            participants: message.payload.participants,
+            count: message.payload.participants.length,
+          });
           setParticipants(message.payload.participants);
+
           // Update participant store if current participant is in the list
           const { participantId: currentParticipantId } = useParticipantStore.getState();
-          console.log(
-            `[EstimateNest] [${hookId}] participantList received, currentParticipantId:`,
-            currentParticipantId,
-            'participants:',
-            message.payload.participants
-          );
           if (currentParticipantId) {
             const updatedParticipant = message.payload.participants.find(
               (p) => p.id === currentParticipantId
@@ -179,13 +58,7 @@ export function useRoomConnection() {
                 name
               );
               setParticipant(currentParticipantId, name, avatarSeed, isModerator);
-            } else {
-              console.log(
-                `[EstimateNest] [${hookId}] Current participant not found in participant list`
-              );
             }
-          } else {
-            console.log(`[EstimateNest] [${hookId}] No current participant ID in store`);
           }
           break;
         }
@@ -211,9 +84,6 @@ export function useRoomConnection() {
         case 'participantUpdated':
           console.log(`[EstimateNest] [${hookId}] participantUpdated received:`, message.payload);
           // Optionally show a success message to user
-          if (message.payload.success) {
-            console.log(`[EstimateNest] [${hookId}] Name updated to:`, message.payload.name);
-          }
           break;
 
         case 'error':
@@ -221,7 +91,6 @@ export function useRoomConnection() {
           setError(message.payload.message);
           break;
 
-        // Note: 'join' messages are handled via participantList updates
         default:
           console.log(`[EstimateNest] [${hookId}] Unhandled message type:`, message.type);
       }
@@ -283,6 +152,26 @@ export function useRoomConnection() {
   }, []);
 
   /**
+   * Create a new room
+   */
+  const createRoom = useCallback(
+    async (options?: { deck?: string }) => {
+      try {
+        const response = await apiClient.createRoom({
+          deck: options?.deck || 'fibonacci',
+        });
+
+        // Room created, but participant still needs to join via joinRoom
+        return response;
+      } catch (error) {
+        setError(error instanceof Error ? error.message : 'Failed to create room');
+        throw error;
+      }
+    },
+    [setError]
+  );
+
+  /**
    * Join an existing room
    */
   const joinRoom = useCallback(
@@ -299,11 +188,8 @@ export function useRoomConnection() {
           'participant:',
           joinResponse.participantId
         );
-        console.log(`[EstimateNest] [${hookId}] WebSocket URL:`, joinResponse.webSocketUrl);
-        console.log(`[EstimateNest] [${hookId}] Join response:`, joinResponse);
 
         // 2. Store participant info
-        // Determine if participant is moderator by checking the participants array
         let isModerator = false;
         if (joinResponse.participants) {
           const participant = joinResponse.participants.find(
@@ -318,8 +204,7 @@ export function useRoomConnection() {
           isModerator
         );
 
-        // 3. Extract room ID from response (we don't have short code yet)
-        // The roomId is in response, but short code is the input roomCode
+        // 3. Set room info
         setRoom(joinResponse.roomId, roomCode.toUpperCase());
 
         // 4. Update room state with initial data from join response
@@ -333,33 +218,10 @@ export function useRoomConnection() {
           setVotes(joinResponse.votes);
         }
 
-        // 5. Connect WebSocket
-        const wsClient = new WebSocketClient({
-          roomId: joinResponse.roomId,
-          participantId: joinResponse.participantId,
-          hookId,
-          onMessage: handleWebSocketMessage,
-          onStateChange: (state) => {
-            console.log(`[EstimateNest] [${hookId}] WebSocket state change:`, state);
-            if (state === 'connected') {
-              setConnected();
-            } else if (state === 'disconnected' || state === 'error') {
-              setDisconnected();
-            }
-          },
-        });
+        // 5. Connect WebSocket via service
+        service.connect(joinResponse.roomId, joinResponse.participantId);
 
-        wsClientRef.current = wsClient;
-        setWsClient(wsClient);
-        console.log(
-          `[EstimateNest] [${hookId}] WebSocket client created, ref set:`,
-          !!wsClientRef.current,
-          'wsClient:',
-          wsClient
-        );
-        wsClient.connect();
-
-        // Start polling for room state updates (fallback for WebSocket issues)
+        // 6. Start polling for room state updates (fallback for WebSocket issues)
         startPolling(roomCode, joinResponse.participantId);
 
         return joinResponse;
@@ -375,13 +237,11 @@ export function useRoomConnection() {
       setConnected,
       setDisconnected,
       setError,
-      setWsClient,
       setParticipant,
       setRoom,
       setParticipants,
       setCurrentRound,
       setVotes,
-      handleWebSocketMessage,
       startPolling,
       hookId,
     ]
@@ -391,82 +251,124 @@ export function useRoomConnection() {
    * Disconnect from room
    */
   const disconnect = useCallback(() => {
-    const wsClient = useConnectionStore.getState().wsClient;
-    console.log(`[EstimateNest] [${hookId}] disconnect called, wsClient from store:`, wsClient);
-    console.trace(`[EstimateNest] [${hookId}] Disconnect stack trace`);
-    if (wsClient) {
-      console.log(`[EstimateNest] [${hookId}] Disconnecting WebSocket`);
-      wsClient.disconnect();
-    } else {
-      console.log(`[EstimateNest] [${hookId}] wsClient already null`);
-    }
-    wsClientRef.current = null;
-    setWsClient(null);
+    console.log(`[EstimateNest] [${hookId}] disconnect called`);
+    service.disconnect();
     stopPolling();
     clearRoom();
     clearParticipant();
     setDisconnected();
-  }, [clearRoom, clearParticipant, setDisconnected, setWsClient, stopPolling, hookId]);
+  }, [clearRoom, clearParticipant, setDisconnected, stopPolling, hookId]);
 
   /**
    * Send a vote
    */
   const sendVote = useCallback(
     (value: number | string) => {
-      const wsClient = useConnectionStore.getState().wsClient;
-      console.log(
-        `[EstimateNest] [${hookId}] sendVote called, wsClient from store:`,
-        wsClient,
-        'value:',
-        value,
-        'hookId:',
-        hookId
-      );
-      if (!wsClient) {
-        console.error(`[EstimateNest] [${hookId}] wsClient is null, throwing Not connected.`);
+      console.log(`[EstimateNest] [${hookId}] sendVote called, value:`, value);
+      if (!service.isConnected()) {
         throw new Error('Not connected');
       }
-
-      // In Phase 1, we don't specify roundId - backend will use active round
-      console.log(`[EstimateNest] [${hookId}] Calling wsClient.send`);
-      wsClient.send({
-        type: 'vote',
-        payload: { roundId: '', value },
-      });
+      service.sendVote(value);
     },
-    [hookId]
+    [hookId, service]
   );
 
-  // Cleanup on unmount
+  /**
+   * Reveal votes (moderator only)
+   */
+  const revealVotes = useCallback(() => {
+    console.log(`[EstimateNest] [${hookId}] revealVotes called`);
+    if (!service.isConnected()) {
+      throw new Error('Not connected');
+    }
+
+    // Get current round ID from store
+    const { currentRound } = useRoomStore.getState();
+    if (!currentRound) {
+      throw new Error('No active round');
+    }
+
+    service.revealVotes(currentRound.id);
+  }, [hookId, service]);
+
+  /**
+   * Update participant name
+   */
+  const updateParticipant = useCallback(
+    (name: string) => {
+      console.log(`[EstimateNest] [${hookId}] updateParticipant called, name:`, name);
+      if (!service.isConnected()) {
+        throw new Error('Not connected');
+      }
+      service.updateParticipant(name);
+    },
+    [hookId, service]
+  );
+
+  /**
+   * Create a new round
+   */
+  const createNewRound = useCallback(
+    (title?: string, description?: string) => {
+      console.log(`[EstimateNest] [${hookId}] createNewRound called, title:`, title);
+      if (!service.isConnected()) {
+        throw new Error('Not connected');
+      }
+      service.createNewRound(title, description);
+    },
+    [hookId, service]
+  );
+
+  /**
+   * Update round details
+   */
+  const updateRound = useCallback(
+    (roundId: string, title?: string, description?: string) => {
+      console.log(`[EstimateNest] [${hookId}] updateRound called, roundId:`, roundId);
+      if (!service.isConnected()) {
+        throw new Error('Not connected');
+      }
+      service.updateRound(roundId, title, description);
+    },
+    [hookId, service]
+  );
+
+  // Register message handler on mount and unregister on unmount
   useEffect(() => {
+    console.log(`[EstimateNest] [${hookId}] Registering message handler`);
+    service.addMessageHandler(handleWebSocketMessage);
+
     return () => {
-      console.log(
-        `[EstimateNest] [${hookId}] Cleanup effect running, wsClientRef.current:`,
-        wsClientRef.current
-      );
-      console.trace(`[EstimateNest] [${hookId}] Cleanup stack trace`);
-      // Note: We don't disconnect or clear wsClient here because
-      // component might be re-rendering. Disconnect only happens
-      // via explicit disconnect() call when leaving room.
+      console.log(`[EstimateNest] [${hookId}] Unregistering message handler`);
+      service.removeMessageHandler(handleWebSocketMessage);
     };
-  }, [hookId]);
+  }, [handleWebSocketMessage, hookId, service]);
 
-  // Sync ref with store wsClient on mount
+  // Sync connection state with store
   useEffect(() => {
-    const storeWsClient = useConnectionStore.getState().wsClient;
-    if (storeWsClient && !wsClientRef.current) {
-      console.log(`[EstimateNest] [${hookId}] Syncing ref with store wsClient`);
-      wsClientRef.current = storeWsClient;
-    }
-  }, [hookId]);
+    const handleStateChange = (state: string) => {
+      console.log(`[EstimateNest] [${hookId}] State change callback:`, state);
+      if (state === 'connected') {
+        setConnected();
+      } else if (state === 'disconnected' || state === 'error') {
+        setDisconnected();
+      } else if (state === 'connecting') {
+        setConnecting();
+      }
+    };
 
-  // Update WebSocket client message handler when handleWebSocketMessage changes
-  useEffect(() => {
-    if (wsClientRef.current) {
-      console.log(`[EstimateNest] [${hookId}] Updating WebSocket client message handler`);
-      wsClientRef.current.setOnMessage(handleWebSocketMessage);
-    }
-  }, [handleWebSocketMessage, hookId]);
+    console.log(`[EstimateNest] [${hookId}] Registering state change callback`);
+    service.addStateChangeCallback(handleStateChange);
+
+    // Initialize current state
+    const currentState = service.getState();
+    handleStateChange(currentState);
+
+    return () => {
+      console.log(`[EstimateNest] [${hookId}] Removing state change callback`);
+      service.removeStateChangeCallback(handleStateChange);
+    };
+  }, [setConnecting, setConnected, setDisconnected, hookId, service]);
 
   return {
     createRoom,

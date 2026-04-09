@@ -44,7 +44,13 @@ export const useRoomStore = create<RoomState>((set) => ({
 
   setRoom: (roomId, shortCode) => set({ roomId, shortCode }),
 
-  setParticipants: (participants) => set({ participants }),
+  setParticipants: (participants) => {
+    console.log(
+      '[RoomStore] Setting participants:',
+      participants.map((p) => ({ id: p.id, name: p.name }))
+    );
+    return set({ participants });
+  },
 
   addParticipant: (participant) =>
     set((state) => ({

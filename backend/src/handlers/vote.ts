@@ -362,9 +362,11 @@ async function handleUpdateParticipant(
   event: APIGatewayProxyEvent,
   message: WebSocketMessage & { type: 'updateParticipant' }
 ) {
+  console.log('========== handleUpdateParticipant START ==========');
   console.log('handleUpdateParticipant called', {
     connectionId: event.requestContext.connectionId,
     name: message.payload.name,
+    message: JSON.stringify(message),
   });
   const { connectionId } = event.requestContext;
   const { name } = message.payload;
