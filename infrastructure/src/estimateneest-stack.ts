@@ -138,6 +138,7 @@ export class EstimateNestStack extends cdk.Stack {
         VOTES_TABLE: votesTable.tableName,
         ROUNDS_TABLE: roundsTable.tableName,
         PARTICIPANTS_TABLE: participantsTable.tableName,
+        ROOMS_TABLE: roomsTable.tableName,
       },
       bundling: {
         format: lambdaNodejs.OutputFormat.ESM,
@@ -267,6 +268,7 @@ export class EstimateNestStack extends cdk.Stack {
     votesTable.grantReadWriteData(voteHandler);
     roundsTable.grantReadWriteData(voteHandler);
     participantsTable.grantReadWriteData(voteHandler);
+    roomsTable.grantReadData(voteHandler);
 
     // Grant WebSocket API permissions for broadcasting
     webSocketApi.grantManageConnections(websocketConnectHandler);

@@ -10,7 +10,14 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { v4 as uuidv4 } from 'uuid';
-import { Vote, Round, WebSocketMessage, Participant, createAvatarSeed } from '@estimatenest/shared';
+import {
+  Vote,
+  Round,
+  WebSocketMessage,
+  Participant,
+  createAvatarSeed,
+  Room,
+} from '@estimatenest/shared';
 import { broadcastToRoom, sendToConnection } from '../utils/broadcast';
 
 const client = new DynamoDBClient({});
@@ -19,6 +26,7 @@ const docClient = DynamoDBDocumentClient.from(client);
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 const ROUNDS_TABLE = process.env.ROUNDS_TABLE!;
 const VOTES_TABLE = process.env.VOTES_TABLE!;
+const ROOMS_TABLE = process.env.ROOMS_TABLE!;
 
 async function handleVote(
   event: APIGatewayProxyEvent,
@@ -235,13 +243,30 @@ async function handleReveal(
     })
   );
 
-  const participant = queryResult.Items?.[0];
+  const participant = queryResult.Items?.[0] as Participant | undefined;
   if (!participant) {
     throw new Error('Participant not found');
   }
-  console.log('Reveal participant:', participant);
 
   const { roomId } = participant;
+
+  // Fetch room to check allowAllParticipantsToReveal setting
+  const roomResult = await docClient.send(
+    new GetCommand({
+      TableName: ROOMS_TABLE,
+      Key: { id: roomId, sk: 'META' },
+    })
+  );
+
+  const room = roomResult.Item as Room | undefined;
+  if (!room) {
+    throw new Error('Room not found');
+  }
+
+  // Check if participant is moderator or room allows all participants to reveal
+  if (!participant.isModerator && !room.allowAllParticipantsToReveal) {
+    throw new Error('Only moderators can reveal votes');
+  }
 
   // Get the round
   const roundResult = await docClient.send(

@@ -23,7 +23,7 @@ export default function RoomPage() {
     roundHistory,
     setRoundHistory,
   } = useRoomStore();
-  const { participantId, name: participantName } = useParticipantStore();
+  const { participantId, name: participantName, isModerator } = useParticipantStore();
   useEffect(() => {
     console.log('[RoomPage] participantName changed:', participantName);
   }, [participantName]);
@@ -46,6 +46,10 @@ export default function RoomPage() {
   const [isEditingRound, setIsEditingRound] = useState(false);
   const [roundTitle, setRoundTitle] = useState('');
   const [roundDescription, setRoundDescription] = useState('');
+
+  // Permission flags (TODO: add room.allowAllParticipantsToReveal)
+  const canReveal = isModerator;
+  const canStartNewRound = isModerator;
 
   // Fibonacci deck (default)
   const deck = DEFAULT_DECKS.find((d: { id: string }) => d.id === 'fibonacci') || DEFAULT_DECKS[0];
@@ -120,6 +124,16 @@ export default function RoomPage() {
         .catch((err) => console.error('Failed to fetch round history:', err));
     }
   }, [roomCode, connectionState, setRoundHistory]);
+
+  // Refetch history when a round is revealed
+  useEffect(() => {
+    if (roomCode && connectionState === 'connected' && currentRound?.isRevealed) {
+      apiClient
+        .fetchRoundHistory(roomCode)
+        .then((history) => setRoundHistory(history))
+        .catch((err) => console.error('Failed to fetch round history after reveal:', err));
+    }
+  }, [roomCode, connectionState, currentRound?.id, currentRound?.isRevealed, setRoundHistory]);
 
   // Handle page leave
   useEffect(() => {
@@ -324,7 +338,7 @@ export default function RoomPage() {
                         <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100 mb-2">
                           {currentRound?.title || 'New Estimation Round'}
                         </h3>
-                        {currentRound && (
+                        {currentRound && isModerator && (
                           <button
                             onClick={() => {
                               setIsEditingRound(true);
@@ -542,7 +556,7 @@ export default function RoomPage() {
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow p-6">
               <h2 className="text-xl font-bold mb-4">Room Controls</h2>
 
-              {!isRevealed && (
+              {canReveal && !isRevealed && (
                 <button
                   onClick={handleReveal}
                   disabled={isRevealing || votes.length === 0 || connectionState !== 'connected'}
@@ -552,12 +566,14 @@ export default function RoomPage() {
                 </button>
               )}
 
-              <button
-                onClick={handleNewRound}
-                className="w-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-bold py-3 rounded-lg transition-colors"
-              >
-                New Round
-              </button>
+              {canStartNewRound && (
+                <button
+                  onClick={handleNewRound}
+                  className="w-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-bold py-3 rounded-lg transition-colors"
+                >
+                  New Round
+                </button>
+              )}
 
               {/* Round info */}
               {currentRound && (
