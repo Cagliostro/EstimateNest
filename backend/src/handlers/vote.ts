@@ -633,12 +633,18 @@ async function handleUpdateRound(
 }
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+  console.log('========== VOTE HANDLER INVOKED ==========');
   console.log('Vote handler updated for new message types');
   console.log('Vote handler invoked', {
     connectionId: event.requestContext.connectionId,
     routeKey: event.requestContext.routeKey,
     body: event.body,
   });
+  try {
+    console.log('Raw body (parsed):', event.body ? JSON.parse(event.body) : null);
+  } catch (e) {
+    console.log('Raw body (cannot parse):', event.body);
+  }
   let message: WebSocketMessage;
 
   try {

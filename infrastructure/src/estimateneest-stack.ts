@@ -266,7 +266,7 @@ export class EstimateNestStack extends cdk.Stack {
     participantsTable.grantReadWriteData(websocketDisconnectHandler);
     votesTable.grantReadWriteData(voteHandler);
     roundsTable.grantReadWriteData(voteHandler);
-    participantsTable.grantReadData(voteHandler);
+    participantsTable.grantReadWriteData(voteHandler);
 
     // Grant WebSocket API permissions for broadcasting
     webSocketApi.grantManageConnections(websocketConnectHandler);

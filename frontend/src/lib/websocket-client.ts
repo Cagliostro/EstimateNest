@@ -147,7 +147,10 @@ export class WebSocketClient {
       ...message,
     };
 
-    console.log('[EstimateNest] Sending WebSocket message:', wrappedMessage);
+    console.log(
+      '[EstimateNest] Sending WebSocket message:',
+      JSON.stringify(wrappedMessage, null, 2)
+    );
     this.ws.send(JSON.stringify(wrappedMessage));
   }
 

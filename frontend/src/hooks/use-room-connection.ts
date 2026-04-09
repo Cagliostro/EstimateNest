@@ -234,7 +234,6 @@ export function useRoomConnection() {
     },
     [
       setConnecting,
-      setConnected,
       setDisconnected,
       setError,
       setParticipant,
@@ -244,6 +243,7 @@ export function useRoomConnection() {
       setVotes,
       startPolling,
       hookId,
+      service,
     ]
   );
 
@@ -257,7 +257,7 @@ export function useRoomConnection() {
     clearRoom();
     clearParticipant();
     setDisconnected();
-  }, [clearRoom, clearParticipant, setDisconnected, stopPolling, hookId]);
+  }, [clearRoom, clearParticipant, setDisconnected, stopPolling, hookId, service]);
 
   /**
    * Send a vote
