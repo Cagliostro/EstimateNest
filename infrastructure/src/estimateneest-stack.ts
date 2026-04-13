@@ -253,6 +253,23 @@ export class EstimateNestStack extends cdk.Stack {
       },
     });
 
+    const updateRoomHandler = new lambdaNodejs.NodejsFunction(this, 'UpdateRoomHandler', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: '../backend/dist/handlers/update-room.js',
+      handler: 'handler',
+      projectRoot: path.join(__dirname, '..', '..'),
+      depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+
+      environment: {
+        ROOMS_TABLE: roomsTable.tableName,
+        ROOM_CODES_TABLE: roomCodesTable.tableName,
+        PARTICIPANTS_TABLE: participantsTable.tableName,
+      },
+      bundling: {
+        format: lambdaNodejs.OutputFormat.ESM,
+      },
+    });
+
     // Grant permissions
     roomsTable.grantReadWriteData(createRoomHandler);
     roomCodesTable.grantReadWriteData(createRoomHandler);
@@ -269,6 +286,9 @@ export class EstimateNestStack extends cdk.Stack {
     roundsTable.grantReadWriteData(voteHandler);
     participantsTable.grantReadWriteData(voteHandler);
     roomsTable.grantReadData(voteHandler);
+    roomsTable.grantReadWriteData(updateRoomHandler);
+    roomCodesTable.grantReadData(updateRoomHandler);
+    participantsTable.grantReadData(updateRoomHandler);
 
     // Grant WebSocket API permissions for broadcasting
     webSocketApi.grantManageConnections(websocketConnectHandler);
@@ -294,6 +314,7 @@ export class EstimateNestStack extends cdk.Stack {
     roomsResource.addMethod('POST', new apigateway.LambdaIntegration(createRoomHandler));
     const roomByCodeResource = roomsResource.addResource('{code}');
     roomByCodeResource.addMethod('GET', new apigateway.LambdaIntegration(joinRoomHandler));
+    roomByCodeResource.addMethod('PUT', new apigateway.LambdaIntegration(updateRoomHandler));
     const roomHistoryResource = roomByCodeResource.addResource('history');
     roomHistoryResource.addMethod('GET', new apigateway.LambdaIntegration(roundHistoryHandler));
 

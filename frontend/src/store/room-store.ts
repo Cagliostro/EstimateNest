@@ -6,6 +6,7 @@ interface RoomState {
   // Room metadata
   roomId: string | null;
   shortCode: string | null;
+  autoRevealEnabled: boolean;
 
   // Participants
   participants: Participant[];
@@ -20,8 +21,12 @@ interface RoomState {
   // Round history (revealed rounds)
   roundHistory: RoundHistoryItem[];
 
+  // Auto-reveal countdown
+  countdownSeconds: number | null;
+
   // Actions
   setRoom: (roomId: string, shortCode: string) => void;
+  setAutoRevealEnabled: (enabled: boolean) => void;
   setParticipants: (participants: Participant[]) => void;
   addParticipant: (participant: Participant) => void;
   removeParticipant: (participantId: string) => void;
@@ -29,6 +34,9 @@ interface RoomState {
   addVote: (vote: Vote) => void;
   setVotes: (votes: Vote[]) => void;
   revealVotes: () => void;
+  startCountdown: (seconds: number) => void;
+  stopCountdown: () => void;
+  resetCountdown: () => void;
   setRoundHistory: (rounds: RoundHistoryItem[]) => void;
   clearRoom: () => void;
 }
@@ -36,13 +44,17 @@ interface RoomState {
 export const useRoomStore = create<RoomState>((set) => ({
   roomId: null,
   shortCode: null,
+  autoRevealEnabled: true,
   participants: [],
   currentRound: null,
   votes: [],
   isRevealed: false,
   roundHistory: [],
+  countdownSeconds: null,
 
   setRoom: (roomId, shortCode) => set({ roomId, shortCode }),
+
+  setAutoRevealEnabled: (enabled) => set({ autoRevealEnabled: enabled }),
 
   setParticipants: (participants) => {
     console.log(
@@ -78,16 +90,24 @@ export const useRoomStore = create<RoomState>((set) => ({
 
   revealVotes: () => set({ isRevealed: true }),
 
+  startCountdown: (seconds) => set({ countdownSeconds: seconds }),
+
+  stopCountdown: () => set({ countdownSeconds: null }),
+
+  resetCountdown: () => set({ countdownSeconds: null }),
+
   setRoundHistory: (rounds) => set({ roundHistory: rounds }),
 
   clearRoom: () =>
     set({
       roomId: null,
       shortCode: null,
+      autoRevealEnabled: true,
       participants: [],
       currentRound: null,
       votes: [],
       isRevealed: false,
       roundHistory: [],
+      countdownSeconds: null,
     }),
 }));

@@ -13,6 +13,8 @@ export interface Room {
   allowAllParticipantsToReveal: boolean;
   maxParticipants?: number; // default 50
   deck: CardDeck; // default deck for the room (can be overridden by user)
+  autoRevealEnabled?: boolean; // default: true
+  autoRevealCountdownSeconds?: number; // default: 3
 }
 
 export interface Participant {
@@ -87,6 +89,7 @@ export type WebSocketMessage =
   | { type: 'participantList'; payload: { participants: Participant[] } }
   | { type: 'roundUpdate'; payload: { round: Round; votes: Vote[] } }
   | { type: 'participantUpdated'; payload: { success: boolean; name: string } }
+  | { type: 'autoRevealCountdown'; payload: { countdownSeconds: number } }
   | { type: 'error'; payload: { message: string; code?: string } };
 
 // ====================

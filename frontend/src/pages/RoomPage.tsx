@@ -7,6 +7,7 @@ import { useRoomConnection } from '../hooks/use-room-connection';
 import { DEFAULT_DECKS } from '@estimatenest/shared';
 import { config } from '../lib/config';
 import { apiClient } from '../lib/api-client';
+import CountdownOverlay from '../components/CountdownOverlay';
 
 export default function RoomPage() {
   const { roomCode } = useParams<{ roomCode: string }>();
@@ -16,12 +17,14 @@ export default function RoomPage() {
   const {
     roomId,
     shortCode,
+    autoRevealEnabled,
     participants,
     currentRound,
     votes,
     isRevealed,
     roundHistory,
     setRoundHistory,
+    setAutoRevealEnabled,
   } = useRoomStore();
   const { participantId, name: participantName, isModerator } = useParticipantStore();
   useEffect(() => {
@@ -46,6 +49,7 @@ export default function RoomPage() {
   const [isEditingRound, setIsEditingRound] = useState(false);
   const [roundTitle, setRoundTitle] = useState('');
   const [roundDescription, setRoundDescription] = useState('');
+  const [isUpdatingAutoReveal, setIsUpdatingAutoReveal] = useState(false);
 
   // Permission flags (TODO: add room.allowAllParticipantsToReveal)
   const canReveal = isModerator;
@@ -193,6 +197,28 @@ export default function RoomPage() {
     }
   };
 
+  const handleToggleAutoReveal = async () => {
+    if (!shortCode || isUpdatingAutoReveal) return;
+
+    setIsUpdatingAutoReveal(true);
+    try {
+      const newAutoRevealEnabled = !autoRevealEnabled;
+      await fetch(`${config.apiUrl}/rooms/${shortCode}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ autoRevealEnabled: newAutoRevealEnabled }),
+      });
+      setAutoRevealEnabled(newAutoRevealEnabled);
+    } catch (error) {
+      console.error('Failed to update auto-reveal setting:', error);
+      alert('Failed to update auto-reveal setting. Please try again.');
+    } finally {
+      setIsUpdatingAutoReveal(false);
+    }
+  };
+
   // Calculate statistics
   const numericVotes = votes
     .map((v) => (typeof v.value === 'number' ? v.value : parseFloat(v.value as string)))
@@ -208,6 +234,9 @@ export default function RoomPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-4">
+      {/* Countdown Overlay */}
+      <CountdownOverlay />
+
       {/* Header */}
       <header className="max-w-6xl mx-auto py-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -573,6 +602,27 @@ export default function RoomPage() {
                 >
                   New Round
                 </button>
+              )}
+
+              {/* Auto-reveal toggle (moderator only) */}
+              {isModerator && (
+                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Auto-reveal when everyone votes
+                    </span>
+                    <div className="relative">
+                      <input
+                        type="checkbox"
+                        checked={autoRevealEnabled}
+                        onChange={handleToggleAutoReveal}
+                        disabled={isUpdatingAutoReveal}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary-300 dark:peer-focus:ring-primary-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary-600 disabled:opacity-50"></div>
+                    </div>
+                  </label>
+                </div>
               )}
 
               {/* Round info */}

@@ -27,10 +27,15 @@ export function useRoomConnection() {
     setCurrentRound,
     setVotes,
     revealVotes: revealVotesInStore,
+    startCountdown,
+    stopCountdown,
     clearRoom,
   } = useRoomStore();
   const { setParticipant, clearParticipant } = useParticipantStore();
   const { setConnecting, setConnected, setDisconnected, setError } = useConnectionStore();
+
+  // Countdown interval ref
+  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   /**
    * Handle incoming WebSocket messages
@@ -86,6 +91,11 @@ export function useRoomConnection() {
           // Optionally show a success message to user
           break;
 
+        case 'autoRevealCountdown':
+          console.log(`[EstimateNest] [${hookId}] autoRevealCountdown received:`, message.payload);
+          startCountdown(message.payload.countdownSeconds);
+          break;
+
         case 'error':
           console.error(`[EstimateNest] [${hookId}] WebSocket error:`, message.payload);
           setError(message.payload.message);
@@ -103,6 +113,7 @@ export function useRoomConnection() {
       revealVotesInStore,
       setParticipant,
       setError,
+      startCountdown,
       hookId,
     ]
   );
@@ -341,6 +352,11 @@ export function useRoomConnection() {
     return () => {
       console.log(`[EstimateNest] [${hookId}] Unregistering message handler`);
       service.removeMessageHandler(handleWebSocketMessage);
+      // Clear countdown interval on unmount
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
+      }
     };
   }, [handleWebSocketMessage, hookId, service]);
 
@@ -369,6 +385,53 @@ export function useRoomConnection() {
       service.removeStateChangeCallback(handleStateChange);
     };
   }, [setConnecting, setConnected, setDisconnected, hookId, service]);
+
+  // Handle countdown logic
+  useEffect(() => {
+    const { countdownSeconds: currentCountdown } = useRoomStore.getState();
+
+    if (currentCountdown === null || currentCountdown <= 0) {
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
+      }
+      return;
+    }
+
+    // Clear any existing interval
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+    }
+
+    // Start countdown
+    countdownIntervalRef.current = setInterval(() => {
+      const { countdownSeconds: current } = useRoomStore.getState();
+
+      if (current === null || current <= 1) {
+        // Countdown complete - reveal votes
+        if (countdownIntervalRef.current) {
+          clearInterval(countdownIntervalRef.current);
+          countdownIntervalRef.current = null;
+        }
+        stopCountdown();
+        try {
+          revealVotesInStore();
+        } catch (error) {
+          console.error('Auto-reveal failed:', error);
+        }
+      } else {
+        // Decrement countdown
+        useRoomStore.setState({ countdownSeconds: current - 1 });
+      }
+    }, 1000);
+
+    return () => {
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
+      }
+    };
+  }, [stopCountdown, revealVotesInStore]);
 
   return {
     createRoom,

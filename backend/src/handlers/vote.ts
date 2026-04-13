@@ -208,6 +208,58 @@ async function handleVote(
 
   const votes = (votesResult.Items as Vote[]) || [];
 
+  // Check if everyone has voted and auto-reveal is enabled
+  const participantsResult = await docClient.send(
+    new QueryCommand({
+      TableName: PARTICIPANTS_TABLE,
+      KeyConditionExpression: 'roomId = :roomId',
+      ExpressionAttributeValues: {
+        ':roomId': roomId,
+      },
+    })
+  );
+  const participants = (participantsResult.Items as Participant[]) || [];
+  const allVoted = votes.length === participants.length && participants.length > 0;
+
+  // Fetch room to check auto-reveal settings
+  const roomResult = await docClient.send(
+    new GetCommand({
+      TableName: ROOMS_TABLE,
+      Key: { id: roomId, sk: 'META' },
+    })
+  );
+  const room = roomResult.Item as Room | undefined;
+  const autoRevealEnabled = room?.autoRevealEnabled !== false; // default: true
+  const countdownSeconds = room?.autoRevealCountdownSeconds ?? 3; // default: 3
+
+  // If everyone voted, auto-reveal is enabled, and round not yet revealed
+  if (allVoted && autoRevealEnabled && !round.isRevealed) {
+    console.log('All participants voted, scheduling auto-reveal', {
+      roomId,
+      roundId,
+      countdownSeconds,
+    });
+
+    // Broadcast countdown start to all participants
+    await broadcastToRoom(event, roomId, {
+      type: 'autoRevealCountdown',
+      payload: { countdownSeconds },
+    });
+
+    // Schedule the reveal by updating the round with scheduledRevealAt
+    const scheduledRevealAt = new Date(Date.now() + countdownSeconds * 1000).toISOString();
+    await docClient.send(
+      new UpdateCommand({
+        TableName: ROUNDS_TABLE,
+        Key: { roomId, roundId },
+        UpdateExpression: 'SET scheduledRevealAt = :scheduledRevealAt',
+        ExpressionAttributeValues: {
+          ':scheduledRevealAt': scheduledRevealAt,
+        },
+      })
+    );
+  }
+
   console.log('Broadcasting round update', { roomId, roundId, votesCount: votes.length });
   const { domainName, stage } = event.requestContext;
   console.log('Endpoint info:', { domainName, stage });
