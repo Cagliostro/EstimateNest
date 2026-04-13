@@ -397,51 +397,51 @@ export function useRoomConnection() {
     service.revealVotes(currentRound.id);
   }, [service]);
 
-  // Handle countdown logic
+  // Handle countdown logic - watches countdownSeconds from store
   useEffect(() => {
-    const { countdownSeconds: currentCountdown } = useRoomStore.getState();
+    // Subscribe to countdownSeconds changes
+    const unsubscribe = useRoomStore.subscribe((state) => {
+      const currentCountdown = state.countdownSeconds;
+      console.log(`[EstimateNest] Countdown changed to:`, currentCountdown);
 
-    console.log(`[EstimateNest] Countdown effect triggered, currentCountdown:`, currentCountdown);
-
-    if (currentCountdown === null || currentCountdown <= 0) {
+      // Clear existing interval
       if (countdownIntervalRef.current) {
-        console.log(`[EstimateNest] Clearing countdown interval (no countdown active)`);
+        console.log(`[EstimateNest] Clearing existing countdown interval`);
         clearInterval(countdownIntervalRef.current);
         countdownIntervalRef.current = null;
       }
-      return;
-    }
 
-    // Clear any existing interval
-    if (countdownIntervalRef.current) {
-      console.log(`[EstimateNest] Clearing existing countdown interval`);
-      clearInterval(countdownIntervalRef.current);
-    }
-
-    console.log(`[EstimateNest] Starting countdown from`, currentCountdown);
-
-    // Start countdown
-    countdownIntervalRef.current = setInterval(() => {
-      const { countdownSeconds: current } = useRoomStore.getState();
-      console.log(`[EstimateNest] Countdown tick, current:`, current);
-
-      if (current === null || current <= 1) {
-        // Countdown complete - reveal votes
-        console.log(`[EstimateNest] Countdown complete, triggering reveal`);
-        if (countdownIntervalRef.current) {
-          clearInterval(countdownIntervalRef.current);
-          countdownIntervalRef.current = null;
-        }
-        stopCountdown();
-        triggerReveal();
-      } else {
-        // Decrement countdown
-        console.log(`[EstimateNest] Decrementing countdown to`, current - 1);
-        useRoomStore.setState({ countdownSeconds: current - 1 });
+      // No countdown or countdown completed
+      if (currentCountdown === null || currentCountdown <= 0) {
+        return;
       }
-    }, 1000);
+
+      console.log(`[EstimateNest] Starting countdown from`, currentCountdown);
+
+      // Start countdown interval
+      countdownIntervalRef.current = setInterval(() => {
+        const { countdownSeconds: current } = useRoomStore.getState();
+        console.log(`[EstimateNest] Countdown tick, current:`, current);
+
+        if (current === null || current <= 1) {
+          // Countdown complete - reveal votes
+          console.log(`[EstimateNest] Countdown complete, triggering reveal`);
+          if (countdownIntervalRef.current) {
+            clearInterval(countdownIntervalRef.current);
+            countdownIntervalRef.current = null;
+          }
+          stopCountdown();
+          triggerReveal();
+        } else {
+          // Decrement countdown
+          console.log(`[EstimateNest] Decrementing countdown to`, current - 1);
+          useRoomStore.setState({ countdownSeconds: current - 1 });
+        }
+      }, 1000);
+    });
 
     return () => {
+      unsubscribe();
       if (countdownIntervalRef.current) {
         console.log(`[EstimateNest] Cleanup: clearing countdown interval`);
         clearInterval(countdownIntervalRef.current);
