@@ -386,6 +386,17 @@ export function useRoomConnection() {
     };
   }, [setConnecting, setConnected, setDisconnected, hookId, service]);
 
+  // Countdown function ref to access latest revealVotes
+  const triggerReveal = useCallback(() => {
+    const { currentRound } = useRoomStore.getState();
+    if (!currentRound) {
+      console.error('Auto-reveal failed: No active round');
+      return;
+    }
+    console.log(`[EstimateNest] Auto-reveal triggered, revealing round:`, currentRound.id);
+    service.revealVotes(currentRound.id);
+  }, [service]);
+
   // Handle countdown logic
   useEffect(() => {
     const { countdownSeconds: currentCountdown } = useRoomStore.getState();
@@ -414,11 +425,7 @@ export function useRoomConnection() {
           countdownIntervalRef.current = null;
         }
         stopCountdown();
-        try {
-          revealVotesInStore();
-        } catch (error) {
-          console.error('Auto-reveal failed:', error);
-        }
+        triggerReveal();
       } else {
         // Decrement countdown
         useRoomStore.setState({ countdownSeconds: current - 1 });
@@ -431,7 +438,7 @@ export function useRoomConnection() {
         countdownIntervalRef.current = null;
       }
     };
-  }, [stopCountdown, revealVotesInStore]);
+  }, [stopCountdown, triggerReveal]);
 
   return {
     createRoom,
