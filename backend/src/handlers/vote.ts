@@ -175,7 +175,8 @@ async function handleVote(
             Item: {
               ...vote,
             },
-            ConditionExpression: 'attribute_not_exists(participantId)', // Prevent duplicate votes
+            ConditionExpression:
+              'attribute_not_exists(roundId) AND attribute_not_exists(participantId)', // Prevent duplicate votes in same round
           },
         },
         {
