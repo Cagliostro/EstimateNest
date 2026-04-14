@@ -194,6 +194,7 @@ async function handleVote(
       ],
     })
   );
+  console.log('Vote stored successfully');
 
   // Fetch all votes for this round to broadcast
   const votesResult = await docClient.send(
@@ -207,6 +208,7 @@ async function handleVote(
   );
 
   const votes = (votesResult.Items as Vote[]) || [];
+  console.log('Fetched votes for round:', { roundId, voteCount: votes.length, votes });
 
   // Check if everyone has voted and auto-reveal is enabled
   const participantsResult = await docClient.send(
