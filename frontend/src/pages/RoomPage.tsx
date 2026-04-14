@@ -139,6 +139,11 @@ export default function RoomPage() {
     }
   }, [roomCode, connectionState, currentRound?.id, currentRound?.isRevealed, setRoundHistory]);
 
+  // Reset selected value when round changes (new round started)
+  useEffect(() => {
+    setSelectedValue(null);
+  }, [currentRound?.id]);
+
   // Handle page leave
   useEffect(() => {
     return () => {
