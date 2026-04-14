@@ -164,8 +164,6 @@ async function handleVote(
   };
 
   // Store vote and update round in transaction
-  console.log('Storing vote:', vote);
-  console.log('Votes table key schema: roundId (partition), participantId (sort)');
   await docClient.send(
     new TransactWriteCommand({
       TransactItems: [
@@ -175,7 +173,6 @@ async function handleVote(
             Item: {
               ...vote,
             },
-            // No condition needed - composite key (roundId, participantId) prevents duplicates
           },
         },
         {
@@ -194,7 +191,6 @@ async function handleVote(
       ],
     })
   );
-  console.log('Vote stored successfully');
 
   // Fetch all votes for this round to broadcast
   const votesResult = await docClient.send(
@@ -208,7 +204,6 @@ async function handleVote(
   );
 
   const votes = (votesResult.Items as Vote[]) || [];
-  console.log('Fetched votes for round:', { roundId, voteCount: votes.length, votes });
 
   // Check if everyone has voted and auto-reveal is enabled
   const participantsResult = await docClient.send(

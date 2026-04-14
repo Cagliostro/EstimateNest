@@ -446,11 +446,6 @@ export default function RoomPage() {
                   <div className="grid grid-cols-4 md:grid-cols-6 gap-4 mb-6">
                     {votes.map((vote) => {
                       const voter = participants.find((p) => p.id === vote.participantId);
-                      console.log('Revealed vote:', {
-                        id: vote.id,
-                        value: vote.value,
-                        participantId: vote.participantId,
-                      });
                       return (
                         <div
                           key={vote.id}
