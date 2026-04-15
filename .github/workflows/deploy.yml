@@ -19,6 +19,12 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ROLLUP_NATIVE: 0
+      NODE_OPTIONS: --max-old-space-size=4096
+      npm_config_optional: true
+      SHARP_IGNORE_GLOBAL_LIBVIPS: 1
+      SHARP_DIST_BASE_URL: https://github.com/lovell/sharp-libvips/releases/download
+      SHARP_BINARY_HOST: https://github.com/lovell/sharp/releases/download
+      SHARP_LIBVIPS_BINARY_HOST: https://github.com/lovell/sharp-libvips/releases/download
     steps:
       - uses: actions/checkout@v4
 
@@ -28,14 +34,22 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
+      - name: Clean node_modules
+        run: rm -rf node_modules package-lock.json
+
       - name: Install dependencies
-        run: npm ci --include=optional
+        run: npm install --no-audit --no-fund
 
       - name: Lint
         run: npm run lint
 
       - name: Build
-        run: npm run build
+        run: |
+          # Build all packages for testing (frontend with dummy env vars)
+          export VITE_API_URL="https://example.com/api"
+          export VITE_WEBSOCKET_URL="wss://example.com/ws"
+          export VITE_FRONTEND_URL="https://example.com"
+          npm run build
 
       - name: Test
         run: npm run test
@@ -49,6 +63,12 @@ jobs:
       contents: read
     env:
       ROLLUP_NATIVE: 0
+      NODE_OPTIONS: --max-old-space-size=4096
+      npm_config_optional: true
+      SHARP_IGNORE_GLOBAL_LIBVIPS: 1
+      SHARP_DIST_BASE_URL: https://github.com/lovell/sharp-libvips/releases/download
+      SHARP_BINARY_HOST: https://github.com/lovell/sharp/releases/download
+      SHARP_LIBVIPS_BINARY_HOST: https://github.com/lovell/sharp-libvips/releases/download
 
     steps:
       - uses: actions/checkout@v4
@@ -59,11 +79,18 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
+      - name: Clean node_modules
+        run: rm -rf node_modules package-lock.json
+
       - name: Install dependencies
-        run: npm ci --include=optional
+        run: npm install --no-audit --no-fund
 
       - name: Build packages
-        run: npm run build
+        run: |
+          # Build shared, backend, and infrastructure - frontend needs environment variables
+          npm run build --workspace=packages/shared
+          npm run build --workspace=backend
+          npm run build --workspace=infrastructure
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -138,7 +165,24 @@ jobs:
           export VITE_API_URL="${{ steps.outputs.outputs.rest_api_url }}"
           export VITE_WEBSOCKET_URL="${{ steps.outputs.outputs.websocket_url }}"
           export VITE_FRONTEND_URL="${{ steps.outputs.outputs.frontend_url }}"
-          npm run build --workspace=frontend
+          echo "Building frontend with env:"
+          echo "VITE_API_URL=$VITE_API_URL"
+          echo "VITE_WEBSOCKET_URL=$VITE_WEBSOCKET_URL"
+          echo "VITE_FRONTEND_URL=$VITE_FRONTEND_URL"
+          # Clean previous build and ensure correct working directory for PostCSS
+          rm -rf frontend/dist
+          cd frontend && npm run build
+          echo "Build complete. Checking generated files:"
+          ls -la dist/assets/
+          echo "CSS size:"
+          CSS_SIZE=$(wc -c < dist/assets/*.css)
+          echo "CSS file size: $CSS_SIZE bytes"
+          if [ "$CSS_SIZE" -lt 10000 ]; then
+            echo "ERROR: CSS file too small ($CSS_SIZE bytes). TailwindCSS likely failed to process."
+            echo "Contents of CSS file (first 500 chars):"
+            head -c 500 dist/assets/*.css
+            exit 1
+          fi
 
       - name: Upload frontend to S3
         run: |

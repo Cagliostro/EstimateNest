@@ -21,12 +21,35 @@ export default function HomePage() {
     try {
       const result = await createRoom();
       setCreatedRoom(result);
-      // Navigate to room page
-      navigate(`/${result.shortCode}`);
+      
+      // Moderator also needs to join the room as a participant
+      const name = participantName.trim() || 'Anonymous';
+      try {
+        await joinRoom(result.shortCode, name);
+        // Navigate to room page on successful join
+        navigate(`/${result.shortCode}`);
+      } catch (joinError) {
+        console.error('Failed to join room after creation:', joinError);
+        // Don't navigate - user can click "Enter Room" to retry
+        // The room is created, so we stay on the success screen
+      }
     } catch (error) {
       console.error('Failed to create room:', error);
     } finally {
       setIsCreating(false);
+    }
+  };
+
+  const handleEnterCreatedRoom = async () => {
+    if (!createdRoom) return;
+    
+    const name = participantName.trim() || 'Anonymous';
+    try {
+      await joinRoom(createdRoom.shortCode, name);
+      navigate(`/${createdRoom.shortCode}`);
+    } catch (error) {
+      console.error('Failed to join created room:', error);
+      alert('Failed to join room. Please try again.');
     }
   };
 
@@ -95,7 +118,7 @@ export default function HomePage() {
               </button>
             </div>
             <button
-              onClick={() => navigate(`/${createdRoom.shortCode}`)}
+              onClick={handleEnterCreatedRoom}
               className="bg-primary-600 hover:bg-primary-700 text-white font-bold py-3 px-8 rounded-lg transition-colors"
             >
               Enter Room
@@ -107,6 +130,19 @@ export default function HomePage() {
             <p className="mb-6 text-gray-500 dark:text-gray-400">
               Start a new estimation session and invite your team with a simple link.
             </p>
+            <div className="mb-6">
+              <label htmlFor="creatorName" className="block text-left mb-2 font-medium">
+                Your Name (optional)
+              </label>
+              <input
+                id="creatorName"
+                type="text"
+                value={participantName}
+                onChange={(e) => setParticipantName(e.target.value)}
+                placeholder="Anonymous"
+                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              />
+            </div>
             <button
               onClick={handleCreateRoom}
               disabled={isCreating}

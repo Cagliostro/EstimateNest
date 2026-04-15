@@ -11,4 +11,5 @@ export default defineConfig({
   clean: true,
   dts: false,
   external: ['aws-sdk'],
+  noExternal: ['@estimatenest/shared'],
 });

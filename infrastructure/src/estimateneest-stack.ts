@@ -11,8 +11,8 @@ import * as lambdaNodejs from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
-import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
+import * as path from 'path';
 
 export interface EstimateNestStackProps extends cdk.StackProps {
   envName: string;
@@ -76,15 +76,18 @@ export class EstimateNestStack extends cdk.Stack {
 
     const createRoomHandler = new lambdaNodejs.NodejsFunction(this, 'CreateRoomHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
-      entry: '../backend/src/handlers/create-room.ts',
+      entry: '../backend/dist/handlers/create-room.js',
       handler: 'handler',
-      bundling: {
-        externalModules: ['@estimatenest/shared'],
-      },
+      projectRoot: path.join(__dirname, '..', '..'),
+      depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+
       environment: {
         ROOMS_TABLE: roomsTable.tableName,
         ROOM_CODES_TABLE: roomCodesTable.tableName,
         DOMAIN_NAME: props.domainName || 'example.com',
+      },
+      bundling: {
+        format: lambdaNodejs.OutputFormat.ESM,
       },
     });
 
@@ -93,13 +96,15 @@ export class EstimateNestStack extends cdk.Stack {
       'WebSocketConnectHandler',
       {
         runtime: lambda.Runtime.NODEJS_20_X,
-        entry: '../backend/src/handlers/websocket-connect.ts',
+        entry: '../backend/dist/handlers/websocket-connect.js',
         handler: 'handler',
-        bundling: {
-          externalModules: ['@estimatenest/shared'],
-        },
+        projectRoot: path.join(__dirname, '..', '..'),
+        depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
         environment: {
           PARTICIPANTS_TABLE: participantsTable.tableName,
+        },
+        bundling: {
+          format: lambdaNodejs.OutputFormat.ESM,
         },
       }
     );
@@ -109,28 +114,34 @@ export class EstimateNestStack extends cdk.Stack {
       'WebSocketDisconnectHandler',
       {
         runtime: lambda.Runtime.NODEJS_20_X,
-        entry: '../backend/src/handlers/websocket-disconnect.ts',
+        entry: '../backend/dist/handlers/websocket-disconnect.js',
         handler: 'handler',
-        bundling: {
-          externalModules: ['@estimatenest/shared'],
-        },
+        projectRoot: path.join(__dirname, '..', '..'),
+        depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
         environment: {
           PARTICIPANTS_TABLE: participantsTable.tableName,
+        },
+        bundling: {
+          format: lambdaNodejs.OutputFormat.ESM,
         },
       }
     );
 
     const voteHandler = new lambdaNodejs.NodejsFunction(this, 'VoteHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
-      entry: '../backend/src/handlers/vote.ts',
+      entry: '../backend/dist/handlers/vote.js',
       handler: 'handler',
-      bundling: {
-        externalModules: ['@estimatenest/shared'],
-      },
+      projectRoot: path.join(__dirname, '..', '..'),
+      depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+
       environment: {
         VOTES_TABLE: votesTable.tableName,
         ROUNDS_TABLE: roundsTable.tableName,
         PARTICIPANTS_TABLE: participantsTable.tableName,
+        ROOMS_TABLE: roomsTable.tableName,
+      },
+      bundling: {
+        format: lambdaNodejs.OutputFormat.ESM,
       },
     });
 
@@ -172,6 +183,34 @@ export class EstimateNestStack extends cdk.Stack {
       ),
     });
 
+    webSocketApi.addRoute('updateParticipant', {
+      integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
+        'UpdateParticipantIntegration',
+        voteHandler
+      ),
+    });
+
+    webSocketApi.addRoute('newRound', {
+      integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
+        'NewRoundIntegration',
+        voteHandler
+      ),
+    });
+
+    webSocketApi.addRoute('updateRound', {
+      integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
+        'UpdateRoundIntegration',
+        voteHandler
+      ),
+    });
+
+    webSocketApi.addRoute('$default', {
+      integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
+        'DefaultIntegration',
+        voteHandler
+      ),
+    });
+
     const webSocketStage = new apigatewayv2.WebSocketStage(this, 'WebSocketStage', {
       webSocketApi,
       stageName: props.envName,
@@ -180,17 +219,54 @@ export class EstimateNestStack extends cdk.Stack {
 
     const joinRoomHandler = new lambdaNodejs.NodejsFunction(this, 'JoinRoomHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
-      entry: '../backend/src/handlers/join-room.ts',
+      entry: '../backend/dist/handlers/join-room.js',
       handler: 'handler',
-      bundling: {
-        externalModules: ['@estimatenest/shared'],
-      },
+      projectRoot: path.join(__dirname, '..', '..'),
+      depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+
       environment: {
         ROOM_CODES_TABLE: roomCodesTable.tableName,
         PARTICIPANTS_TABLE: participantsTable.tableName,
         WEBSOCKET_URL: webSocketStage.url,
         ROUNDS_TABLE: roundsTable.tableName,
         VOTES_TABLE: votesTable.tableName,
+      },
+      bundling: {
+        format: lambdaNodejs.OutputFormat.ESM,
+      },
+    });
+
+    const roundHistoryHandler = new lambdaNodejs.NodejsFunction(this, 'RoundHistoryHandler', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: '../backend/dist/handlers/round-history.js',
+      handler: 'handler',
+      projectRoot: path.join(__dirname, '..', '..'),
+      depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+
+      environment: {
+        ROOM_CODES_TABLE: roomCodesTable.tableName,
+        ROUNDS_TABLE: roundsTable.tableName,
+        VOTES_TABLE: votesTable.tableName,
+      },
+      bundling: {
+        format: lambdaNodejs.OutputFormat.ESM,
+      },
+    });
+
+    const updateRoomHandler = new lambdaNodejs.NodejsFunction(this, 'UpdateRoomHandler', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: '../backend/dist/handlers/update-room.js',
+      handler: 'handler',
+      projectRoot: path.join(__dirname, '..', '..'),
+      depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+
+      environment: {
+        ROOMS_TABLE: roomsTable.tableName,
+        ROOM_CODES_TABLE: roomCodesTable.tableName,
+        PARTICIPANTS_TABLE: participantsTable.tableName,
+      },
+      bundling: {
+        format: lambdaNodejs.OutputFormat.ESM,
       },
     });
 
@@ -201,60 +277,24 @@ export class EstimateNestStack extends cdk.Stack {
     participantsTable.grantReadWriteData(joinRoomHandler);
     roundsTable.grantReadData(joinRoomHandler);
     votesTable.grantReadData(joinRoomHandler);
+    roomCodesTable.grantReadData(roundHistoryHandler);
+    roundsTable.grantReadData(roundHistoryHandler);
+    votesTable.grantReadData(roundHistoryHandler);
     participantsTable.grantReadWriteData(websocketConnectHandler);
     participantsTable.grantReadWriteData(websocketDisconnectHandler);
     votesTable.grantReadWriteData(voteHandler);
     roundsTable.grantReadWriteData(voteHandler);
-    participantsTable.grantReadData(voteHandler);
+    participantsTable.grantReadWriteData(voteHandler);
+    roomsTable.grantReadData(voteHandler);
+    roomsTable.grantReadWriteData(updateRoomHandler);
+    roomCodesTable.grantReadData(updateRoomHandler);
+    participantsTable.grantReadData(updateRoomHandler);
 
     // Grant WebSocket API permissions for broadcasting
     webSocketApi.grantManageConnections(websocketConnectHandler);
     webSocketApi.grantManageConnections(websocketDisconnectHandler);
     webSocketApi.grantManageConnections(voteHandler);
-
-    // Explicit permissions for execute-api:ManageConnections (additional safety)
-    websocketConnectHandler.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['execute-api:ManageConnections'],
-        resources: [
-          cdk.Arn.format(
-            {
-              service: 'execute-api',
-              resource: `${webSocketApi.apiId}/${webSocketStage.stageName}/POST/@connections/*`,
-            },
-            this
-          ),
-        ],
-      })
-    );
-    websocketDisconnectHandler.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['execute-api:ManageConnections'],
-        resources: [
-          cdk.Arn.format(
-            {
-              service: 'execute-api',
-              resource: `${webSocketApi.apiId}/${webSocketStage.stageName}/POST/@connections/*`,
-            },
-            this
-          ),
-        ],
-      })
-    );
-    voteHandler.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['execute-api:ManageConnections'],
-        resources: [
-          cdk.Arn.format(
-            {
-              service: 'execute-api',
-              resource: `${webSocketApi.apiId}/${webSocketStage.stageName}/POST/@connections/*`,
-            },
-            this
-          ),
-        ],
-      })
-    );
+    webSocketApi.grantManageConnections(joinRoomHandler);
 
     // ====================
     // API Gateway (REST)
@@ -272,9 +312,11 @@ export class EstimateNestStack extends cdk.Stack {
 
     const roomsResource = restApi.root.addResource('rooms');
     roomsResource.addMethod('POST', new apigateway.LambdaIntegration(createRoomHandler));
-    roomsResource
-      .addResource('{code}')
-      .addMethod('GET', new apigateway.LambdaIntegration(joinRoomHandler));
+    const roomByCodeResource = roomsResource.addResource('{code}');
+    roomByCodeResource.addMethod('GET', new apigateway.LambdaIntegration(joinRoomHandler));
+    roomByCodeResource.addMethod('PUT', new apigateway.LambdaIntegration(updateRoomHandler));
+    const roomHistoryResource = roomByCodeResource.addResource('history');
+    roomHistoryResource.addMethod('GET', new apigateway.LambdaIntegration(roundHistoryHandler));
 
     // ====================
     // API Gateway (WebSocket)
@@ -300,6 +342,11 @@ export class EstimateNestStack extends cdk.Stack {
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
       },
       errorResponses: [
+        {
+          httpStatus: 403,
+          responseHttpStatus: 200,
+          responsePagePath: '/index.html',
+        },
         {
           httpStatus: 404,
           responseHttpStatus: 200,

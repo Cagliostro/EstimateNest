@@ -1,142 +1,118 @@
-# Agent Guidelines for EstimateNest
+# EstimateNest Agent Guidelines
 
-This document provides guidelines for AI agents working in the EstimateNest codebase. It includes build commands, code style conventions, and workspace patterns.
+Monorepo: npm workspaces with frontend (React/Vite), backend (Lambda/DynamoDB), infrastructure (CDK), and shared packages.
 
-## Project Overview
-
-EstimateNest is a planning poker room application built as a TypeScript monorepo using npm workspaces with frontend (React/Vite), backend (AWS Lambda/DynamoDB), infrastructure (AWS CDK), and shared packages.
-
-## Environment Requirements
+## Environment
 
 - Node.js >=24.0.0, npm >=10.0.0
-- AWS CDK installed globally (`npm install -g aws-cdk`) for infrastructure commands
+- AWS CDK: `npm install -g aws-cdk`
+- AWS CLI configured for deployment
 
-## Build Commands
-
-### Root Workspace
+## Root Commands
 
 ```bash
-npm run build          # Build all workspaces
-npm run dev            # Start frontend and backend dev servers concurrently
-npm run lint           # Lint all workspaces
-npm run test           # Run tests in all workspaces
-npm run format         # Format code with Prettier
+npm run build    # shared → backend → frontend → infrastructure (order matters)
+npm run dev      # frontend (5173) + backend local server concurrently
+npm run lint     # all workspaces
+npm run test     # Vitest in frontend/backend
+npm run format   # Prettier
 ```
 
-### Workspace-Specific Commands
+Workspace-specific: `npm run lint --workspace=frontend`
 
-| Workspace          | Commands                                                              |
-| ------------------ | --------------------------------------------------------------------- |
-| `frontend/`        | `dev`, `build`, `preview`, `lint`, `test`, `test:ui`, `test:coverage` |
-| `backend/`         | `dev`, `build`, `test`, `test:coverage`, `lint`                       |
-| `infrastructure/`  | `synth`, `diff`, `deploy`, `destroy`, `lint`, `build`                 |
-| `packages/shared/` | `build`, `lint`                                                       |
+## Build Order
 
-## Linting & Formatting
+`packages/shared` → `backend` → `frontend` → `infrastructure`
 
-- **ESLint**: TypeScript plugins per workspace
-- **Prettier**: Single quotes, 2 spaces, 100 print width, trailing commas ES5
-- **EditorConfig**: Indent 2 spaces, single quotes for JS/TS
-
-Run linting: `npm run lint` (all) or `npm run lint --workspace=frontend`
-Run formatting: `npm run format`
+Never build infrastructure before shared/backend, and never build frontend before shared.
 
 ## Testing
 
-- **Test Runner**: Vitest across frontend and backend
-- **Coverage**: `npm run test:coverage` in each workspace
-- **UI Mode**: Frontend supports `npm run test:ui`
-
-### Running a Single Test
-
 ```bash
-# In workspace directory
-npm run test -- path/to/test/file.test.ts
-# Using vitest directly
-npx vitest run src/components/Button.test.tsx
-# Pattern matching
-npm run test -- -t "button click"
+# Run all tests
+npm run test --workspace=frontend
+npm run test --workspace=backend
+
+# Single test file
+npx vitest run src/path/to/test.test.ts
+
+# Pattern match
+npm run test -- -t "test name"
+
+# Coverage
+npm run test:coverage --workspace=frontend
 ```
 
-## Code Style Guidelines
+## Code Style
 
-### Formatting Rules
+**Prettier**: 2 spaces, single quotes, semicolons, trailing commas (es5), 100 print width
 
-- Indentation: 2 spaces
-- Quotes: Single quotes for JS/TS
-- Semicolons: Required
-- Trailing commas: ES5 style
-- Print width: 100 characters
-- JSX quotes: Single quotes
+**TypeScript**:
 
-### TypeScript Configuration
+- Strict mode, no unused locals/params
+- Backend: `moduleResolution: node`, target ES2022
+- Frontend: `moduleResolution: bundler`, target ES2020
+- Frontend path alias: `@/*` → `src/*`
 
-- Strict mode enabled
-- No unused locals/parameters (errors)
-- Module resolution: `node` (backend) / `bundler` (frontend)
-- Target: ES2022 (backend), ES2020 (frontend)
+**Imports**: External → `@estimatenest/shared` → Relative (`./`, `../`)
 
-### Import Ordering
+**Naming**:
 
-1. External dependencies (React, AWS SDK, etc.)
-2. Internal workspace imports (`@estimatenest/shared`)
-3. Relative imports (`./`, `../`)
-
-### Naming Conventions
-
-- Types/Interfaces: PascalCase (`Room`, `Participant`)
+- Types: PascalCase (`Room`, `Participant`)
 - Variables/Functions: camelCase (`roomId`, `generateShortCode`)
 - Constants: UPPER_SNAKE_CASE (`ROOMS_TABLE`, `DEFAULT_DECKS`)
-- Component Files: PascalCase (`RoomPage.tsx`)
-- Handler Files: kebab-case (`create-room.ts`)
+- Lambda handlers: kebab-case (`create-room.ts`)
 
-### Error Handling
+## Monorepo Patterns
 
-- Use `try/catch` for async operations
-- Log errors with `console.error` and context
-- Return user-friendly error responses in API handlers
-- Avoid exposing internal error details in production
-
-### React Components
-
-- Functional components with TypeScript
-- Explicit props interfaces
-- Tailwind CSS for styling
-- Follow React hooks conventions
-
-### AWS Lambda Handlers
-
-- `async/await` pattern
-- Validate env vars with `process.env.VAR_NAME!`
-- Use shared types for consistency
-- Implement proper CORS headers when needed
-
-## Monorepo Conventions
-
-- Shared code in `packages/shared`
-- Workspace references use `@estimatenest/` prefix
-- Build shared package first
-- Frontend path alias: `@/*` → `src/*`
-- Backend uses relative imports
+- Shared types/utilities: `packages/shared`
+- Workspace imports: `@estimatenest/shared`
+- Backend uses relative imports for shared
 - Each workspace extends `tsconfig.base.json`
 
-## Infrastructure as Code
+## Infrastructure (CDK)
 
-- AWS CDK (TypeScript) with environment-aware stacks
-- Use `cdk deploy --all` to deploy all stacks
-- Use `--context env=dev` for environment-specific deployments
+**Bootstrap**: `npm run bootstrap --workspace=infrastructure -- --context env=dev`
 
-## Quick Reference
+**Deploy**: `npm run deploy:dev` or `npm run deploy:prod`
 
-```bash
-npm run dev            # Start development
-npm run build          # Build all workspaces
-npm run deploy:dev     # Deploy to development
-npm run deploy:prod    # Deploy to production
+**Context**: `--context env=dev|prod` determines stack configuration
+
+**Outputs extracted**: `FrontendBucketName`, `CloudFrontDistributionId`, `RestApiUrl`, `WebSocketUrl`, `FrontendUrl`
+
+**Frontend build**: Requires actual URLs from CDK outputs as env vars:
+
+- `VITE_API_URL`
+- `VITE_WEBSOCKET_URL`
+- `VITE_FRONTEND_URL`
+
+## Deployment Flow
+
+- `main` → production
+- `development` → development
+- CDK outputs are used to build frontend with real URLs before uploading to S3
+
+## CI Build Env Vars (Ubuntu)
+
+Required for CI builds:
+
+```
+ROLLUP_NATIVE: 0
+NODE_OPTIONS: --max-old-space-size=4096
+SHARP_IGNORE_GLOBAL_LIBVIPS: 1
+SHARP_DIST_BASE_URL: https://github.com/lovell/sharp-libvips/releases/download
+SHARP_BINARY_HOST: https://github.com/lovell/sharp/releases/download
+SHARP_LIBVIPS_BINARY_HOST: https://github.com/lovell/sharp-libvips/releases/download
 ```
 
----
+## Verification Steps
 
-**Note**: No Cursor rules (`.cursor/rules/` or `.cursorrules`) or Copilot rules (`.github/copilot-instructions.md`) were found in the repository.
+**Before committing**: lint → build → test
 
-_Last updated: April 2025_
+```bash
+npm run lint && npm run build && npm run test
+```
+
+**After code changes**: Verify build order is respected when adding new packages.
+
+**After CDK changes**: Run `npm run synth --workspace=infrastructure` to validate before deploy.

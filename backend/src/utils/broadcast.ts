@@ -39,6 +39,7 @@ export async function broadcastToRoom(
       ExpressionAttributeValues: {
         ':roomId': roomId,
       },
+      ConsistentRead: true,
     })
   );
 
@@ -48,10 +49,19 @@ export async function broadcastToRoom(
     (p) => p.connectionId && p.connectionId !== 'REST' && p.connectionId !== excludeConnectionId
   );
   console.log(`Broadcast: ${activeParticipants.length} active connections to send to`);
+  console.log(
+    'Active participants:',
+    activeParticipants.map((p) => ({
+      participantId: p.participantId,
+      connectionId: p.connectionId,
+    }))
+  );
 
   // Send message to each active WebSocket connection
   const promises = activeParticipants.map(async (participant) => {
-    console.log(`Attempting to send to connection ${participant.connectionId}`);
+    console.log(
+      `Attempting to send to connection ${participant.connectionId}, message type: ${message.type}`
+    );
     try {
       await apiGatewayClient.send(
         new PostToConnectionCommand({
@@ -59,7 +69,7 @@ export async function broadcastToRoom(
           Data: JSON.stringify(message),
         })
       );
-      console.log(`Successfully sent to ${participant.connectionId}`);
+      console.log(`Successfully sent ${message.type} to ${participant.connectionId}`);
     } catch (error) {
       console.warn(`Failed to send message to connection ${participant.connectionId}:`, error);
 
