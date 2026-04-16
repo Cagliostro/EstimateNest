@@ -20,6 +20,7 @@ jobs:
     env:
       ROLLUP_NATIVE: 0
       NODE_OPTIONS: --max-old-space-size=4096
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       npm_config_optional: true
       SHARP_IGNORE_GLOBAL_LIBVIPS: 1
       SHARP_DIST_BASE_URL: https://github.com/lovell/sharp-libvips/releases/download
@@ -73,6 +74,7 @@ jobs:
     env:
       ROLLUP_NATIVE: 0
       NODE_OPTIONS: --max-old-space-size=4096
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       npm_config_optional: true
       SHARP_IGNORE_GLOBAL_LIBVIPS: 1
       SHARP_DIST_BASE_URL: https://github.com/lovell/sharp-libvips/releases/download
