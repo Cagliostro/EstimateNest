@@ -29,6 +29,7 @@ new EstimateNestStack(app, stackId, {
   tags: {
     Project: 'EstimateNest',
     Environment: envName,
+    DeploymentTimestamp: new Date().toISOString(),
   },
 });
 

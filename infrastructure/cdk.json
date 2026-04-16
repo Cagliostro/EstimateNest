@@ -1,23 +1,30 @@
 {
   "app": "npx tsx src/app.ts",
   "watch": {
-    "include": ["src/**"],
-    "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts", "node_modules", "cdk.out"]
+    "include": [
+      "src/**"
+    ],
+    "exclude": [
+      "src/**/*.test.ts",
+      "src/**/*.spec.ts",
+      "node_modules",
+      "cdk.out"
+    ]
   },
   "context": {
     "dev": {
       "envName": "dev",
-      "domainName": "dev.estimatenest.app",
-      "certificateArn": "",
-      "hostedZoneId": "",
-      "hostedZoneName": "estimatenest.app"
+      "domainName": "dev.estimatenest.net",
+      "certificateArn": "arn:aws:acm:us-east-1:851725560801:certificate/a314a5fe-5815-4c44-9119-231eb5528a58",
+      "hostedZoneId": "Z06262973VO5283O2L4DU",
+      "hostedZoneName": "estimatenest.net"
     },
     "prod": {
       "envName": "prod",
-      "domainName": "nest.estimatenest.app",
-      "certificateArn": "",
-      "hostedZoneId": "",
-      "hostedZoneName": "estimatenest.app"
+      "domainName": "estimatenest.net",
+      "certificateArn": "arn:aws:acm:us-east-1:851725560801:certificate/a314a5fe-5815-4c44-9119-231eb5528a58",
+      "hostedZoneId": "Z06262973VO5283O2L4DU",
+      "hostedZoneName": "estimatenest.net"
     }
   }
 }

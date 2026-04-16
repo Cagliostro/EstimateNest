@@ -57,3 +57,8 @@ node_modules.backup/
 
 # Test scripts
 backend/test-vote.cjs
+
+# Scripts generated files
+scripts/*.log
+scripts/domain-setup-outputs.json
+infrastructure/cdk.json.backup.*

@@ -300,10 +300,16 @@ export class EstimateNestStack extends cdk.Stack {
     // API Gateway (REST)
     // ====================
 
+    // Configure CORS: allow custom domain if configured, otherwise all origins
+    const corsAllowOrigins =
+      props.certificateArn && props.hostedZoneId
+        ? [`https://${props.domainName}`]
+        : apigateway.Cors.ALL_ORIGINS;
+
     const restApi = new apigateway.RestApi(this, 'RestApi', {
       restApiName: `estimatenest-rest-${props.envName}`,
       defaultCorsPreflightOptions: {
-        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        allowOrigins: corsAllowOrigins,
         allowMethods: apigateway.Cors.ALL_METHODS,
         allowHeaders: ['*'],
         allowCredentials: false,
@@ -333,6 +339,9 @@ export class EstimateNestStack extends cdk.Stack {
       autoDeleteObjects: true,
     });
 
+    // Security headers policy for CloudFront
+    const securityHeadersPolicy = cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS;
+
     // If domain is provided, set up custom domain
     let distributionProps: cloudfront.DistributionProps = {
       defaultRootObject: 'index.html',
@@ -340,6 +349,7 @@ export class EstimateNestStack extends cdk.Stack {
         origin: new cloudfrontOrigins.S3Origin(frontendBucket),
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        responseHeadersPolicy: securityHeadersPolicy,
       },
       errorResponses: [
         {
@@ -386,8 +396,14 @@ export class EstimateNestStack extends cdk.Stack {
     // Outputs
     // ====================
 
+    // Determine frontend URL: custom domain if configured, otherwise CloudFront domain
+    const frontendUrl =
+      certificate && hostedZone
+        ? `https://${props.domainName}`
+        : `https://${distribution.distributionDomainName}`;
+
     new cdk.CfnOutput(this, 'FrontendUrl', {
-      value: `https://${distribution.distributionDomainName}`,
+      value: frontendUrl,
     });
 
     new cdk.CfnOutput(this, 'FrontendBucketName', {
