@@ -82,7 +82,6 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
-      reservedConcurrentExecutions: 10,
 
       environment: {
         ROOMS_TABLE: roomsTable.tableName,
@@ -103,7 +102,6 @@ export class EstimateNestStack extends cdk.Stack {
         handler: 'handler',
         projectRoot: path.join(__dirname, '..', '..'),
         depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
-        reservedConcurrentExecutions: 20, // Higher for WebSocket connections
 
         environment: {
           PARTICIPANTS_TABLE: participantsTable.tableName,
@@ -123,7 +121,6 @@ export class EstimateNestStack extends cdk.Stack {
         handler: 'handler',
         projectRoot: path.join(__dirname, '..', '..'),
         depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
-        reservedConcurrentExecutions: 20, // Higher for WebSocket connections
 
         environment: {
           PARTICIPANTS_TABLE: participantsTable.tableName,
@@ -140,7 +137,6 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
-      reservedConcurrentExecutions: 20, // High for WebSocket vote operations
 
       environment: {
         VOTES_TABLE: votesTable.tableName,
@@ -296,7 +292,6 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
-      reservedConcurrentExecutions: 15, // Moderate for join room API
 
       environment: {
         ROOM_CODES_TABLE: roomCodesTable.tableName,
@@ -316,7 +311,6 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
-      reservedConcurrentExecutions: 10,
 
       environment: {
         ROOM_CODES_TABLE: roomCodesTable.tableName,
@@ -334,7 +328,6 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
-      reservedConcurrentExecutions: 10,
 
       environment: {
         ROOMS_TABLE: roomsTable.tableName,
