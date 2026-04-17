@@ -19,20 +19,7 @@ export function useRoomConnection() {
 
   console.log(`[EstimateNest] [${hookId}] useRoomConnection hook created`);
 
-  // Store states
-  const {
-    setRoom,
-    setParticipants,
-    removeParticipant,
-    setCurrentRound,
-    setVotes,
-    revealVotes: revealVotesInStore,
-    startCountdown,
-    stopCountdown,
-    clearRoom,
-  } = useRoomStore();
-  const { setParticipant, clearParticipant } = useParticipantStore();
-  const { setConnecting, setConnected, setDisconnected, setError } = useConnectionStore();
+  // Store states accessed via getState() to avoid dependency changes
 
   // Countdown interval ref
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -48,7 +35,7 @@ export function useRoomConnection() {
             participants: message.payload.participants,
             count: message.payload.participants.length,
           });
-          setParticipants(message.payload.participants);
+          useRoomStore.getState().setParticipants(message.payload.participants);
 
           // Update participant store if current participant is in the list
           const { participantId: currentParticipantId } = useParticipantStore.getState();
@@ -62,7 +49,9 @@ export function useRoomConnection() {
                 `[EstimateNest] [${hookId}] Updating participant store with new name:`,
                 name
               );
-              setParticipant(currentParticipantId, name, avatarSeed, isModerator);
+              useParticipantStore
+                .getState()
+                .setParticipant(currentParticipantId, name, avatarSeed, isModerator);
             }
           }
           break;
@@ -74,17 +63,17 @@ export function useRoomConnection() {
             votesCount: message.payload.votes.length,
             isRevealed: message.payload.round.isRevealed,
           });
-          setCurrentRound(message.payload.round);
-          setVotes(message.payload.votes);
+          useRoomStore.getState().setCurrentRound(message.payload.round);
+          useRoomStore.getState().setVotes(message.payload.votes);
           if (message.payload.round.isRevealed) {
-            console.log(`[EstimateNest] [${hookId}] Calling revealVotesInStore`);
-            revealVotesInStore();
-            stopCountdown();
+            console.log(`[EstimateNest] [${hookId}] Calling revealVotes`);
+            useRoomStore.getState().revealVotes();
+            useRoomStore.getState().stopCountdown();
           }
           break;
 
         case 'leave':
-          removeParticipant(message.payload.participantId);
+          useRoomStore.getState().removeParticipant(message.payload.participantId);
           break;
 
         case 'participantUpdated':
@@ -94,12 +83,12 @@ export function useRoomConnection() {
 
         case 'autoRevealCountdown':
           console.log(`[EstimateNest] [${hookId}] autoRevealCountdown received:`, message.payload);
-          startCountdown(message.payload.countdownSeconds);
+          useRoomStore.getState().startCountdown(message.payload.countdownSeconds);
           break;
 
         case 'error':
           console.error(`[EstimateNest] [${hookId}] WebSocket error:`, message.payload);
-          setError(message.payload.message);
+          useConnectionStore.getState().setError(message.payload.message);
           break;
 
         default: {
@@ -114,53 +103,39 @@ export function useRoomConnection() {
         }
       }
     },
-    [
-      setParticipants,
-      setCurrentRound,
-      setVotes,
-      removeParticipant,
-      revealVotesInStore,
-      setParticipant,
-      setError,
-      startCountdown,
-      stopCountdown,
-      hookId,
-    ]
+    [hookId]
   );
 
   /**
    * Start polling for room state updates
    */
-  const startPolling = useCallback(
-    (roomCode: string, participantId: string) => {
-      // Clear any existing interval
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
-      }
+  const startPolling = useCallback((roomCode: string, participantId: string) => {
+    // Clear any existing interval
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
 
-      // Poll every 5 seconds
-      pollingIntervalRef.current = setInterval(async () => {
-        try {
-          const response = await apiClient.joinRoom(roomCode, undefined, participantId);
-          // Update store with latest state
-          if (response.participants) {
-            setParticipants(response.participants);
-          }
-          if (response.round) {
-            setCurrentRound(response.round);
-          }
-          if (response.votes) {
-            setVotes(response.votes);
-          }
-        } catch (error) {
-          console.warn('Polling failed:', error);
-          // Don't stop polling on transient errors
+    // Poll every 5 seconds
+    pollingIntervalRef.current = setInterval(async () => {
+      try {
+        const response = await apiClient.joinRoom(roomCode, undefined, participantId);
+        // Update store with latest state
+        if (response.participants) {
+          useRoomStore.getState().setParticipants(response.participants);
         }
-      }, 5000);
-    },
-    [setParticipants, setCurrentRound, setVotes]
-  );
+        if (response.round) {
+          useRoomStore.getState().setCurrentRound(response.round);
+        }
+        if (response.votes) {
+          useRoomStore.getState().setVotes(response.votes);
+        }
+      } catch (error) {
+        console.warn('Polling failed:', error);
+        // Don't stop polling on transient errors
+      }
+    }, 5000);
+  }, []);
 
   /**
    * Stop polling
@@ -175,22 +150,21 @@ export function useRoomConnection() {
   /**
    * Create a new room
    */
-  const createRoom = useCallback(
-    async (options?: { deck?: string }) => {
-      try {
-        const response = await apiClient.createRoom({
-          deck: options?.deck || 'fibonacci',
-        });
+  const createRoom = useCallback(async (options?: { deck?: string }) => {
+    try {
+      const response = await apiClient.createRoom({
+        deck: options?.deck || 'fibonacci',
+      });
 
-        // Room created, but participant still needs to join via joinRoom
-        return response;
-      } catch (error) {
-        setError(error instanceof Error ? error.message : 'Failed to create room');
-        throw error;
-      }
-    },
-    [setError]
-  );
+      // Room created, but participant still needs to join via joinRoom
+      return response;
+    } catch (error) {
+      useConnectionStore
+        .getState()
+        .setError(error instanceof Error ? error.message : 'Failed to create room');
+      throw error;
+    }
+  }, []);
 
   /**
    * Join an existing room
@@ -199,7 +173,7 @@ export function useRoomConnection() {
     async (roomCode: string, name: string) => {
       try {
         console.log(`[EstimateNest] [${hookId}] Joining room:`, roomCode, 'as', name);
-        setConnecting();
+        useConnectionStore.getState().setConnecting();
 
         // 1. Join via REST API
         const joinResponse = await apiClient.joinRoom(roomCode, name);
@@ -218,25 +192,27 @@ export function useRoomConnection() {
           );
           isModerator = participant?.isModerator || false;
         }
-        setParticipant(
-          joinResponse.participantId,
-          joinResponse.name,
-          joinResponse.avatarSeed,
-          isModerator
-        );
+        useParticipantStore
+          .getState()
+          .setParticipant(
+            joinResponse.participantId,
+            joinResponse.name,
+            joinResponse.avatarSeed,
+            isModerator
+          );
 
         // 3. Set room info
-        setRoom(joinResponse.roomId, roomCode.toUpperCase());
+        useRoomStore.getState().setRoom(joinResponse.roomId, roomCode.toUpperCase());
 
         // 4. Update room state with initial data from join response
         if (joinResponse.participants) {
-          setParticipants(joinResponse.participants);
+          useRoomStore.getState().setParticipants(joinResponse.participants);
         }
         if (joinResponse.round) {
-          setCurrentRound(joinResponse.round);
+          useRoomStore.getState().setCurrentRound(joinResponse.round);
         }
         if (joinResponse.votes) {
-          setVotes(joinResponse.votes);
+          useRoomStore.getState().setVotes(joinResponse.votes);
         }
 
         // 5. Connect WebSocket via service
@@ -248,24 +224,14 @@ export function useRoomConnection() {
         return joinResponse;
       } catch (error) {
         console.error(`[EstimateNest] [${hookId}] Failed to join room:`, error);
-        setError(error instanceof Error ? error.message : 'Failed to join room');
-        setDisconnected();
+        useConnectionStore
+          .getState()
+          .setError(error instanceof Error ? error.message : 'Failed to join room');
+        useConnectionStore.getState().setDisconnected();
         throw error;
       }
     },
-    [
-      setConnecting,
-      setDisconnected,
-      setError,
-      setParticipant,
-      setRoom,
-      setParticipants,
-      setCurrentRound,
-      setVotes,
-      startPolling,
-      hookId,
-      service,
-    ]
+    [startPolling, hookId, service]
   );
 
   /**
@@ -275,10 +241,10 @@ export function useRoomConnection() {
     console.log(`[EstimateNest] [${hookId}] disconnect called`);
     service.disconnect();
     stopPolling();
-    clearRoom();
-    clearParticipant();
-    setDisconnected();
-  }, [clearRoom, clearParticipant, setDisconnected, stopPolling, hookId, service]);
+    useRoomStore.getState().clearRoom();
+    useParticipantStore.getState().clearParticipant();
+    useConnectionStore.getState().setDisconnected();
+  }, [stopPolling, hookId, service]);
 
   // Track if a vote is currently being sent to prevent duplicates
   const isSendingVoteRef = useRef(false);
@@ -415,11 +381,11 @@ export function useRoomConnection() {
     const handleStateChange = (state: string) => {
       console.log(`[EstimateNest] [${hookId}] State change callback:`, state);
       if (state === 'connected') {
-        setConnected();
+        useConnectionStore.getState().setConnected();
       } else if (state === 'disconnected' || state === 'error') {
-        setDisconnected();
+        useConnectionStore.getState().setDisconnected();
       } else if (state === 'connecting') {
-        setConnecting();
+        useConnectionStore.getState().setConnecting();
       }
     };
 
@@ -436,7 +402,7 @@ export function useRoomConnection() {
       service.removeStateChangeCallback(handleStateChange);
       stateCallbackRegisteredRef.current = false;
     };
-  }, [setConnecting, setConnected, setDisconnected, hookId, service]);
+  }, [hookId, service]);
 
   // Countdown function ref to access latest revealVotes
   const triggerReveal = useCallback(() => {
@@ -529,7 +495,7 @@ export function useRoomConnection() {
           countdownIntervalRef.current = null;
         }
         prevCountdownRef.current = null;
-        stopCountdown();
+        useRoomStore.getState().stopCountdown();
         triggerReveal();
       } else {
         // Decrement countdown
@@ -547,7 +513,7 @@ export function useRoomConnection() {
         // DO NOT reset prevCountdownRef here - it's used to detect decrementing between effect runs
       }
     };
-  }, [countdownSeconds, stopCountdown, triggerReveal]);
+  }, [countdownSeconds, triggerReveal]);
 
   return {
     createRoom,
