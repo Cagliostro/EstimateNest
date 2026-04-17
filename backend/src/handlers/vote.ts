@@ -470,7 +470,7 @@ async function handleReveal(
   round.isRevealed = true;
   round.revealedAt = revealedAt;
 
-  // Fetch all votes for this round
+  // Fetch all votes for this round (consistent read to ensure we see all votes)
   const votesResult = await docClient.send(
     new QueryCommand({
       TableName: VOTES_TABLE,
@@ -478,6 +478,7 @@ async function handleReveal(
       ExpressionAttributeValues: {
         ':roundId': roundId,
       },
+      ConsistentRead: true,
     })
   );
 
@@ -757,7 +758,7 @@ async function handleNewRound(
     );
   }
 
-  // Fetch any existing votes for this round
+  // Fetch any existing votes for this round (consistent read)
   const votesResult = await docClient.send(
     new QueryCommand({
       TableName: VOTES_TABLE,
@@ -765,6 +766,7 @@ async function handleNewRound(
       ExpressionAttributeValues: {
         ':roundId': roundId,
       },
+      ConsistentRead: true,
     })
   );
   const votes = (votesResult.Items as Vote[]) || [];
