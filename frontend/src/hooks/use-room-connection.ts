@@ -280,16 +280,36 @@ export function useRoomConnection() {
     setDisconnected();
   }, [clearRoom, clearParticipant, setDisconnected, stopPolling, hookId, service]);
 
+  // Track if a vote is currently being sent to prevent duplicates
+  const isSendingVoteRef = useRef(false);
+
   /**
    * Send a vote
    */
   const sendVote = useCallback(
     (value: number | string) => {
+      if (isSendingVoteRef.current) {
+        console.log(`[EstimateNest] [${hookId}] Vote already being sent, skipping duplicate`);
+        return;
+      }
+
       console.log(`[EstimateNest] [${hookId}] sendVote called, value:`, value);
       if (!service.isConnected()) {
         throw new Error('Not connected');
       }
-      service.sendVote(value);
+
+      isSendingVoteRef.current = true;
+      try {
+        service.sendVote(value);
+      } catch (error) {
+        isSendingVoteRef.current = false;
+        throw error;
+      }
+
+      // Reset after a short delay to allow response but prevent rapid duplicates
+      setTimeout(() => {
+        isSendingVoteRef.current = false;
+      }, 1000);
     },
     [hookId, service]
   );
@@ -354,14 +374,24 @@ export function useRoomConnection() {
     [hookId, service]
   );
 
+  // Track if handlers are already registered to prevent duplicates during re-renders
+  const handlersRegisteredRef = useRef(false);
+
   // Register message handler on mount and unregister on unmount
   useEffect(() => {
+    if (handlersRegisteredRef.current) {
+      console.log(`[EstimateNest] [${hookId}] Handlers already registered, skipping`);
+      return;
+    }
+
     console.log(`[EstimateNest] [${hookId}] Registering message handler`);
     service.addMessageHandler(handleWebSocketMessage);
+    handlersRegisteredRef.current = true;
 
     return () => {
       console.log(`[EstimateNest] [${hookId}] Unregistering message handler`);
       service.removeMessageHandler(handleWebSocketMessage);
+      handlersRegisteredRef.current = false;
       // Clear countdown interval on unmount
       if (countdownIntervalRef.current) {
         clearInterval(countdownIntervalRef.current);
@@ -372,8 +402,16 @@ export function useRoomConnection() {
     };
   }, [handleWebSocketMessage, hookId, service, stopPolling]);
 
+  // Track if state change callback is already registered
+  const stateCallbackRegisteredRef = useRef(false);
+
   // Sync connection state with store
   useEffect(() => {
+    if (stateCallbackRegisteredRef.current) {
+      console.log(`[EstimateNest] [${hookId}] State change callback already registered, skipping`);
+      return;
+    }
+
     const handleStateChange = (state: string) => {
       console.log(`[EstimateNest] [${hookId}] State change callback:`, state);
       if (state === 'connected') {
@@ -387,6 +425,7 @@ export function useRoomConnection() {
 
     console.log(`[EstimateNest] [${hookId}] Registering state change callback`);
     service.addStateChangeCallback(handleStateChange);
+    stateCallbackRegisteredRef.current = true;
 
     // Initialize current state
     const currentState = service.getState();
@@ -395,6 +434,7 @@ export function useRoomConnection() {
     return () => {
       console.log(`[EstimateNest] [${hookId}] Removing state change callback`);
       service.removeStateChangeCallback(handleStateChange);
+      stateCallbackRegisteredRef.current = false;
     };
   }, [setConnecting, setConnected, setDisconnected, hookId, service]);
 
