@@ -247,7 +247,7 @@ async function handleVote(
   const expectedVoteCount = activeParticipants.length;
   console.log(`Expected vote count: ${expectedVoteCount} (active participants)`);
 
-  for (let attempt = 0; attempt < 6; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     const votesResult = await docClient.send(
       new QueryCommand({
         TableName: VOTES_TABLE,
@@ -283,10 +283,27 @@ async function handleVote(
       break;
     }
 
-    // Wait before retrying (exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms, 3200ms)
+    // Wait before retrying (exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms - 5 attempts total)
     const delayMs = 100 * Math.pow(2, attempt);
     console.log(`Waiting ${delayMs}ms before retry (attempt ${attempt + 1}/6)...`);
     await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+
+  // Check if we're still missing votes after all retries
+  const foundParticipantIds = votes.map((v) => v.participantId);
+  const missingParticipantIdsAfterRetry = activeParticipants
+    .filter((p) => !foundParticipantIds.includes(p.id))
+    .map((p) => p.id);
+
+  if (missingParticipantIdsAfterRetry.length > 0) {
+    console.warn(
+      `🚨 CRITICAL: After ${5} retries, still missing votes for participants: ${missingParticipantIdsAfterRetry.join(', ')}`
+    );
+    console.warn(
+      `Broadcasting with only ${votes.length} of ${expectedVoteCount} expected votes. Round: ${roundId}`
+    );
+  } else if (votes.length === expectedVoteCount) {
+    console.log(`✅ Successfully retrieved all ${expectedVoteCount} votes for round ${roundId}`);
   }
 
   console.log(
