@@ -439,13 +439,30 @@ export function useRoomConnection() {
       prevCountdownRef.current > 0 &&
       countdownSeconds < prevCountdownRef.current;
 
-    // If we're already in a countdown and the value is just decrementing (N → N-1), don't restart
-    if (isDecrementing) {
+    // If countdown value hasn't changed and interval is running, do nothing
+    if (countdownSeconds === prevCountdownRef.current && countdownIntervalRef.current) {
       console.log(
-        `[EstimateNest] Countdown decrementing from ${prevCountdownRef.current} to ${countdownSeconds}, not restarting`
+        `[EstimateNest] Countdown unchanged at ${countdownSeconds}, interval running, not restarting`
+      );
+      return;
+    }
+
+    // If we're already in a countdown and the value is just decrementing (N → N-1), don't restart
+    // UNLESS the interval was cleared (e.g., due to hook remount)
+    if (isDecrementing && countdownIntervalRef.current) {
+      console.log(
+        `[EstimateNest] Countdown decrementing from ${prevCountdownRef.current} to ${countdownSeconds}, interval exists, not restarting`
       );
       prevCountdownRef.current = countdownSeconds;
       return;
+    }
+
+    // If we're decrementing but interval was cleared, we need to restart it
+    if (isDecrementing && !countdownIntervalRef.current) {
+      console.log(
+        `[EstimateNest] Countdown decrementing from ${prevCountdownRef.current} to ${countdownSeconds}, but interval was cleared, restarting`
+      );
+      // Continue to interval restart logic below
     }
 
     // Otherwise, we need to start a new countdown (either initial start or a reset)
