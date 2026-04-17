@@ -131,6 +131,7 @@ async function handleVote(
           ':false': false,
         },
         Limit: 1,
+        ConsistentRead: true,
       })
     );
 
@@ -223,21 +224,9 @@ async function handleVote(
       ],
     })
   );
+  console.log('Vote transaction successful for participant:', participantId);
 
-  // Fetch all votes for this round to broadcast
-  const votesResult = await docClient.send(
-    new QueryCommand({
-      TableName: VOTES_TABLE,
-      KeyConditionExpression: 'roundId = :roundId',
-      ExpressionAttributeValues: {
-        ':roundId': roundId,
-      },
-    })
-  );
-
-  const votes = (votesResult.Items as Vote[]) || [];
-
-  // Check if everyone has voted and auto-reveal is enabled
+  // Fetch participants first to know how many active participants exist
   const participantsResult = await docClient.send(
     new QueryCommand({
       TableName: PARTICIPANTS_TABLE,
@@ -245,12 +234,47 @@ async function handleVote(
       ExpressionAttributeValues: {
         ':roomId': roomId,
       },
+      ConsistentRead: true,
     })
   );
   const participants = (participantsResult.Items as Participant[]) || [];
   const activeParticipants = participants.filter(
     (p) => p.connectionId && p.connectionId !== 'REST'
   );
+
+  // Fetch all votes for this round to broadcast, with retry for consistency
+  let votes: Vote[] = [];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const votesResult = await docClient.send(
+      new QueryCommand({
+        TableName: VOTES_TABLE,
+        KeyConditionExpression: 'roundId = :roundId',
+        ExpressionAttributeValues: {
+          ':roundId': roundId,
+        },
+        ConsistentRead: true,
+      })
+    );
+    votes = (votesResult.Items as Vote[]) || [];
+    console.log(`Votes query attempt ${attempt + 1}:`, votes.length, 'votes');
+
+    // If we have at least as many votes as active participants, break
+    if (votes.length >= activeParticipants.length) {
+      break;
+    }
+
+    // Wait before retrying (exponential backoff)
+    if (attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    }
+  }
+
+  console.log(
+    'Votes for round:',
+    roundId,
+    votes.map((v) => ({ participantId: v.participantId, value: v.value, voteId: v.id }))
+  );
+
   console.log(
     'Auto-reveal check participants:',
     participants.map((p) => ({
@@ -610,35 +634,111 @@ async function handleNewRound(
   }
 
   const { roomId } = participant;
-  const roundId = uuidv4();
-  const now = new Date().toISOString();
-  const round: Round = {
-    id: roundId,
-    roomId,
-    title,
-    description,
-    startedAt: now,
-    isRevealed: false,
-  };
 
-  // Create new round
-  await docClient.send(
-    new PutCommand({
+  // Check for existing active round
+  const activeRoundsResult = await docClient.send(
+    new QueryCommand({
       TableName: ROUNDS_TABLE,
-      Item: {
-        ...round,
-        roundId,
+      KeyConditionExpression: 'roomId = :roomId',
+      FilterExpression: 'isRevealed = :false',
+      ExpressionAttributeValues: {
+        ':roomId': roomId,
+        ':false': false,
       },
+      Limit: 1,
+      ConsistentRead: true,
     })
   );
 
-  // Broadcast round update with empty votes
+  let round: Round;
+  let roundId: string;
+
+  if (activeRoundsResult.Items && activeRoundsResult.Items.length > 0) {
+    // Update existing active round
+    const item = activeRoundsResult.Items[0];
+    roundId = item.roundId || item.id;
+    console.log('Updating existing active round:', roundId);
+
+    const updateExpressions = [];
+    const expressionAttributeNames: Record<string, string> = {};
+    const expressionAttributeValues: Record<string, string> = {};
+
+    if (title !== undefined) {
+      updateExpressions.push('#title = :title');
+      expressionAttributeNames['#title'] = 'title';
+      expressionAttributeValues[':title'] = title;
+    }
+    if (description !== undefined) {
+      updateExpressions.push('#description = :description');
+      expressionAttributeNames['#description'] = 'description';
+      expressionAttributeValues[':description'] = description;
+    }
+
+    if (updateExpressions.length > 0) {
+      await docClient.send(
+        new UpdateCommand({
+          TableName: ROUNDS_TABLE,
+          Key: { roomId, roundId },
+          UpdateExpression: 'SET ' + updateExpressions.join(', '),
+          ExpressionAttributeNames: expressionAttributeNames,
+          ExpressionAttributeValues: expressionAttributeValues,
+        })
+      );
+    }
+
+    // Map DynamoDB attributes to Round interface
+    round = {
+      id: roundId,
+      roomId: item.roomId,
+      title: title !== undefined ? title : item.title,
+      description: description !== undefined ? description : item.description,
+      startedAt: item.startedAt,
+      revealedAt: item.revealedAt,
+      isRevealed: item.isRevealed,
+    };
+  } else {
+    // Create new round
+    roundId = uuidv4();
+    const now = new Date().toISOString();
+    round = {
+      id: roundId,
+      roomId,
+      title,
+      description,
+      startedAt: now,
+      isRevealed: false,
+    };
+
+    await docClient.send(
+      new PutCommand({
+        TableName: ROUNDS_TABLE,
+        Item: {
+          ...round,
+          roundId,
+        },
+      })
+    );
+  }
+
+  // Fetch any existing votes for this round
+  const votesResult = await docClient.send(
+    new QueryCommand({
+      TableName: VOTES_TABLE,
+      KeyConditionExpression: 'roundId = :roundId',
+      ExpressionAttributeValues: {
+        ':roundId': roundId,
+      },
+    })
+  );
+  const votes = (votesResult.Items as Vote[]) || [];
+
+  // Broadcast round update
   await broadcastToRoom(event, roomId, {
     type: 'roundUpdate',
-    payload: { round, votes: [] },
+    payload: { round, votes },
   });
 
-  return { message: 'New round created' };
+  return { message: 'New round created or updated' };
 }
 
 async function handleUpdateRound(
