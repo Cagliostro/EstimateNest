@@ -22,6 +22,19 @@ import {
 } from '@estimatenest/shared';
 import { broadcastToRoom, sendToConnection } from '../utils/broadcast';
 
+// Helper to create properly typed WebSocket responses
+function createResponse(type: string, payload: Record<string, unknown>): string {
+  return JSON.stringify({ type, payload });
+}
+
+function createErrorResponse(message: string, code?: string): string {
+  return createResponse('error', { message, code });
+}
+
+function createSuccessResponse(message: string): string {
+  return createResponse('ack', { message });
+}
+
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
 
@@ -960,13 +973,13 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       default:
         return {
           statusCode: 400,
-          body: JSON.stringify({ error: `Unsupported message type: ${message.type}` }),
+          body: createErrorResponse(`Unsupported message type: ${message.type}`),
         };
     }
 
     return {
       statusCode: 200,
-      body: JSON.stringify(result),
+      body: createSuccessResponse(result.message || 'Success'),
     };
   } catch (error: unknown) {
     console.error('Handler error:', error);
@@ -976,7 +989,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (e.name === 'ConditionalCheckFailedException') {
       return {
         statusCode: 400,
-        body: JSON.stringify({ error: 'Already voted in this round' }),
+        body: createErrorResponse('Already voted in this round', 'DUPLICATE_VOTE'),
       };
     }
 
@@ -984,31 +997,31 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (e.message === 'Participant not found') {
       return {
         statusCode: 404,
-        body: JSON.stringify({ error: 'Participant not found' }),
+        body: createErrorResponse('Participant not found', 'PARTICIPANT_NOT_FOUND'),
       };
     }
     if (e.message === 'Round not found') {
       return {
         statusCode: 404,
-        body: JSON.stringify({ error: 'Round not found' }),
+        body: createErrorResponse('Round not found', 'ROUND_NOT_FOUND'),
       };
     }
     if (e.message === 'Round is already revealed') {
       return {
         statusCode: 400,
-        body: JSON.stringify({ error: 'Round is already revealed' }),
+        body: createErrorResponse('Round is already revealed', 'ROUND_ALREADY_REVEALED'),
       };
     }
     if (e.message === 'Missing vote value') {
       return {
         statusCode: 400,
-        body: JSON.stringify({ error: 'Missing vote value' }),
+        body: createErrorResponse('Missing vote value', 'MISSING_VOTE_VALUE'),
       };
     }
 
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: 'Internal server error' }),
+      body: createErrorResponse('Internal server error', 'INTERNAL_ERROR'),
     };
   }
 };
