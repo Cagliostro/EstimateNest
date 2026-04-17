@@ -118,7 +118,8 @@ describe('vote handler', () => {
 
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body);
-    expect(body.message).toBe('Vote recorded');
+    expect(body.type).toBe('ack');
+    expect(body.payload.message).toBe('Vote recorded');
   });
 
   it('should reject duplicate vote with idempotency key', async () => {
@@ -155,6 +156,8 @@ describe('vote handler', () => {
 
     expect(response.statusCode).toBe(400);
     const body = JSON.parse(response.body);
-    expect(body.error).toBe('Already voted in this round');
+    expect(body.type).toBe('error');
+    expect(body.payload.message).toBe('Already voted in this round');
+    expect(body.payload.code).toBe('DUPLICATE_VOTE');
   });
 });

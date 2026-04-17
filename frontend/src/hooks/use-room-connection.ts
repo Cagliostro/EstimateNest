@@ -102,12 +102,14 @@ export function useRoomConnection() {
           setError(message.payload.message);
           break;
 
-        default:
+        default: {
           // Silently ignore 'ack' and undefined message types
-          const msgType = message.type as any;
+          const msgType = message.type as string;
           if (msgType !== 'ack' && msgType !== undefined) {
             console.log(`[EstimateNest] [${hookId}] Unhandled message type:`, message.type);
           }
+          break;
+        }
       }
     },
     [
@@ -483,7 +485,7 @@ export function useRoomConnection() {
         console.log(`[EstimateNest] Cleanup: clearing countdown interval on unmount`);
         clearInterval(countdownIntervalRef.current);
         countdownIntervalRef.current = null;
-        prevCountdownRef.current = null;
+        // DO NOT reset prevCountdownRef here - it's used to detect decrementing between effect runs
       }
     };
   }, [countdownSeconds, stopCountdown, triggerReveal]);
