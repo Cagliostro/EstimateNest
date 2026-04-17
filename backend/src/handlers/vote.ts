@@ -260,7 +260,7 @@ async function handleVote(
   const expectedVoteCount = activeParticipants.length;
   console.log(`Expected vote count: ${expectedVoteCount} (active participants)`);
 
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 10; attempt++) {
     const votesResult = await docClient.send(
       new QueryCommand({
         TableName: VOTES_TABLE,
@@ -296,9 +296,9 @@ async function handleVote(
       break;
     }
 
-    // Wait before retrying (exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms - 5 attempts total)
-    const delayMs = 100 * Math.pow(2, attempt);
-    console.log(`Waiting ${delayMs}ms before retry (attempt ${attempt + 1}/6)...`);
+    // Wait before retrying (exponential backoff with longer base: 200ms, 400ms, 800ms, 1600ms, 3200ms...)
+    const delayMs = 200 * Math.pow(2, attempt);
+    console.log(`Waiting ${delayMs}ms before retry (attempt ${attempt + 1}/10)...`);
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
@@ -308,13 +308,43 @@ async function handleVote(
     .filter((p) => !foundParticipantIds.includes(p.id))
     .map((p) => p.id);
 
-  if (missingParticipantIdsAfterRetry.length > 0) {
+  // If still missing votes after 10 retries, try one more time with longer delay
+  if (missingParticipantIdsAfterRetry.length > 0 && votes.length < expectedVoteCount) {
     console.warn(
-      `🚨 CRITICAL: After ${5} retries, still missing votes for participants: ${missingParticipantIdsAfterRetry.join(', ')}`
+      `🚨 After ${10} retries, still missing votes for participants: ${missingParticipantIdsAfterRetry.join(', ')}`
     );
-    console.warn(
-      `Broadcasting with only ${votes.length} of ${expectedVoteCount} expected votes. Round: ${roundId}`
+    console.warn(`Waiting 5 seconds for final attempt...`);
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+
+    // Final attempt
+    const finalVotesResult = await docClient.send(
+      new QueryCommand({
+        TableName: VOTES_TABLE,
+        KeyConditionExpression: 'roundId = :roundId',
+        ExpressionAttributeValues: {
+          ':roundId': roundId,
+        },
+        ConsistentRead: true,
+      })
     );
+    votes = (finalVotesResult.Items as Vote[]) || [];
+    console.log(`Final votes query after 5s wait:`, votes.length, 'votes');
+
+    const finalFoundParticipantIds = votes.map((v) => v.participantId);
+    const finalMissingParticipantIds = activeParticipants
+      .filter((p) => !finalFoundParticipantIds.includes(p.id))
+      .map((p) => p.id);
+
+    if (finalMissingParticipantIds.length > 0) {
+      console.error(
+        `💥 CRITICAL: After 10 retries + 5s wait, STILL missing votes for participants: ${finalMissingParticipantIds.join(', ')}`
+      );
+      console.error(
+        `Broadcasting with only ${votes.length} of ${expectedVoteCount} expected votes. Database consistency issue! Round: ${roundId}`
+      );
+    } else {
+      console.log(`✅ Successfully retrieved all ${expectedVoteCount} votes after final wait`);
+    }
   } else if (votes.length === expectedVoteCount) {
     console.log(`✅ Successfully retrieved all ${expectedVoteCount} votes for round ${roundId}`);
   }
