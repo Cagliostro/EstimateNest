@@ -1,7 +1,8 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
-import { Room } from '@estimatenest/shared';
+import { Room, validateUpdateRoomRequest, validateRoomCodePath } from '@estimatenest/shared';
+import { ZodError } from 'zod';
 
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
@@ -14,21 +15,45 @@ const QueryCommand = DynamoDBDocumentClient.from(client).send.constructor.protot
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   try {
     const { code } = event.pathParameters || {};
-    if (!code) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ error: 'Missing room code' }),
-      };
+
+    // Validate room code format
+    const validatedCode = validateRoomCodePath({ code });
+    const roomCode = validatedCode.code.toUpperCase();
+
+    // Parse and validate request body
+    const rawBody = event.body ? JSON.parse(event.body) : {};
+    let validatedBody;
+    try {
+      validatedBody = validateUpdateRoomRequest(rawBody);
+    } catch (error) {
+      console.error('Request validation failed:', error);
+
+      if (error instanceof ZodError) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: 'Invalid request parameters',
+            details: error.errors.map((e) => `${e.path.join('.')}: ${e.message}`),
+          }),
+        };
+      }
+
+      // Re-throw unexpected errors to be caught by outer handler
+      throw error;
     }
 
-    const body = event.body ? JSON.parse(event.body) : {};
-    const { autoRevealEnabled, autoRevealCountdownSeconds } = body;
+    const {
+      autoRevealEnabled,
+      autoRevealCountdownSeconds,
+      allowAllParticipantsToReveal,
+      maxParticipants,
+    } = validatedBody;
 
     // Look up room by short code
     const codeResult = await docClient.send(
       new GetCommand({
         TableName: ROOM_CODES_TABLE,
-        Key: { shortCode: code.toUpperCase() },
+        Key: { shortCode: roomCode },
       })
     );
 
@@ -78,6 +103,18 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       updateExpressions.push('#autoRevealCountdownSeconds = :autoRevealCountdownSeconds');
       expressionAttributeNames['#autoRevealCountdownSeconds'] = 'autoRevealCountdownSeconds';
       expressionAttributeValues[':autoRevealCountdownSeconds'] = autoRevealCountdownSeconds;
+    }
+
+    if (allowAllParticipantsToReveal !== undefined) {
+      updateExpressions.push('#allowAllParticipantsToReveal = :allowAllParticipantsToReveal');
+      expressionAttributeNames['#allowAllParticipantsToReveal'] = 'allowAllParticipantsToReveal';
+      expressionAttributeValues[':allowAllParticipantsToReveal'] = allowAllParticipantsToReveal;
+    }
+
+    if (maxParticipants !== undefined) {
+      updateExpressions.push('#maxParticipants = :maxParticipants');
+      expressionAttributeNames['#maxParticipants'] = 'maxParticipants';
+      expressionAttributeValues[':maxParticipants'] = maxParticipants;
     }
 
     if (updateExpressions.length === 0) {
@@ -133,6 +170,18 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': origin || '*',
     };
+
+    if (error instanceof ZodError) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({
+          error: 'Invalid request parameters',
+          details: error.errors.map((e) => `${e.path.join('.')}: ${e.message}`),
+        }),
+      };
+    }
+
     return {
       statusCode: 500,
       headers,

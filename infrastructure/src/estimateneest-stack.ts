@@ -11,6 +11,7 @@ import * as lambdaNodejs from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -20,6 +21,7 @@ export interface EstimateNestStackProps extends cdk.StackProps {
   certificateArn: string;
   hostedZoneId: string;
   hostedZoneName: string;
+  apiCertificateArn?: string;
 }
 
 export class EstimateNestStack extends cdk.Stack {
@@ -80,6 +82,7 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+      reservedConcurrentExecutions: 10,
 
       environment: {
         ROOMS_TABLE: roomsTable.tableName,
@@ -100,6 +103,8 @@ export class EstimateNestStack extends cdk.Stack {
         handler: 'handler',
         projectRoot: path.join(__dirname, '..', '..'),
         depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+        reservedConcurrentExecutions: 20, // Higher for WebSocket connections
+
         environment: {
           PARTICIPANTS_TABLE: participantsTable.tableName,
         },
@@ -118,6 +123,8 @@ export class EstimateNestStack extends cdk.Stack {
         handler: 'handler',
         projectRoot: path.join(__dirname, '..', '..'),
         depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+        reservedConcurrentExecutions: 20, // Higher for WebSocket connections
+
         environment: {
           PARTICIPANTS_TABLE: participantsTable.tableName,
         },
@@ -133,6 +140,7 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+      reservedConcurrentExecutions: 20, // High for WebSocket vote operations
 
       environment: {
         VOTES_TABLE: votesTable.tableName,
@@ -217,17 +225,83 @@ export class EstimateNestStack extends cdk.Stack {
       autoDeploy: true,
     });
 
+    // ====================
+    // API Gateway Custom Domains
+    // ====================
+    let restApiDomain: apigateway.DomainName | undefined;
+    let webSocketApiDomain: apigatewayv2.DomainName | undefined;
+    let restApiCustomUrl: string | undefined;
+    let webSocketCustomUrl: string | undefined;
+
+    const restApiSubdomain = `api.${props.domainName}`;
+    const webSocketSubdomain = `ws.${props.domainName}`;
+
+    // If API certificate is provided, set up custom domains for REST and WebSocket APIs
+    const apiCertificateArn = props.apiCertificateArn || props.certificateArn;
+    if (apiCertificateArn && props.hostedZoneId) {
+      const apiCertificate = acm.Certificate.fromCertificateArn(
+        this,
+        'ApiCertificate',
+        apiCertificateArn
+      );
+      const hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'ApiHostedZone', {
+        hostedZoneId: props.hostedZoneId,
+        zoneName: props.hostedZoneName,
+      });
+
+      // REST API custom domain
+      restApiDomain = new apigateway.DomainName(this, 'RestApiDomain', {
+        domainName: restApiSubdomain,
+        certificate: apiCertificate,
+        endpointType: apigateway.EndpointType.REGIONAL,
+        securityPolicy: apigateway.SecurityPolicy.TLS_1_2,
+      });
+
+      // Map the domain to the REST API (deferred until REST API is created)
+
+      // WebSocket API custom domain
+      webSocketApiDomain = new apigatewayv2.DomainName(this, 'WebSocketApiDomain', {
+        domainName: webSocketSubdomain,
+        certificate: apiCertificate,
+      });
+
+      // Map the domain to the WebSocket API (deferred until WebSocket API is created)
+
+      // Create Route53 A records for custom domains
+      new route53.ARecord(this, 'RestApiAliasRecord', {
+        zone: hostedZone,
+        recordName: restApiSubdomain,
+        target: route53.RecordTarget.fromAlias(new route53Targets.ApiGatewayDomain(restApiDomain)),
+      });
+
+      new route53.ARecord(this, 'WebSocketApiAliasRecord', {
+        zone: hostedZone,
+        recordName: webSocketSubdomain,
+        target: route53.RecordTarget.fromAlias(
+          new route53Targets.ApiGatewayv2DomainProperties(
+            webSocketApiDomain.regionalDomainName,
+            webSocketApiDomain.regionalHostedZoneId
+          )
+        ),
+      });
+
+      // Custom URLs for outputs
+      restApiCustomUrl = `https://${restApiSubdomain}`;
+      webSocketCustomUrl = `wss://${webSocketSubdomain}`;
+    }
+
     const joinRoomHandler = new lambdaNodejs.NodejsFunction(this, 'JoinRoomHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
       entry: '../backend/dist/handlers/join-room.js',
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+      reservedConcurrentExecutions: 15, // Moderate for join room API
 
       environment: {
         ROOM_CODES_TABLE: roomCodesTable.tableName,
         PARTICIPANTS_TABLE: participantsTable.tableName,
-        WEBSOCKET_URL: webSocketStage.url,
+        WEBSOCKET_URL: webSocketCustomUrl || webSocketStage.url,
         ROUNDS_TABLE: roundsTable.tableName,
         VOTES_TABLE: votesTable.tableName,
       },
@@ -242,6 +316,7 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+      reservedConcurrentExecutions: 10,
 
       environment: {
         ROOM_CODES_TABLE: roomCodesTable.tableName,
@@ -259,6 +334,7 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+      reservedConcurrentExecutions: 10,
 
       environment: {
         ROOMS_TABLE: roomsTable.tableName,
@@ -270,22 +346,28 @@ export class EstimateNestStack extends cdk.Stack {
       },
     });
 
-    // Grant permissions
-    roomsTable.grantReadWriteData(createRoomHandler);
-    roomCodesTable.grantReadWriteData(createRoomHandler);
+    // Grant permissions - principle of least privilege
+    // create-room.ts: Only writes to rooms and room codes tables
+    roomsTable.grantWriteData(createRoomHandler);
+    roomCodesTable.grantWriteData(createRoomHandler);
+    // join-room.ts: Reads room codes, reads/writes participants, reads rounds and votes
     roomCodesTable.grantReadData(joinRoomHandler);
     participantsTable.grantReadWriteData(joinRoomHandler);
     roundsTable.grantReadData(joinRoomHandler);
     votesTable.grantReadData(joinRoomHandler);
+    // round-history.ts: Reads room codes, rounds, and votes
     roomCodesTable.grantReadData(roundHistoryHandler);
     roundsTable.grantReadData(roundHistoryHandler);
     votesTable.grantReadData(roundHistoryHandler);
+    // websocket-connect.ts and websocket-disconnect.ts: Read/write participants only
     participantsTable.grantReadWriteData(websocketConnectHandler);
     participantsTable.grantReadWriteData(websocketDisconnectHandler);
+    // vote.ts (WebSocket): Read/write votes, rounds, participants; read rooms
     votesTable.grantReadWriteData(voteHandler);
     roundsTable.grantReadWriteData(voteHandler);
     participantsTable.grantReadWriteData(voteHandler);
     roomsTable.grantReadData(voteHandler);
+    // update-room.ts: Read/write rooms, read room codes, read participants (for moderator check)
     roomsTable.grantReadWriteData(updateRoomHandler);
     roomCodesTable.grantReadData(updateRoomHandler);
     participantsTable.grantReadData(updateRoomHandler);
@@ -316,6 +398,20 @@ export class EstimateNestStack extends cdk.Stack {
       },
     });
 
+    // Map custom domains if they were created
+    if (restApiDomain) {
+      restApiDomain.addBasePathMapping(restApi, {
+        stage: restApi.deploymentStage,
+      });
+    }
+    if (webSocketApiDomain) {
+      new apigatewayv2.ApiMapping(this, 'WebSocketApiMapping', {
+        api: webSocketApi,
+        domainName: webSocketApiDomain,
+        stage: webSocketStage,
+      });
+    }
+
     const roomsResource = restApi.root.addResource('rooms');
     roomsResource.addMethod('POST', new apigateway.LambdaIntegration(createRoomHandler));
     const roomByCodeResource = roomsResource.addResource('{code}');
@@ -323,6 +419,24 @@ export class EstimateNestStack extends cdk.Stack {
     roomByCodeResource.addMethod('PUT', new apigateway.LambdaIntegration(updateRoomHandler));
     const roomHistoryResource = roomByCodeResource.addResource('history');
     roomHistoryResource.addMethod('GET', new apigateway.LambdaIntegration(roundHistoryHandler));
+
+    // ====================
+    // API Gateway Rate Limiting (Usage Plan)
+    // ====================
+    const usagePlan = new apigateway.UsagePlan(this, 'RestApiUsagePlan', {
+      name: `estimatenest-rest-${props.envName}-usage-plan`,
+      throttle: {
+        rateLimit: 1.67, // 100 requests per minute
+        burstLimit: 10,
+      },
+      quota: {
+        limit: 10000, // total requests per month (soft limit)
+        period: apigateway.Period.MONTH,
+      },
+    });
+    usagePlan.addApiStage({
+      stage: restApi.deploymentStage,
+    });
 
     // ====================
     // API Gateway (WebSocket)
@@ -469,6 +583,111 @@ export class EstimateNestStack extends cdk.Stack {
     }
 
     // ====================
+    // CloudWatch Alarms
+    // ====================
+
+    // Lambda error alarms (>1% error rate)
+    const lambdaFunctions = [
+      createRoomHandler,
+      joinRoomHandler,
+      updateRoomHandler,
+      roundHistoryHandler,
+      voteHandler,
+      websocketConnectHandler,
+      websocketDisconnectHandler,
+    ];
+
+    lambdaFunctions.forEach((func, index) => {
+      const errorsMetric = func.metricErrors({
+        statistic: 'Sum',
+        period: cdk.Duration.minutes(5),
+      });
+      const invocationsMetric = func.metricInvocations({
+        statistic: 'Sum',
+        period: cdk.Duration.minutes(5),
+      });
+
+      // Error rate alarm (threshold: >1% error rate)
+      const errorRateAlarm = new cloudwatch.Alarm(this, `LambdaErrorRateAlarm${index}`, {
+        alarmName: `${func.functionName}-ErrorRate`,
+        metric: new cloudwatch.MathExpression({
+          expression: 'errors / invocations * 100',
+          usingMetrics: {
+            errors: errorsMetric,
+            invocations: invocationsMetric,
+          },
+          period: cdk.Duration.minutes(5),
+        }),
+        threshold: 1, // 1% error rate
+        evaluationPeriods: 2,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+
+      // Add alarm description
+      errorRateAlarm.node.addMetadata('description', `Error rate >1% for ${func.functionName}`);
+    });
+
+    // DynamoDB throttling alarms
+    const tables = [roomsTable, roomCodesTable, participantsTable, roundsTable, votesTable];
+    tables.forEach((table, index) => {
+      const throttledRequests = table.metricThrottledRequests({
+        statistic: 'Sum',
+        period: cdk.Duration.minutes(5),
+      });
+
+      // Throttle alarm
+      new cloudwatch.Alarm(this, `DynamoDBThrottleAlarm${index}`, {
+        alarmName: `${table.tableName}-Throttles`,
+        metric: throttledRequests,
+        threshold: 1,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+    });
+
+    // WebSocket API error alarm (using CloudWatch metrics from API Gateway)
+    const webSocketApiMetricErrors = new cloudwatch.Metric({
+      namespace: 'AWS/ApiGateway',
+      metricName: '4XXError',
+      dimensionsMap: {
+        ApiId: webSocketApi.apiId,
+      },
+      statistic: 'Sum',
+      period: cdk.Duration.minutes(5),
+    });
+
+    new cloudwatch.Alarm(this, 'WebSocketApi4xxAlarm', {
+      alarmName: `WebSocketApi-${webSocketApi.apiId}-4XXErrors`,
+      metric: webSocketApiMetricErrors,
+      threshold: 10,
+      evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    // WebSocket disconnect alarm
+    const webSocketDisconnectMetric = new cloudwatch.Metric({
+      namespace: 'AWS/ApiGatewayV2',
+      metricName: 'DisconnectCount',
+      dimensionsMap: {
+        ApiId: webSocketApi.apiId,
+      },
+      statistic: 'Sum',
+      period: cdk.Duration.minutes(5),
+    });
+
+    new cloudwatch.Alarm(this, 'WebSocketDisconnectAlarm', {
+      alarmName: `WebSocketApi-${webSocketApi.apiId}-DisconnectCount`,
+      metric: webSocketDisconnectMetric,
+      threshold: 20, // Alert if more than 20 disconnections in 5 minutes
+      evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    // ====================
     // Outputs
     // ====================
 
@@ -491,11 +710,11 @@ export class EstimateNestStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, 'RestApiUrl', {
-      value: restApi.url,
+      value: restApiCustomUrl || restApi.url,
     });
 
     new cdk.CfnOutput(this, 'WebSocketUrl', {
-      value: webSocketStage.url,
+      value: webSocketCustomUrl || webSocketStage.url,
     });
   }
 }

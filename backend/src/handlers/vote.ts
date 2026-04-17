@@ -10,6 +10,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { v4 as uuidv4 } from 'uuid';
+import { createHash } from 'crypto';
 import {
   Vote,
   Round,
@@ -17,6 +18,7 @@ import {
   Participant,
   createAvatarSeed,
   Room,
+  safeParseWebSocketMessage,
 } from '@estimatenest/shared';
 import { broadcastToRoom, sendToConnection } from '../utils/broadcast';
 
@@ -27,6 +29,29 @@ const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 const ROUNDS_TABLE = process.env.ROUNDS_TABLE!;
 const VOTES_TABLE = process.env.VOTES_TABLE!;
 const ROOMS_TABLE = process.env.ROOMS_TABLE!;
+
+// Simple in-memory cache for room settings (10s TTL) - reduces DynamoDB reads
+const roomSettingsCache = new Map<string, { room: Record<string, unknown>; timestamp: number }>();
+const ROOM_CACHE_TTL_MS = 10 * 1000; // 10 seconds
+
+async function getRoomWithCache(roomId: string): Promise<Record<string, unknown> | undefined> {
+  const cached = roomSettingsCache.get(roomId);
+  const now = Date.now();
+  if (cached && now - cached.timestamp < ROOM_CACHE_TTL_MS) {
+    return cached.room;
+  }
+  const roomResult = await docClient.send(
+    new GetCommand({
+      TableName: ROOMS_TABLE,
+      Key: { id: roomId, sk: 'META' },
+    })
+  );
+  const room = roomResult.Item;
+  if (room) {
+    roomSettingsCache.set(roomId, { room, timestamp: now });
+  }
+  return room;
+}
 
 async function handleVote(
   event: APIGatewayProxyEvent,
@@ -155,6 +180,9 @@ async function handleVote(
   console.log('Creating vote with roundId:', roundId, 'participantId:', participantId);
   const voteId = uuidv4();
   const votedAt = new Date().toISOString();
+  const idempotencyKey = createHash('sha256')
+    .update(`${participantId}:${roundId}:${JSON.stringify(value)}`)
+    .digest('hex');
   const vote: Vote = {
     id: voteId,
     roundId,
@@ -172,6 +200,11 @@ async function handleVote(
             TableName: VOTES_TABLE,
             Item: {
               ...vote,
+              idempotencyKey,
+            },
+            ConditionExpression: 'attribute_not_exists(idempotencyKey) OR idempotencyKey <> :key',
+            ExpressionAttributeValues: {
+              ':key': idempotencyKey,
             },
           },
         },
@@ -218,14 +251,8 @@ async function handleVote(
   const participants = (participantsResult.Items as Participant[]) || [];
   const allVoted = votes.length === participants.length && participants.length > 0;
 
-  // Fetch room to check auto-reveal settings
-  const roomResult = await docClient.send(
-    new GetCommand({
-      TableName: ROOMS_TABLE,
-      Key: { id: roomId, sk: 'META' },
-    })
-  );
-  const room = roomResult.Item as Room | undefined;
+  // Fetch room to check auto-reveal settings (cached)
+  const room = (await getRoomWithCache(roomId)) as Room | undefined;
   const autoRevealEnabled = room?.autoRevealEnabled !== false; // default: true
   const countdownSeconds = room?.autoRevealCountdownSeconds ?? 3; // default: 3
 
@@ -299,15 +326,8 @@ async function handleReveal(
 
   const { roomId } = participant;
 
-  // Fetch room to check allowAllParticipantsToReveal setting
-  const roomResult = await docClient.send(
-    new GetCommand({
-      TableName: ROOMS_TABLE,
-      Key: { id: roomId, sk: 'META' },
-    })
-  );
-
-  const room = roomResult.Item as Room | undefined;
+  // Fetch room to check allowAllParticipantsToReveal setting (cached)
+  const room = (await getRoomWithCache(roomId)) as Room | undefined;
   if (!room) {
     throw new Error('Room not found');
   }
@@ -731,6 +751,23 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       body: JSON.stringify({ error: 'Invalid JSON message' }),
     };
   }
+
+  // Validate message structure
+  const validationResult = safeParseWebSocketMessage(message);
+  if (!validationResult.success) {
+    console.error('Message validation failed:', validationResult.error.errors);
+    return {
+      statusCode: 400,
+      body: JSON.stringify({
+        error: 'Invalid message format',
+        details: validationResult.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`),
+      }),
+    };
+  }
+
+  // Use validated message (type-safe)
+  const validatedMessage = validationResult.data;
+  message = validatedMessage;
 
   try {
     let result;

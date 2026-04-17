@@ -8,7 +8,14 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { v4 as uuidv4 } from 'uuid';
-import { createAvatarSeed, Participant, Round, Vote } from '@estimatenest/shared';
+import {
+  createAvatarSeed,
+  Participant,
+  Round,
+  Vote,
+  validateJoinRoomRequest,
+} from '@estimatenest/shared';
+import { ZodError } from 'zod';
 
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
@@ -49,13 +56,34 @@ async function createParticipantRecord(
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   try {
-    const { code } = event.pathParameters || {};
-    if (!code) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ error: 'Missing room code' }),
-      };
+    // Validate request parameters
+    const requestData = {
+      code: event.pathParameters?.code,
+      participantId: event.queryStringParameters?.participantId,
+      name: event.queryStringParameters?.name,
+    };
+
+    let validatedData;
+    try {
+      validatedData = validateJoinRoomRequest(requestData);
+    } catch (error) {
+      console.error('Request validation failed:', error);
+
+      if (error instanceof ZodError) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: 'Invalid request parameters',
+            details: error.errors.map((e) => `${e.path.join('.')}: ${e.message}`),
+          }),
+        };
+      }
+
+      // Re-throw unexpected errors to be caught by outer handler
+      throw error;
     }
+
+    const { code } = validatedData;
 
     // Look up room by short code
     const codeResult = await docClient.send(
@@ -93,8 +121,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     const existingParticipants = (participantsResult.Items as Participant[]) || [];
 
     // Determine participant ID (provided for polling, or new)
-    const providedParticipantId = event.queryStringParameters?.participantId;
-    const providedName = event.queryStringParameters?.name || 'Anonymous';
+    const providedParticipantId = validatedData.participantId;
+    const providedName = validatedData.name || 'Anonymous';
     let participantId: string;
     let name: string;
     let avatarSeed: string;
@@ -105,21 +133,15 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     const participants = [...existingParticipants];
 
     if (providedParticipantId) {
-      // Try to fetch existing participant
-      const existingParticipantResult = await docClient.send(
-        new GetCommand({
-          TableName: PARTICIPANTS_TABLE,
-          Key: { roomId, participantId: providedParticipantId },
-        })
-      );
-      const existingParticipant = existingParticipantResult.Item;
+      // Try to find existing participant in the already fetched list
+      const existingParticipant = existingParticipants.find((p) => p.id === providedParticipantId);
       if (existingParticipant) {
         // Participant exists - use stored details
         participantId = providedParticipantId;
         name = existingParticipant.name;
         avatarSeed = existingParticipant.avatarSeed;
         isModerator = existingParticipant.isModerator || false;
-        // Update lastSeenAt
+        // Update lastSeenAt in DynamoDB
         await docClient.send(
           new UpdateCommand({
             TableName: PARTICIPANTS_TABLE,
@@ -183,42 +205,29 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     let round: Round | null = null;
     let votes: Vote[] = [];
 
-    // First try to get active round (not revealed)
-    const activeRoundsResult = await docClient.send(
+    // Get all rounds for the room (typically < 10 rounds per room)
+    const allRoundsResult = await docClient.send(
       new QueryCommand({
         TableName: ROUNDS_TABLE,
         KeyConditionExpression: 'roomId = :roomId',
-        FilterExpression: 'isRevealed = :false',
         ExpressionAttributeValues: {
           ':roomId': roomId,
-          ':false': false,
         },
-        Limit: 1,
       })
     );
 
-    let roundItem = activeRoundsResult.Items?.[0];
+    const allRounds = allRoundsResult.Items || [];
+
+    // Find active round (not revealed)
+    let roundItem = allRounds.find((item) => !item.isRevealed);
 
     // If no active round, get the most recent round (by startedAt)
-    if (!roundItem) {
-      const allRoundsResult = await docClient.send(
-        new QueryCommand({
-          TableName: ROUNDS_TABLE,
-          KeyConditionExpression: 'roomId = :roomId',
-          ExpressionAttributeValues: {
-            ':roomId': roomId,
-          },
-        })
-      );
-
-      if (allRoundsResult.Items && allRoundsResult.Items.length > 0) {
-        // Find most recent round by startedAt
-        roundItem = allRoundsResult.Items.reduce((latest, current) => {
-          const latestDate = new Date(latest.startedAt || 0).getTime();
-          const currentDate = new Date(current.startedAt || 0).getTime();
-          return currentDate > latestDate ? current : latest;
-        });
-      }
+    if (!roundItem && allRounds.length > 0) {
+      roundItem = allRounds.reduce((latest, current) => {
+        const latestDate = new Date(latest.startedAt || 0).getTime();
+        const currentDate = new Date(current.startedAt || 0).getTime();
+        return currentDate > latestDate ? current : latest;
+      });
     }
 
     if (roundItem) {
@@ -285,6 +294,18 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': origin || '*',
     };
+
+    if (error instanceof ZodError) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({
+          error: 'Invalid request parameters',
+          details: error.errors.map((e) => `${e.path.join('.')}: ${e.message}`),
+        }),
+      };
+    }
+
     return {
       statusCode: 500,
       headers,
