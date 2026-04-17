@@ -24,10 +24,16 @@ export async function broadcastToRoom(
   message: WebSocketMessage,
   excludeConnectionId?: string
 ): Promise<void> {
-  const { domainName, stage } = event.requestContext;
-  const endpoint = `https://${domainName}/${stage}`;
+  const { domainName, stage, apiId } = event.requestContext;
+  // Determine region from domainName (if execute-api domain) or from environment
+  let region = process.env.AWS_REGION || 'eu-central-1';
+  if (domainName.includes('.execute-api.')) {
+    const match = domainName.match(/execute-api\.([a-z0-9-]+)\.amazonaws\.com/);
+    if (match) region = match[1];
+  }
+  const endpoint = `https://${apiId}.execute-api.${region}.amazonaws.com/${stage}`;
   console.log(
-    `Broadcast endpoint: domainName=${domainName}, stage=${stage}, endpoint=${endpoint}, room: ${roomId}, exclude: ${excludeConnectionId}`
+    `Broadcast endpoint: domainName=${domainName}, stage=${stage}, apiId=${apiId}, region=${region}, endpoint=${endpoint}, room: ${roomId}, exclude: ${excludeConnectionId}`
   );
   const apiGatewayClient = new ApiGatewayManagementApiClient({ endpoint });
 
@@ -54,6 +60,15 @@ export async function broadcastToRoom(
     activeParticipants.map((p) => ({
       participantId: p.participantId,
       connectionId: p.connectionId,
+      name: p.name,
+    }))
+  );
+  console.log(
+    'All participants:',
+    participants.map((p) => ({
+      participantId: p.participantId,
+      connectionId: p.connectionId,
+      name: p.name,
     }))
   );
 
@@ -123,10 +138,16 @@ export async function sendToConnection(
   connectionId: string,
   message: WebSocketMessage
 ): Promise<void> {
-  const { domainName, stage } = event.requestContext;
-  const endpoint = `https://${domainName}/${stage}`;
+  const { domainName, stage, apiId } = event.requestContext;
+  // Determine region from domainName (if execute-api domain) or from environment
+  let region = process.env.AWS_REGION || 'eu-central-1';
+  if (domainName.includes('.execute-api.')) {
+    const match = domainName.match(/execute-api\.([a-z0-9-]+)\.amazonaws\.com/);
+    if (match) region = match[1];
+  }
+  const endpoint = `https://${apiId}.execute-api.${region}.amazonaws.com/${stage}`;
   console.log(
-    `SendToConnection constructing endpoint: domainName=${domainName}, stage=${stage}, endpoint=${endpoint}`
+    `SendToConnection constructing endpoint: domainName=${domainName}, stage=${stage}, apiId=${apiId}, region=${region}, endpoint=${endpoint}`
   );
   const apiGatewayClient = new ApiGatewayManagementApiClient({ endpoint });
   console.log(`SendToConnection endpoint: ${endpoint}, connection: ${connectionId}`);

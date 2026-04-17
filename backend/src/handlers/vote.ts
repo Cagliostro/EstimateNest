@@ -248,10 +248,38 @@ async function handleVote(
     })
   );
   const participants = (participantsResult.Items as Participant[]) || [];
-  const allVoted = votes.length === participants.length && participants.length > 0;
+  const activeParticipants = participants.filter(
+    (p) => p.connectionId && p.connectionId !== 'REST'
+  );
+  console.log(
+    'Auto-reveal check participants:',
+    participants.map((p) => ({
+      id: p.id,
+      name: p.name,
+      isModerator: p.isModerator,
+      connectionId: p.connectionId,
+    }))
+  );
+  console.log(
+    'Auto-reveal check active participants:',
+    activeParticipants.map((p) => ({ id: p.id, name: p.name, connectionId: p.connectionId }))
+  );
+  console.log(
+    'Auto-reveal check votes:',
+    votes.length,
+    'votes',
+    votes.map((v) => ({ participantId: v.participantId, value: v.value }))
+  );
+  const allVoted = votes.length === activeParticipants.length && activeParticipants.length > 0;
 
   // Fetch room to check auto-reveal settings (cached)
   const room = (await getRoomWithCache(roomId)) as Room | undefined;
+  console.log('Auto-reveal room settings:', {
+    autoRevealEnabled: room?.autoRevealEnabled,
+    countdownSeconds: room?.autoRevealCountdownSeconds,
+    allowAllParticipantsToReveal: room?.allowAllParticipantsToReveal,
+    maxParticipants: room?.maxParticipants,
+  });
   const autoRevealEnabled = room?.autoRevealEnabled !== false; // default: true
   const countdownSeconds = room?.autoRevealCountdownSeconds ?? 3; // default: 3
 
