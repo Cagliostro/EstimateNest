@@ -162,7 +162,7 @@ async function testFullFlow() {
   ws.close();
 
   console.log('\n=== Test completed ===');
-  console.log(`Room URL: https://d2lwwlj4af3avp.cloudfront.net/${shortCode}`);
+  console.log(`Room URL: https://dev.estimatenest.net/${shortCode}`);
   console.log(`Total messages received: ${messages.length}`);
 }
 

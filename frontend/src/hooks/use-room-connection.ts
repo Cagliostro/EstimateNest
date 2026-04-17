@@ -357,8 +357,10 @@ export function useRoomConnection() {
         clearInterval(countdownIntervalRef.current);
         countdownIntervalRef.current = null;
       }
+      // Clear polling interval on unmount
+      stopPolling();
     };
-  }, [handleWebSocketMessage, hookId, service]);
+  }, [handleWebSocketMessage, hookId, service, stopPolling]);
 
   // Sync connection state with store
   useEffect(() => {

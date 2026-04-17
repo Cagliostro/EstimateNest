@@ -15,5 +15,8 @@
     "@typescript-eslint/parser": "^6.19.0",
     "eslint": "^8.56.0",
     "typescript": "^5.4.5"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
   }
 }

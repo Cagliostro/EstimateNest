@@ -2,7 +2,8 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda';
 import { broadcastToRoom } from '../utils/broadcast';
-import { Participant } from '@estimatenest/shared';
+import { Participant, validateWebSocketConnectionParams } from '@estimatenest/shared';
+import { ZodError } from 'zod';
 
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
@@ -16,11 +17,20 @@ export const handler = async (
   const { connectionId } = event.requestContext;
   const { roomId, participantId } = event.queryStringParameters || {};
 
-  if (!roomId || !participantId) {
-    return {
-      statusCode: 400,
-      body: JSON.stringify({ error: 'Missing roomId or participantId' }),
-    };
+  // Validate roomId and participantId format
+  try {
+    validateWebSocketConnectionParams({ roomId, participantId });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({
+          error: 'Invalid roomId or participantId format',
+          details: error.errors,
+        }),
+      };
+    }
+    throw error;
   }
 
   try {
@@ -81,6 +91,18 @@ export const handler = async (
     };
   } catch (error) {
     console.error('WebSocket connect error:', error);
+
+    // Handle validation errors
+    if (error instanceof ZodError) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({
+          error: 'Invalid input format',
+          details: error.errors,
+        }),
+      };
+    }
+
     return {
       statusCode: 500,
       body: JSON.stringify({ error: 'Internal server error' }),

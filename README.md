@@ -8,7 +8,7 @@ EstimateNest is a real‑time, collaborative planning‑poker tool for agile tea
 
 ## Features
 
-- **Zero‑sign‑up rooms** with short URLs (e.g., `https://nest.estimatenest.app/ABC123`)
+- **Zero‑sign‑up rooms** with short URLs (e.g., `https://estimatenest.net/ABC123`)
 - **Real‑time voting** using WebSockets (AWS API Gateway)
 - **Moderator controls** (reveal, new round, optional room password)
 - **Customizable card decks** (Fibonacci, T‑shirt sizes, powers‑of‑two, or your own scale)

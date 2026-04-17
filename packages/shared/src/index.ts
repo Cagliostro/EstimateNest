@@ -133,3 +133,9 @@ export function getRoomTTL(): number {
 export function isRoomExpired(expiresAt: string): boolean {
   return new Date(expiresAt) < new Date();
 }
+
+// ====================
+// Zod Schemas (Runtime Validation)
+// ====================
+
+export * from './schemas';

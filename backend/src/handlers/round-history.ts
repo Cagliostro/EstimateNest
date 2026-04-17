@@ -1,11 +1,8 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import {
-  DynamoDBDocumentClient,
-  GetCommand,
-  QueryCommand,
-} from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
-import { Round, Vote } from '@estimatenest/shared';
+import { Round, Vote, validateRoomCodePath } from '@estimatenest/shared';
+import { ZodError } from 'zod';
 
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
@@ -22,18 +19,16 @@ export interface RoundHistoryItem extends Round {
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   try {
     const { code } = event.pathParameters || {};
-    if (!code) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ error: 'Missing room code' }),
-      };
-    }
+
+    // Validate room code format
+    const validated = validateRoomCodePath({ code });
+    const roomCode = validated.code.toUpperCase();
 
     // Look up room by short code
     const codeResult = await docClient.send(
       new GetCommand({
         TableName: ROOM_CODES_TABLE,
-        Key: { shortCode: code.toUpperCase() },
+        Key: { shortCode: roomCode },
       })
     );
 
@@ -67,7 +62,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     );
 
     const rounds = (roundsResult.Items as Round[]) || [];
-    
+
     // For each round, fetch votes and compute stats
     const history: RoundHistoryItem[] = [];
     for (const round of rounds) {
@@ -82,9 +77,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       );
       const votes = (votesResult.Items as Vote[]) || [];
       const numericVotes = votes
-        .map(v => typeof v.value === 'number' ? v.value : parseFloat(v.value as string))
-        .filter(v => !isNaN(v));
-      
+        .map((v) => (typeof v.value === 'number' ? v.value : parseFloat(v.value as string)))
+        .filter((v) => !isNaN(v));
+
       let average: number | undefined;
       if (numericVotes.length > 0) {
         average = numericVotes.reduce((sum, val) => sum + val, 0) / numericVotes.length;
@@ -117,6 +112,19 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': origin || '*',
     };
+
+    // Handle validation errors
+    if (error instanceof ZodError) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({
+          error: 'Invalid room code format',
+          details: error.errors,
+        }),
+      };
+    }
+
     return {
       statusCode: 500,
       headers,

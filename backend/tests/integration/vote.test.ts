@@ -1,0 +1,160 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { handler } from '../../src/handlers/vote.js';
+import { APIGatewayProxyEvent } from 'aws-lambda';
+
+// Create mock DynamoDB client at module level using vi.hoisted to ensure it's available
+const { mockDynamoDB } = vi.hoisted(() => {
+  return {
+    mockDynamoDB: {
+      send: vi.fn(),
+    },
+  };
+});
+
+// Mock the DynamoDB DocumentClient - hoisted before imports
+vi.mock('@aws-sdk/lib-dynamodb', () => ({
+  DynamoDBDocumentClient: {
+    from: vi.fn(() => mockDynamoDB),
+  },
+  GetCommand: vi.fn(),
+  PutCommand: vi.fn(),
+  QueryCommand: vi.fn(),
+  TransactWriteCommand: vi.fn(),
+  UpdateCommand: vi.fn(),
+}));
+
+// Mock the broadcast utilities
+vi.mock('../../src/utils/broadcast', () => ({
+  broadcastToRoom: vi.fn(() => Promise.resolve()),
+  sendToConnection: vi.fn(() => Promise.resolve()),
+}));
+
+describe('vote handler', () => {
+  let mockEvent: Partial<APIGatewayProxyEvent>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Reset the mock send function completely
+    mockDynamoDB.send.mockReset();
+    // Default mock that throws if called unexpectedly
+    mockDynamoDB.send.mockImplementation(() => {
+      throw new Error('Unexpected call to DynamoDB - test should mock this call');
+    });
+
+    // Set environment variables required by the handler
+    process.env.PARTICIPANTS_TABLE = 'test-participants-table';
+    process.env.ROUNDS_TABLE = 'test-rounds-table';
+    process.env.VOTES_TABLE = 'test-votes-table';
+    process.env.ROOMS_TABLE = 'test-rooms-table';
+
+    mockEvent = {
+      requestContext: {
+        connectionId: 'test-connection-id',
+        routeKey: 'vote',
+        domainName: 'test.execute-api.us-east-1.amazonaws.com',
+        stage: 'test',
+      },
+      body: JSON.stringify({
+        type: 'vote',
+        payload: { value: 5 },
+      }),
+    };
+  });
+
+  it('should record a vote successfully', async () => {
+    // Valid UUIDs for participant and room
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+
+    // Mock participant query
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [
+        {
+          participantId,
+          roomId,
+          isModerator: false,
+          connectionId: 'test-connection-id',
+        },
+      ],
+    });
+
+    // Mock active round query (no active round)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [],
+    });
+
+    // Mock round creation (PutCommand)
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock transaction write
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock votes query for broadcast
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [],
+    });
+
+    // Mock participants query for auto-reveal check
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [
+        {
+          participantId,
+          roomId,
+        },
+      ],
+    });
+
+    // Mock room settings fetch
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        id: roomId,
+        sk: 'META',
+        autoRevealEnabled: true,
+        autoRevealCountdownSeconds: 3,
+      },
+    });
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.message).toBe('Vote recorded');
+  });
+
+  it('should reject duplicate vote with idempotency key', async () => {
+    // Valid UUIDs for participant and room
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+
+    // Mock participant query
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [
+        {
+          participantId,
+          roomId,
+          isModerator: false,
+          connectionId: 'test-connection-id',
+        },
+      ],
+    });
+
+    // Mock active round query (no active round)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [],
+    });
+
+    // Mock round creation
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock transaction write throwing ConditionalCheckFailedException
+    const conditionalError = new Error('Conditional check failed');
+    (conditionalError as Error & { name: string }).name = 'ConditionalCheckFailedException';
+    mockDynamoDB.send.mockRejectedValueOnce(conditionalError);
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(400);
+    const body = JSON.parse(response.body);
+    expect(body.error).toBe('Already voted in this round');
+  });
+});
