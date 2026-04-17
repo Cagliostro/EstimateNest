@@ -1,14 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { handler } from '../../src/handlers/vote.js';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent } from 'aws-lambda';
 
-// Mock the DynamoDB DocumentClient
+// Create mock DynamoDB client at module level using vi.hoisted to ensure it's available
+const { mockDynamoDB } = vi.hoisted(() => {
+  return {
+    mockDynamoDB: {
+      send: vi.fn(),
+    },
+  };
+});
+
+// Mock the DynamoDB DocumentClient - hoisted before imports
 vi.mock('@aws-sdk/lib-dynamodb', () => ({
   DynamoDBDocumentClient: {
-    from: vi.fn(() => ({
-      send: vi.fn(),
-    })),
+    from: vi.fn(() => mockDynamoDB),
   },
   GetCommand: vi.fn(),
   PutCommand: vi.fn(),
@@ -17,14 +23,29 @@ vi.mock('@aws-sdk/lib-dynamodb', () => ({
   UpdateCommand: vi.fn(),
 }));
 
+// Mock the broadcast utilities
+vi.mock('../../src/utils/broadcast', () => ({
+  broadcastToRoom: vi.fn(() => Promise.resolve()),
+  sendToConnection: vi.fn(() => Promise.resolve()),
+}));
+
 describe('vote handler', () => {
-  const mockSend = vi.fn();
   let mockEvent: Partial<APIGatewayProxyEvent>;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    // Reset the mock
-    (DynamoDBDocumentClient.from as vi.Mock).mockReturnValue({ send: mockSend });
+    // Reset the mock send function completely
+    mockDynamoDB.send.mockReset();
+    // Default mock that throws if called unexpectedly
+    mockDynamoDB.send.mockImplementation(() => {
+      throw new Error('Unexpected call to DynamoDB - test should mock this call');
+    });
+
+    // Set environment variables required by the handler
+    process.env.PARTICIPANTS_TABLE = 'test-participants-table';
+    process.env.ROUNDS_TABLE = 'test-rounds-table';
+    process.env.VOTES_TABLE = 'test-votes-table';
+    process.env.ROOMS_TABLE = 'test-rooms-table';
 
     mockEvent = {
       requestContext: {
@@ -41,12 +62,16 @@ describe('vote handler', () => {
   });
 
   it('should record a vote successfully', async () => {
+    // Valid UUIDs for participant and room
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+
     // Mock participant query
-    mockSend.mockResolvedValueOnce({
+    mockDynamoDB.send.mockResolvedValueOnce({
       Items: [
         {
-          participantId: 'participant-123',
-          roomId: 'room-123',
+          participantId,
+          roomId,
           isModerator: false,
           connectionId: 'test-connection-id',
         },
@@ -54,35 +79,35 @@ describe('vote handler', () => {
     });
 
     // Mock active round query (no active round)
-    mockSend.mockResolvedValueOnce({
+    mockDynamoDB.send.mockResolvedValueOnce({
       Items: [],
     });
 
     // Mock round creation (PutCommand)
-    mockSend.mockResolvedValueOnce({});
+    mockDynamoDB.send.mockResolvedValueOnce({});
 
     // Mock transaction write
-    mockSend.mockResolvedValueOnce({});
+    mockDynamoDB.send.mockResolvedValueOnce({});
 
     // Mock votes query for broadcast
-    mockSend.mockResolvedValueOnce({
+    mockDynamoDB.send.mockResolvedValueOnce({
       Items: [],
     });
 
     // Mock participants query for auto-reveal check
-    mockSend.mockResolvedValueOnce({
+    mockDynamoDB.send.mockResolvedValueOnce({
       Items: [
         {
-          participantId: 'participant-123',
-          roomId: 'room-123',
+          participantId,
+          roomId,
         },
       ],
     });
 
     // Mock room settings fetch
-    mockSend.mockResolvedValueOnce({
+    mockDynamoDB.send.mockResolvedValueOnce({
       Item: {
-        id: 'room-123',
+        id: roomId,
         sk: 'META',
         autoRevealEnabled: true,
         autoRevealCountdownSeconds: 3,
@@ -97,12 +122,16 @@ describe('vote handler', () => {
   });
 
   it('should reject duplicate vote with idempotency key', async () => {
+    // Valid UUIDs for participant and room
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+
     // Mock participant query
-    mockSend.mockResolvedValueOnce({
+    mockDynamoDB.send.mockResolvedValueOnce({
       Items: [
         {
-          participantId: 'participant-123',
-          roomId: 'room-123',
+          participantId,
+          roomId,
           isModerator: false,
           connectionId: 'test-connection-id',
         },
@@ -110,17 +139,17 @@ describe('vote handler', () => {
     });
 
     // Mock active round query (no active round)
-    mockSend.mockResolvedValueOnce({
+    mockDynamoDB.send.mockResolvedValueOnce({
       Items: [],
     });
 
     // Mock round creation
-    mockSend.mockResolvedValueOnce({});
+    mockDynamoDB.send.mockResolvedValueOnce({});
 
     // Mock transaction write throwing ConditionalCheckFailedException
     const conditionalError = new Error('Conditional check failed');
     (conditionalError as Error & { name: string }).name = 'ConditionalCheckFailedException';
-    mockSend.mockRejectedValueOnce(conditionalError);
+    mockDynamoDB.send.mockRejectedValueOnce(conditionalError);
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
 

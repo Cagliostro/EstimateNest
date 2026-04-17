@@ -1,14 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { handler } from '../../src/handlers/join-room.js';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent } from 'aws-lambda';
 
-// Mock the DynamoDB DocumentClient
+// Create mock DynamoDB client at module level using vi.hoisted to ensure it's available
+const { mockDynamoDB } = vi.hoisted(() => {
+  return {
+    mockDynamoDB: {
+      send: vi.fn(),
+    },
+  };
+});
+
+// Mock the DynamoDB DocumentClient - hoisted before imports
 vi.mock('@aws-sdk/lib-dynamodb', () => ({
   DynamoDBDocumentClient: {
-    from: vi.fn(() => ({
-      send: vi.fn(),
-    })),
+    from: vi.fn(() => mockDynamoDB),
   },
   GetCommand: vi.fn(),
   PutCommand: vi.fn(),
@@ -17,12 +23,23 @@ vi.mock('@aws-sdk/lib-dynamodb', () => ({
 }));
 
 describe('join-room handler', () => {
-  const mockSend = vi.fn();
   let mockEvent: Partial<APIGatewayProxyEvent>;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (DynamoDBDocumentClient.from as vi.Mock).mockReturnValue({ send: mockSend });
+    // Reset the mock send function completely
+    mockDynamoDB.send.mockReset();
+    // Default mock that throws if called unexpectedly
+    mockDynamoDB.send.mockImplementation(() => {
+      throw new Error('Unexpected call to DynamoDB - test should mock this call');
+    });
+
+    // Set environment variables required by the handler
+    process.env.ROOM_CODES_TABLE = 'test-room-codes-table';
+    process.env.PARTICIPANTS_TABLE = 'test-participants-table';
+    process.env.ROUNDS_TABLE = 'test-rounds-table';
+    process.env.VOTES_TABLE = 'test-votes-table';
+    process.env.WEBSOCKET_URL = 'wss://test.example.com';
 
     mockEvent = {
       pathParameters: { code: 'ABCDEF' },
@@ -33,7 +50,7 @@ describe('join-room handler', () => {
 
   it('should create new participant when joining new room', async () => {
     // Mock room code lookup
-    mockSend.mockResolvedValueOnce({
+    mockDynamoDB.send.mockResolvedValueOnce({
       Item: {
         shortCode: 'ABCDEF',
         roomId: 'room-123',
@@ -42,20 +59,20 @@ describe('join-room handler', () => {
     });
 
     // Mock participants query (empty room)
-    mockSend.mockResolvedValueOnce({
+    mockDynamoDB.send.mockResolvedValueOnce({
       Items: [],
     });
 
     // Mock participant creation (PutCommand)
-    mockSend.mockResolvedValueOnce({});
+    mockDynamoDB.send.mockResolvedValueOnce({});
 
     // Mock rounds query (no rounds)
-    mockSend.mockResolvedValueOnce({
+    mockDynamoDB.send.mockResolvedValueOnce({
       Items: [],
     });
 
     // Mock votes query (none)
-    mockSend.mockResolvedValueOnce({
+    mockDynamoDB.send.mockResolvedValueOnce({
       Items: [],
     });
 
@@ -70,10 +87,10 @@ describe('join-room handler', () => {
   });
 
   it('should return existing participant when participantId provided', async () => {
-    mockEvent.queryStringParameters = { participantId: 'existing-123' };
+    mockEvent.queryStringParameters = { participantId: '12345678-1234-1234-8234-123456789abc' };
 
     // Mock room code lookup
-    mockSend.mockResolvedValueOnce({
+    mockDynamoDB.send.mockResolvedValueOnce({
       Item: {
         shortCode: 'ABCDEF',
         roomId: 'room-123',
@@ -82,11 +99,11 @@ describe('join-room handler', () => {
     });
 
     // Mock participants query (one existing participant)
-    mockSend.mockResolvedValueOnce({
+    mockDynamoDB.send.mockResolvedValueOnce({
       Items: [
         {
-          id: 'existing-123',
-          participantId: 'existing-123',
+          id: '12345678-1234-1234-8234-123456789abc',
+          participantId: '12345678-1234-1234-8234-123456789abc',
           roomId: 'room-123',
           name: 'Existing User',
           avatarSeed: 'existing-user',
@@ -99,15 +116,15 @@ describe('join-room handler', () => {
     });
 
     // Mock participant update (lastSeenAt)
-    mockSend.mockResolvedValueOnce({});
+    mockDynamoDB.send.mockResolvedValueOnce({});
 
     // Mock rounds query (no rounds)
-    mockSend.mockResolvedValueOnce({
+    mockDynamoDB.send.mockResolvedValueOnce({
       Items: [],
     });
 
     // Mock votes query (none)
-    mockSend.mockResolvedValueOnce({
+    mockDynamoDB.send.mockResolvedValueOnce({
       Items: [],
     });
 
@@ -115,14 +132,14 @@ describe('join-room handler', () => {
 
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body);
-    expect(body.participantId).toBe('existing-123');
+    expect(body.participantId).toBe('12345678-1234-1234-8234-123456789abc');
     expect(body.isNewParticipant).toBe(false);
     expect(body.participants).toHaveLength(1);
   });
 
   it('should return 404 for invalid room code', async () => {
     // Mock room code lookup (not found)
-    mockSend.mockResolvedValueOnce({ Item: null });
+    mockDynamoDB.send.mockResolvedValueOnce({ Item: null });
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
 
@@ -133,7 +150,7 @@ describe('join-room handler', () => {
 
   it('should return 410 for expired room', async () => {
     // Mock room code lookup with expired date
-    mockSend.mockResolvedValueOnce({
+    mockDynamoDB.send.mockResolvedValueOnce({
       Item: {
         shortCode: 'ABCDEF',
         roomId: 'room-123',
