@@ -260,7 +260,11 @@ async function handleVote(
   const expectedVoteCount = activeParticipants.length;
   console.log(`Expected vote count: ${expectedVoteCount} (active participants)`);
 
-  for (let attempt = 0; attempt < 10; attempt++) {
+  const MAX_ATTEMPTS = 8;
+  const BASE_DELAY_MS = 200;
+  const MAX_DELAY_MS = 2000;
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const votesResult = await docClient.send(
       new QueryCommand({
         TableName: VOTES_TABLE,
@@ -296,9 +300,9 @@ async function handleVote(
       break;
     }
 
-    // Wait before retrying (exponential backoff with longer base: 200ms, 400ms, 800ms, 1600ms, 3200ms...)
-    const delayMs = 200 * Math.pow(2, attempt);
-    console.log(`Waiting ${delayMs}ms before retry (attempt ${attempt + 1}/10)...`);
+    // Wait before retrying (exponential backoff with cap)
+    const delayMs = Math.min(BASE_DELAY_MS * Math.pow(1.5, attempt), MAX_DELAY_MS);
+    console.log(`Waiting ${delayMs}ms before retry (attempt ${attempt + 1}/${MAX_ATTEMPTS})...`);
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
@@ -308,10 +312,10 @@ async function handleVote(
     .filter((p) => !foundParticipantIds.includes(p.id))
     .map((p) => p.id);
 
-  // If still missing votes after 10 retries, try one more time with longer delay
+  // If still missing votes after all retries, try one more time with longer delay
   if (missingParticipantIdsAfterRetry.length > 0 && votes.length < expectedVoteCount) {
     console.warn(
-      `🚨 After ${10} retries, still missing votes for participants: ${missingParticipantIdsAfterRetry.join(', ')}`
+      `🚨 After ${MAX_ATTEMPTS} retries, still missing votes for participants: ${missingParticipantIdsAfterRetry.join(', ')}`
     );
     console.warn(`Waiting 5 seconds for final attempt...`);
     await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -337,7 +341,7 @@ async function handleVote(
 
     if (finalMissingParticipantIds.length > 0) {
       console.error(
-        `💥 CRITICAL: After 10 retries + 5s wait, STILL missing votes for participants: ${finalMissingParticipantIds.join(', ')}`
+        `💥 CRITICAL: After ${MAX_ATTEMPTS} retries + 5s wait, STILL missing votes for participants: ${finalMissingParticipantIds.join(', ')}`
       );
       console.error(
         `Broadcasting with only ${votes.length} of ${expectedVoteCount} expected votes. Database consistency issue! Round: ${roundId}`
