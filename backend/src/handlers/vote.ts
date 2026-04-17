@@ -242,9 +242,12 @@ async function handleVote(
     (p) => p.connectionId && p.connectionId !== 'REST'
   );
 
-  // Fetch all votes for this round to broadcast, with retry for consistency
+  // Fetch all votes for this round to broadcast, with aggressive retry for consistency
   let votes: Vote[] = [];
-  for (let attempt = 0; attempt < 3; attempt++) {
+  const expectedVoteCount = activeParticipants.length;
+  console.log(`Expected vote count: ${expectedVoteCount} (active participants)`);
+
+  for (let attempt = 0; attempt < 6; attempt++) {
     const votesResult = await docClient.send(
       new QueryCommand({
         TableName: VOTES_TABLE,
@@ -258,15 +261,32 @@ async function handleVote(
     votes = (votesResult.Items as Vote[]) || [];
     console.log(`Votes query attempt ${attempt + 1}:`, votes.length, 'votes');
 
-    // If we have at least as many votes as active participants, break
-    if (votes.length >= activeParticipants.length) {
+    // Log which votes we found vs expected participants
+    const foundParticipantIds = votes.map((v) => v.participantId);
+    const missingParticipantIds = activeParticipants
+      .filter((p) => !foundParticipantIds.includes(p.id))
+      .map((p) => p.id);
+
+    if (missingParticipantIds.length > 0) {
+      console.log(`Missing votes for participants: ${missingParticipantIds.join(', ')}`);
+    }
+
+    // If we have all expected votes, break immediately
+    if (votes.length >= expectedVoteCount && expectedVoteCount > 0) {
+      console.log(`Found all ${expectedVoteCount} expected votes`);
       break;
     }
 
-    // Wait before retrying (exponential backoff)
-    if (attempt < 2) {
-      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    // If no active participants (shouldn't happen), break
+    if (expectedVoteCount === 0) {
+      console.log('No active participants, no votes expected');
+      break;
     }
+
+    // Wait before retrying (exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms, 3200ms)
+    const delayMs = 100 * Math.pow(2, attempt);
+    console.log(`Waiting ${delayMs}ms before retry (attempt ${attempt + 1}/6)...`);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
   console.log(
