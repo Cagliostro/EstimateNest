@@ -50,3 +50,16 @@ infrastructure/.env
 # Design files (binary)
 EstimateNest UI Design.make
 tmp-design/
+design-extract/
+
+# Backup directories
+node_modules.backup/
+
+# Test scripts
+backend/test-vote.cjs
+
+# Scripts generated files
+scripts/*.log
+scripts/*-outputs.json
+scripts/domain-setup-outputs.json
+infrastructure/cdk.json.backup.*

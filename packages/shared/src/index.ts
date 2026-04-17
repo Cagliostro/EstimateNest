@@ -13,6 +13,8 @@ export interface Room {
   allowAllParticipantsToReveal: boolean;
   maxParticipants?: number; // default 50
   deck: CardDeck; // default deck for the room (can be overridden by user)
+  autoRevealEnabled?: boolean; // default: true
+  autoRevealCountdownSeconds?: number; // default: 3
 }
 
 export interface Participant {
@@ -78,12 +80,16 @@ export const DEFAULT_DECKS: CardDeck[] = [
 
 export type WebSocketMessage =
   | { type: 'join'; payload?: { roomCode?: string; name?: string; avatarSeed?: string } }
+  | { type: 'updateParticipant'; payload: { name: string } }
   | { type: 'leave'; payload: { participantId: string } }
   | { type: 'vote'; payload: { roundId: string; value: number | string } }
   | { type: 'reveal'; payload: { roundId: string } }
-  | { type: 'newRound'; payload: { title?: string } }
+  | { type: 'newRound'; payload: { title?: string; description?: string } }
+  | { type: 'updateRound'; payload: { roundId: string; title?: string; description?: string } }
   | { type: 'participantList'; payload: { participants: Participant[] } }
   | { type: 'roundUpdate'; payload: { round: Round; votes: Vote[] } }
+  | { type: 'participantUpdated'; payload: { success: boolean; name: string } }
+  | { type: 'autoRevealCountdown'; payload: { countdownSeconds: number } }
   | { type: 'error'; payload: { message: string; code?: string } };
 
 // ====================
@@ -127,3 +133,9 @@ export function getRoomTTL(): number {
 export function isRoomExpired(expiresAt: string): boolean {
   return new Date(expiresAt) < new Date();
 }
+
+// ====================
+// Zod Schemas (Runtime Validation)
+// ====================
+
+export * from './schemas';

@@ -8,7 +8,14 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { v4 as uuidv4 } from 'uuid';
-import { createAvatarSeed, Participant, Round, Vote } from '@estimatenest/shared';
+import {
+  createAvatarSeed,
+  Participant,
+  Round,
+  Vote,
+  validateJoinRoomRequest,
+} from '@estimatenest/shared';
+import { ZodError } from 'zod';
 
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
@@ -23,7 +30,8 @@ async function createParticipantRecord(
   roomId: string,
   participantId: string,
   name: string,
-  avatarSeed: string
+  avatarSeed: string,
+  isModerator: boolean = false
 ) {
   const participant: Participant = {
     id: participantId,
@@ -33,7 +41,7 @@ async function createParticipantRecord(
     avatarSeed,
     joinedAt: new Date().toISOString(),
     lastSeenAt: new Date().toISOString(),
-    isModerator: false,
+    isModerator,
   };
   await docClient.send(
     new PutCommand({
@@ -48,13 +56,38 @@ async function createParticipantRecord(
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   try {
-    const { code } = event.pathParameters || {};
-    if (!code) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ error: 'Missing room code' }),
-      };
+    // Validate request parameters
+    const requestData = {
+      code: event.pathParameters?.code,
+      participantId: event.queryStringParameters?.participantId,
+      name: event.queryStringParameters?.name,
+    };
+
+    let validatedData;
+    try {
+      validatedData = validateJoinRoomRequest(requestData);
+    } catch (error) {
+      console.error('Request validation failed:', error);
+
+      if (error instanceof ZodError || (error as Error).name === 'ZodError') {
+        const zodError = error as { errors?: Array<{ path: string[]; message: string }> };
+        const details = zodError.errors
+          ? zodError.errors.map((e) => `${e.path.join('.')}: ${e.message}`)
+          : ['Validation failed'];
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            error: 'Invalid request parameters',
+            details,
+          }),
+        };
+      }
+
+      // Re-throw unexpected errors to be caught by outer handler
+      throw error;
     }
+
+    const { code } = validatedData;
 
     // Look up room by short code
     const codeResult = await docClient.send(
@@ -79,29 +112,40 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       };
     }
 
+    // Fetch all participants in the room (for moderator determination)
+    const participantsResult = await docClient.send(
+      new QueryCommand({
+        TableName: PARTICIPANTS_TABLE,
+        KeyConditionExpression: 'roomId = :roomId',
+        ExpressionAttributeValues: {
+          ':roomId': roomId,
+        },
+      })
+    );
+    const existingParticipants = (participantsResult.Items as Participant[]) || [];
+
     // Determine participant ID (provided for polling, or new)
-    const providedParticipantId = event.queryStringParameters?.participantId;
-    const providedName = event.queryStringParameters?.name || 'Anonymous';
+    const providedParticipantId = validatedData.participantId;
+    const providedName = validatedData.name || 'Anonymous';
     let participantId: string;
     let name: string;
     let avatarSeed: string;
     let isNewParticipant = false;
+    let isModerator = false;
+
+    // Start with existing participants as our base list
+    const participants = [...existingParticipants];
 
     if (providedParticipantId) {
-      // Try to fetch existing participant
-      const existingParticipantResult = await docClient.send(
-        new GetCommand({
-          TableName: PARTICIPANTS_TABLE,
-          Key: { roomId, participantId: providedParticipantId },
-        })
-      );
-      const existingParticipant = existingParticipantResult.Item;
+      // Try to find existing participant in the already fetched list
+      const existingParticipant = existingParticipants.find((p) => p.id === providedParticipantId);
       if (existingParticipant) {
         // Participant exists - use stored details
         participantId = providedParticipantId;
         name = existingParticipant.name;
         avatarSeed = existingParticipant.avatarSeed;
-        // Update lastSeenAt
+        isModerator = existingParticipant.isModerator || false;
+        // Update lastSeenAt in DynamoDB
         await docClient.send(
           new UpdateCommand({
             TableName: PARTICIPANTS_TABLE,
@@ -112,13 +156,33 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
             },
           })
         );
+        // Update participant in our local list
+        const participantIndex = participants.findIndex((p) => p.id === participantId);
+        if (participantIndex >= 0) {
+          participants[participantIndex] = {
+            ...participants[participantIndex],
+            lastSeenAt: new Date().toISOString(),
+          };
+        }
       } else {
         // Participant not found - treat as new participant
         isNewParticipant = true;
         participantId = uuidv4();
         name = providedName;
         avatarSeed = createAvatarSeed(name);
-        await createParticipantRecord(roomId, participantId, name, avatarSeed);
+        isModerator = existingParticipants.length === 0;
+        await createParticipantRecord(roomId, participantId, name, avatarSeed, isModerator);
+        // Add new participant to our list
+        participants.push({
+          id: participantId,
+          roomId,
+          connectionId: 'REST',
+          name,
+          avatarSeed,
+          joinedAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+          isModerator,
+        });
       }
     } else {
       // New participant joining
@@ -126,41 +190,61 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       participantId = uuidv4();
       name = providedName;
       avatarSeed = createAvatarSeed(name);
-      await createParticipantRecord(roomId, participantId, name, avatarSeed);
+      isModerator = existingParticipants.length === 0;
+      await createParticipantRecord(roomId, participantId, name, avatarSeed, isModerator);
+      // Add new participant to our list
+      participants.push({
+        id: participantId,
+        roomId,
+        connectionId: 'REST',
+        name,
+        avatarSeed,
+        joinedAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+        isModerator,
+      });
     }
 
-    // Fetch all participants in the room (including the one we just added)
-    const participantsResult = await docClient.send(
-      new QueryCommand({
-        TableName: PARTICIPANTS_TABLE,
-        KeyConditionExpression: 'roomId = :roomId',
-        ExpressionAttributeValues: {
-          ':roomId': roomId,
-        },
-      })
-    );
-
-    const participants = (participantsResult.Items as Participant[]) || [];
-
-    // Fetch active round (not revealed)
-    const roundsResult = await docClient.send(
-      new QueryCommand({
-        TableName: ROUNDS_TABLE,
-        KeyConditionExpression: 'roomId = :roomId',
-        FilterExpression: 'isRevealed = :false',
-        ExpressionAttributeValues: {
-          ':roomId': roomId,
-          ':false': false,
-        },
-        Limit: 1,
-      })
-    );
-
+    // Fetch latest round (active or most recent revealed)
     let round: Round | null = null;
     let votes: Vote[] = [];
 
-    if (roundsResult.Items && roundsResult.Items.length > 0) {
-      round = roundsResult.Items[0] as Round;
+    // Get all rounds for the room (typically < 10 rounds per room)
+    const allRoundsResult = await docClient.send(
+      new QueryCommand({
+        TableName: ROUNDS_TABLE,
+        KeyConditionExpression: 'roomId = :roomId',
+        ExpressionAttributeValues: {
+          ':roomId': roomId,
+        },
+      })
+    );
+
+    const allRounds = allRoundsResult.Items || [];
+
+    // Find active round (not revealed)
+    let roundItem = allRounds.find((item) => !item.isRevealed);
+
+    // If no active round, get the most recent round (by startedAt)
+    if (!roundItem && allRounds.length > 0) {
+      roundItem = allRounds.reduce((latest, current) => {
+        const latestDate = new Date(latest.startedAt || 0).getTime();
+        const currentDate = new Date(current.startedAt || 0).getTime();
+        return currentDate > latestDate ? current : latest;
+      });
+    }
+
+    if (roundItem) {
+      // Map DynamoDB attributes to Round interface
+      round = {
+        id: roundItem.roundId || roundItem.id,
+        roomId: roundItem.roomId,
+        title: roundItem.title,
+        description: roundItem.description,
+        startedAt: roundItem.startedAt,
+        revealedAt: roundItem.revealedAt,
+        isRevealed: roundItem.isRevealed,
+      };
       const votesResult = await docClient.send(
         new QueryCommand({
           TableName: VOTES_TABLE,
@@ -214,6 +298,22 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': origin || '*',
     };
+
+    if (error instanceof ZodError || (error as Error).name === 'ZodError') {
+      const zodError = error as { errors?: Array<{ path: string[]; message: string }> };
+      const details = zodError.errors
+        ? zodError.errors.map((e) => `${e.path.join('.')}: ${e.message}`)
+        : ['Validation failed'];
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({
+          error: 'Invalid request parameters',
+          details,
+        }),
+      };
+    }
+
     return {
       statusCode: 500,
       headers,

@@ -8,7 +8,7 @@ EstimateNest is a real‑time, collaborative planning‑poker tool for agile tea
 
 ## Features
 
-- **Zero‑sign‑up rooms** with short URLs (e.g., `https://nest.estimatenest.app/ABC123`)
+- **Zero‑sign‑up rooms** with short URLs (e.g., `https://estimatenest.net/ABC123`)
 - **Real‑time voting** using WebSockets (AWS API Gateway)
 - **Moderator controls** (reveal, new round, optional room password)
 - **Customizable card decks** (Fibonacci, T‑shirt sizes, powers‑of‑two, or your own scale)
@@ -47,17 +47,20 @@ This repository is a monorepo using npm workspaces:
 ### Quick Start
 
 1. Clone the repository:
+
    ```bash
    git clone https://github.com/Cagliostro/EstimateNest.git
    cd EstimateNest
    ```
 
 2. Install dependencies:
+
    ```bash
    npm install
    ```
 
 3. Start the development environment:
+
    ```bash
    npm run dev
    ```
@@ -69,16 +72,16 @@ This repository is a monorepo using npm workspaces:
 
 ### Scripts
 
-| Script | Purpose |
-|--------|---------|
-| `npm run build` | Build all workspaces |
-| `npm run dev` | Start frontend & backend dev servers |
-| `npm run test` | Run tests in all workspaces |
-| `npm run lint` | Lint all workspaces |
-| `npm run deploy:dev` | Deploy the dev AWS stack |
-| `npm run deploy:prod` | Deploy the prod AWS stack |
-| `npm run destroy:dev` | Tear down the dev stack |
-| `npm run destroy:prod` | Tear down the prod stack |
+| Script                 | Purpose                              |
+| ---------------------- | ------------------------------------ |
+| `npm run build`        | Build all workspaces                 |
+| `npm run dev`          | Start frontend & backend dev servers |
+| `npm run test`         | Run tests in all workspaces          |
+| `npm run lint`         | Lint all workspaces                  |
+| `npm run deploy:dev`   | Deploy the dev AWS stack             |
+| `npm run deploy:prod`  | Deploy the prod AWS stack            |
+| `npm run destroy:dev`  | Tear down the dev stack              |
+| `npm run destroy:prod` | Tear down the prod stack             |
 
 ## Deployment
 

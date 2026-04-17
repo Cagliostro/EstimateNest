@@ -31,7 +31,7 @@ async function makeRequest(method, path, body = null) {
     });
 
     req.on('error', reject);
-    
+
     if (body) {
       req.write(JSON.stringify(body));
     }
@@ -46,26 +46,26 @@ async function testFullFlow() {
   console.log('1. Creating room...');
   const createResult = await makeRequest('POST', '/rooms', {
     allowAllParticipantsToReveal: true,
-    deck: 'fibonacci'
+    deck: 'fibonacci',
   });
-  
+
   if (createResult.statusCode !== 201) {
     console.error(`Failed to create room: ${createResult.statusCode}`, createResult.body);
     return;
   }
-  
+
   const { shortCode, roomId } = createResult.body;
   console.log(`   Room created: ${shortCode} (ID: ${roomId})`);
 
   // 2. Join the room
   console.log(`\n2. Joining room ${shortCode}...`);
   const joinResult = await makeRequest('GET', `/rooms/${shortCode}?name=TestUser`);
-  
+
   if (joinResult.statusCode !== 200) {
     console.error(`Failed to join room: ${joinResult.statusCode}`, joinResult.body);
     return;
   }
-  
+
   const { participantId, webSocketUrl } = joinResult.body;
   console.log(`   Joined as participant: ${participantId}`);
   console.log(`   WebSocket URL: ${webSocketUrl}`);
@@ -80,7 +80,7 @@ async function testFullFlow() {
       console.log('   WebSocket connected');
       resolve();
     });
-    
+
     ws.on('error', (err) => {
       console.error('   WebSocket connection error:', err.message);
       reject(err);
@@ -112,14 +112,14 @@ async function testFullFlow() {
     type: 'vote',
     payload: {
       value: 13, // Fibonacci value
-    }
+    },
   };
-  
+
   ws.send(JSON.stringify(voteMessage));
   console.log('   Vote sent (value: 13)');
 
   // Wait a bit for response
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  await new Promise((resolve) => setTimeout(resolve, 2000));
 
   // 5. Try to reveal (might fail if not moderator)
   console.log('\n5. Attempting to reveal...');
@@ -127,23 +127,23 @@ async function testFullFlow() {
     type: 'reveal',
     payload: {
       // roundId would be needed if we had one
-    }
+    },
   };
-  
+
   ws.send(JSON.stringify(revealMessage));
   console.log('   Reveal request sent');
 
   // Wait for responses
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  await new Promise((resolve) => setTimeout(resolve, 2000));
 
   console.log('\n6. Closing connection...');
   ws.close();
 
   console.log('\n=== Test completed ===');
-  console.log(`Room URL: https://d2lwwlj4af3avp.cloudfront.net/${shortCode}`);
+  console.log(`Room URL: https://dev.estimatenest.net/${shortCode}`);
 }
 
-testFullFlow().catch(err => {
+testFullFlow().catch((err) => {
   console.error('Test failed:', err);
   process.exit(1);
 });

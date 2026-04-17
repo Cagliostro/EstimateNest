@@ -19,6 +19,7 @@ new EstimateNestStack(app, stackId, {
   envName: envConfig.envName,
   domainName: envConfig.domainName,
   certificateArn: envConfig.certificateArn,
+  apiCertificateArn: envConfig.apiCertificateArn,
   hostedZoneId: envConfig.hostedZoneId,
   hostedZoneName: envConfig.hostedZoneName,
   // AWS account/region from environment or default
@@ -29,6 +30,7 @@ new EstimateNestStack(app, stackId, {
   tags: {
     Project: 'EstimateNest',
     Environment: envName,
+    DeploymentTimestamp: new Date().toISOString(),
   },
 });
 
