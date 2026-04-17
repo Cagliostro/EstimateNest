@@ -104,9 +104,11 @@ export function useRoomConnection() {
 
         default: {
           // Silently ignore 'ack' and undefined message types
-          const msgType = message.type as string;
-          if (msgType !== 'ack' && msgType !== undefined) {
-            console.log(`[EstimateNest] [${hookId}] Unhandled message type:`, message.type);
+          {
+            const msg = message as { type?: string };
+            if (msg.type !== 'ack' && msg.type !== undefined) {
+              console.log(`[EstimateNest] [${hookId}] Unhandled message type:`, msg.type);
+            }
           }
           break;
         }
