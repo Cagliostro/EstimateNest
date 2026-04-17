@@ -12,6 +12,7 @@ import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -370,6 +371,19 @@ export class EstimateNestStack extends cdk.Stack {
     webSocketApi.grantManageConnections(websocketDisconnectHandler);
     webSocketApi.grantManageConnections(voteHandler);
     webSocketApi.grantManageConnections(joinRoomHandler);
+
+    // Also grant invoke permissions for sending messages
+    const invokeArn = webSocketApi.arnForExecuteApi('*', '/@connections/*');
+    [websocketConnectHandler, websocketDisconnectHandler, voteHandler, joinRoomHandler].forEach(
+      (handler) => {
+        handler.addToRolePolicy(
+          new iam.PolicyStatement({
+            actions: ['execute-api:Invoke'],
+            resources: [invokeArn],
+          })
+        );
+      }
+    );
 
     // ====================
     // API Gateway (REST)
