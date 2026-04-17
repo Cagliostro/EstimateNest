@@ -248,9 +248,21 @@ async function handleVote(
     })
   );
   const participants = (participantsResult.Items as Participant[]) || [];
+  const activeParticipants = participants.filter(
+    (p) => p.connectionId && p.connectionId !== 'REST'
+  );
   console.log(
     'Auto-reveal check participants:',
-    participants.map((p) => ({ id: p.id, name: p.name, isModerator: p.isModerator }))
+    participants.map((p) => ({
+      id: p.id,
+      name: p.name,
+      isModerator: p.isModerator,
+      connectionId: p.connectionId,
+    }))
+  );
+  console.log(
+    'Auto-reveal check active participants:',
+    activeParticipants.map((p) => ({ id: p.id, name: p.name, connectionId: p.connectionId }))
   );
   console.log(
     'Auto-reveal check votes:',
@@ -258,7 +270,7 @@ async function handleVote(
     'votes',
     votes.map((v) => ({ participantId: v.participantId, value: v.value }))
   );
-  const allVoted = votes.length === participants.length && participants.length > 0;
+  const allVoted = votes.length === activeParticipants.length && activeParticipants.length > 0;
 
   // Fetch room to check auto-reveal settings (cached)
   const room = (await getRoomWithCache(roomId)) as Room | undefined;
