@@ -224,7 +224,7 @@ async function handleVote(
     })
   );
 
-  // Fetch all votes for this round to broadcast
+  // Fetch all votes for this round to broadcast (consistent read to see our own write)
   const votesResult = await docClient.send(
     new QueryCommand({
       TableName: VOTES_TABLE,
@@ -232,12 +232,19 @@ async function handleVote(
       ExpressionAttributeValues: {
         ':roundId': roundId,
       },
+      ConsistentRead: true,
     })
   );
 
   const votes = (votesResult.Items as Vote[]) || [];
+  console.log(
+    'Votes fetched for broadcast:',
+    votes.length,
+    'votes',
+    votes.map((v) => ({ participantId: v.participantId, value: v.value }))
+  );
 
-  // Check if everyone has voted and auto-reveal is enabled
+  // Check if everyone has voted and auto-reveal is enabled (consistent read)
   const participantsResult = await docClient.send(
     new QueryCommand({
       TableName: PARTICIPANTS_TABLE,
@@ -245,6 +252,7 @@ async function handleVote(
       ExpressionAttributeValues: {
         ':roomId': roomId,
       },
+      ConsistentRead: true,
     })
   );
   const participants = (participantsResult.Items as Participant[]) || [];

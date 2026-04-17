@@ -46,7 +46,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       })
     );
 
-    // Fetch all participants in the room
+    // Fetch all participants in the room (consistent read)
     const participantsResult = await docClient.send(
       new QueryCommand({
         TableName: PARTICIPANTS_TABLE,
@@ -54,6 +54,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         ExpressionAttributeValues: {
           ':roomId': roomId,
         },
+        ConsistentRead: true,
       })
     );
 
