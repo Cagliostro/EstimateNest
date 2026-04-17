@@ -146,7 +146,10 @@ export class WebSocketService {
   }
 
   private handleMessage(message: WebSocketMessage): void {
-    this.log('Handling message:', message.type);
+    // Only log if message has a type (skip undefined/ack messages)
+    if (message.type && message.type !== 'ack') {
+      this.log('Handling message:', message.type);
+    }
     this.messageHandlers.forEach((handler) => {
       try {
         handler(message);
