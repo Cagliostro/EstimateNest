@@ -54,6 +54,15 @@ export async function broadcastToRoom(
     activeParticipants.map((p) => ({
       participantId: p.participantId,
       connectionId: p.connectionId,
+      name: p.name,
+    }))
+  );
+  console.log(
+    'All participants:',
+    participants.map((p) => ({
+      participantId: p.participantId,
+      connectionId: p.connectionId,
+      name: p.name,
     }))
   );
 

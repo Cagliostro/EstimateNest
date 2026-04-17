@@ -70,6 +70,16 @@ export const handler = async (
     const participants = (participantsResult.Items as Participant[]) || [];
 
     console.log(
+      'WebSocket connect participants:',
+      participants.map((p) => ({
+        participantId: p.id,
+        name: p.name,
+        connectionId: p.connectionId,
+        isModerator: p.isModerator,
+      }))
+    );
+
+    console.log(
       `Broadcasting participant list to room ${roomId}, excluding connection ${connectionId}`
     );
     // Broadcast updated participant list to everyone else in the room (fire-and-forget)
