@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useRoomStore } from '../store/room-store';
 import { useParticipantStore } from '../store/participant-store';
 import { useConnectionStore } from '../store/connection-store';
@@ -683,6 +683,17 @@ export default function RoomPage() {
           </div>
         </div>
       </main>
+
+      <footer className="max-w-6xl mx-auto mt-8 pt-4 border-t border-gray-200 dark:border-gray-800 text-center text-gray-400 text-sm">
+        <p>
+          <Link
+            to="/legal"
+            className="text-primary-600 hover:text-primary-800 dark:text-primary-400 dark:hover:text-primary-300 underline transition-colors"
+          >
+            Impressum & Datenschutz
+          </Link>
+        </p>
+      </footer>
     </div>
   );
 }

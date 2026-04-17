@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useRoomConnection } from '../hooks/use-room-connection';
 import { useConnectionStore } from '../store/connection-store';
 
@@ -21,7 +21,7 @@ export default function HomePage() {
     try {
       const result = await createRoom();
       setCreatedRoom(result);
-      
+
       // Moderator also needs to join the room as a participant
       const name = participantName.trim() || 'Anonymous';
       try {
@@ -42,7 +42,7 @@ export default function HomePage() {
 
   const handleEnterCreatedRoom = async () => {
     if (!createdRoom) return;
-    
+
     const name = participantName.trim() || 'Anonymous';
     try {
       await joinRoom(createdRoom.shortCode, name);
@@ -214,8 +214,16 @@ export default function HomePage() {
         </div>
 
         <footer className="mt-12 text-gray-400 text-sm">
-          <p>
+          <p className="mb-2">
             Built with React, TypeScript, AWS Lambda, and WebSockets. Rooms expire after 14 days.
+          </p>
+          <p>
+            <Link
+              to="/legal"
+              className="text-primary-600 hover:text-primary-800 dark:text-primary-400 dark:hover:text-primary-300 underline transition-colors"
+            >
+              Impressum & Datenschutz
+            </Link>
           </p>
         </footer>
       </div>

@@ -390,6 +390,82 @@ export class EstimateNestStack extends cdk.Stack {
         recordName: props.domainName,
         target: route53.RecordTarget.fromAlias(new route53Targets.CloudFrontTarget(distribution)),
       });
+
+      // Create www redirect for production root domain
+      if (props.envName === 'prod' && props.domainName === 'estimatenest.net') {
+        const wwwDomainName = `www.${props.domainName}`;
+
+        // CloudFront function for www→root redirect
+        const redirectFunction = new cloudfront.Function(this, 'WwwRedirectFunction', {
+          code: cloudfront.FunctionCode.fromInline(`
+            function handler(event) {
+              var request = event.request;
+              var host = request.headers.host.value;
+              var uri = request.uri;
+              var qs = request.querystring;
+              var qsParts = [];
+              for (var key in qs) {
+                if (qs.hasOwnProperty(key)) {
+                  qsParts.push(key + '=' + encodeURIComponent(qs[key].value));
+                }
+              }
+              var querystring = qsParts.length > 0 ? '?' + qsParts.join('&') : '';
+              
+              // Remove www. prefix if present
+              var nonWwwHost = host;
+              if (nonWwwHost.toLowerCase().indexOf('www.') === 0) {
+                nonWwwHost = nonWwwHost.substring(4);
+              }
+              // Redirect to non‑www HTTPS
+              return {
+                statusCode: 301,
+                statusDescription: 'Moved Permanently',
+                headers: {
+                  location: { value: 'https://' + nonWwwHost + uri + querystring }
+                }
+              };
+            }
+          `),
+        });
+
+        const wwwDistribution = new cloudfront.Distribution(this, 'WwwDistribution', {
+          defaultRootObject: '',
+          domainNames: [wwwDomainName],
+          certificate,
+          defaultBehavior: {
+            origin: new cloudfrontOrigins.S3Origin(frontendBucket),
+            allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+            viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+            responseHeadersPolicy: securityHeadersPolicy,
+            functionAssociations: [
+              {
+                function: redirectFunction,
+                eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+              },
+            ],
+          },
+          errorResponses: [
+            {
+              httpStatus: 403,
+              responseHttpStatus: 200,
+              responsePagePath: '/index.html',
+            },
+            {
+              httpStatus: 404,
+              responseHttpStatus: 200,
+              responsePagePath: '/index.html',
+            },
+          ],
+        });
+
+        new route53.ARecord(this, 'WwwCloudFrontAliasRecord', {
+          zone: hostedZone,
+          recordName: wwwDomainName,
+          target: route53.RecordTarget.fromAlias(
+            new route53Targets.CloudFrontTarget(wwwDistribution)
+          ),
+        });
+      }
     }
 
     // ====================
