@@ -116,7 +116,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       expressionAttributeNames['#maxParticipants'] = 'maxParticipants';
       expressionAttributeValues[':maxParticipants'] = maxParticipants;
     }
-
     if (updateExpressions.length === 0) {
       return {
         statusCode: 400,

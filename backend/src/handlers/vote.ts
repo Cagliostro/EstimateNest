@@ -29,7 +29,6 @@ const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 const ROUNDS_TABLE = process.env.ROUNDS_TABLE!;
 const VOTES_TABLE = process.env.VOTES_TABLE!;
 const ROOMS_TABLE = process.env.ROOMS_TABLE!;
-
 // Simple in-memory cache for room settings (10s TTL) - reduces DynamoDB reads
 const roomSettingsCache = new Map<string, { room: Record<string, unknown>; timestamp: number }>();
 const ROOM_CACHE_TTL_MS = 10 * 1000; // 10 seconds
