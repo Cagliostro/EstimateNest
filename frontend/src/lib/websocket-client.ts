@@ -85,8 +85,26 @@ export class WebSocketClient {
 
     this.ws.onmessage = (event) => {
       try {
-        const message = JSON.parse(event.data) as WebSocketMessage;
-        this.options.onMessage?.(message);
+        const data = JSON.parse(event.data);
+        // Check if this is an API Gateway Lambda response
+        if (typeof data === 'object' && data !== null && 'statusCode' in data && 'body' in data) {
+          // It's a Lambda response, parse the body
+          try {
+            const body = typeof data.body === 'string' ? JSON.parse(data.body) : data.body;
+            if (body && typeof body === 'object' && 'type' in body) {
+              this.options.onMessage?.(body);
+            } else {
+              this.log('Lambda response body missing type:', body);
+            }
+          } catch (bodyError) {
+            this.error('Failed to parse Lambda response body:', bodyError, data.body);
+          }
+        } else if (typeof data === 'object' && data !== null && 'type' in data) {
+          // Normal WebSocket message
+          this.options.onMessage?.(data);
+        } else {
+          this.error('Received malformed WebSocket message:', data);
+        }
       } catch (error) {
         this.error('Failed to parse WebSocket message:', error, event.data);
       }

@@ -149,6 +149,13 @@ export class WebSocketService {
     // Log all messages for debugging
     if (!message.type) {
       this.log('Received message without type field:', JSON.stringify(message));
+      // Check if it's an API Gateway response
+      if (typeof message === 'object' && message !== null) {
+        if ('statusCode' in message) {
+          this.log('Looks like API Gateway Lambda response, ignoring');
+          return;
+        }
+      }
     } else {
       this.log('Handling message:', message.type);
     }

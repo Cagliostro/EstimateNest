@@ -90,7 +90,8 @@ export type WebSocketMessage =
   | { type: 'roundUpdate'; payload: { round: Round; votes: Vote[] } }
   | { type: 'participantUpdated'; payload: { success: boolean; name: string } }
   | { type: 'autoRevealCountdown'; payload: { countdownSeconds: number } }
-  | { type: 'error'; payload: { message: string; code?: string } };
+  | { type: 'error'; payload: { message: string; code?: string } }
+  | { type: 'ack'; payload: { message: string } };
 
 // ====================
 // Utilities
