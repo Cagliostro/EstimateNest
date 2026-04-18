@@ -100,7 +100,7 @@ export class EstimateNestStack extends cdk.Stack {
         DOMAIN_NAME: props.domainName || 'example.com',
       },
       bundling: {
-        format: lambdaNodejs.OutputFormat.COMMONJS,
+        format: lambdaNodejs.OutputFormat.CJS,
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -119,7 +119,7 @@ export class EstimateNestStack extends cdk.Stack {
           PARTICIPANTS_TABLE: participantsTable.tableName,
         },
         bundling: {
-          format: lambdaNodejs.OutputFormat.COMMONJS,
+          format: lambdaNodejs.OutputFormat.CJS,
         },
         tracing: lambda.Tracing.ACTIVE,
       }
@@ -139,7 +139,7 @@ export class EstimateNestStack extends cdk.Stack {
           PARTICIPANTS_TABLE: participantsTable.tableName,
         },
         bundling: {
-          format: lambdaNodejs.OutputFormat.COMMONJS,
+          format: lambdaNodejs.OutputFormat.CJS,
         },
         tracing: lambda.Tracing.ACTIVE,
       }
@@ -160,7 +160,7 @@ export class EstimateNestStack extends cdk.Stack {
         RATE_LIMIT_TABLE: rateLimitTable.tableName,
       },
       bundling: {
-        format: lambdaNodejs.OutputFormat.COMMONJS,
+        format: lambdaNodejs.OutputFormat.CJS,
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -324,7 +324,7 @@ export class EstimateNestStack extends cdk.Stack {
         VOTES_TABLE: votesTable.tableName,
       },
       bundling: {
-        format: lambdaNodejs.OutputFormat.COMMONJS,
+        format: lambdaNodejs.OutputFormat.CJS,
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -342,7 +342,7 @@ export class EstimateNestStack extends cdk.Stack {
         VOTES_TABLE: votesTable.tableName,
       },
       bundling: {
-        format: lambdaNodejs.OutputFormat.COMMONJS,
+        format: lambdaNodejs.OutputFormat.CJS,
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -360,7 +360,7 @@ export class EstimateNestStack extends cdk.Stack {
         PARTICIPANTS_TABLE: participantsTable.tableName,
       },
       bundling: {
-        format: lambdaNodejs.OutputFormat.COMMONJS,
+        format: lambdaNodejs.OutputFormat.CJS,
       },
       tracing: lambda.Tracing.ACTIVE,
     });
