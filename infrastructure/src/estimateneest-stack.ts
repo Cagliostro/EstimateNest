@@ -992,10 +992,28 @@ export class EstimateNestStack extends cdk.Stack {
     });
 
     // Associate Web ACL with WebSocket API Gateway
-    new wafv2.CfnWebACLAssociation(this, 'WebSocketApiWebACLAssociation', {
-      resourceArn: `arn:aws:apigateway:${this.region}::/apis/${webSocketStage.api.apiId}/stages/${webSocketStage.stageName}`,
-      webAclArn: regionalWebAcl.attrArn,
-    });
+    const webSocketStageArn = cdk.Fn.sub(
+      'arn:aws:apigateway:${AWS::Region}::/apis/${ApiId}/stages/${StageName}',
+      {
+        ApiId: webSocketApi.apiId, // CDK token that resolves to the CloudFormation Ref
+        StageName: webSocketStage.stageName, // static string (e.g., 'prod')
+      }
+    );
+
+    const webSocketWafAssociation = new wafv2.CfnWebACLAssociation(
+      this,
+      'WebSocketApiWebACLAssociation',
+      {
+        resourceArn: webSocketStageArn,
+        webAclArn: regionalWebAcl.attrArn,
+      }
+    );
+
+    // Ensure the stage exists before attempting WAF association
+    const webSocketStageCfn = webSocketStage.node.defaultChild as cdk.CfnResource;
+    if (webSocketStageCfn) {
+      webSocketWafAssociation.addDependency(webSocketStageCfn);
+    }
 
     // Global Web ACL for CloudFront (if using custom domain)
     // Note: WAFv2 with CLOUDFRONT scope must be deployed in us-east-1 region
