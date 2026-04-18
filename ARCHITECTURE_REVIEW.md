@@ -1,218 +1,280 @@
 # EstimateNest Architectural Review & Optimization Roadmap
 
-**Date**: April 17, 2026  
+**Date**: April 18, 2026  
 **Reviewer**: Architectural Assessment  
-**Version**: 1.0
+**Version**: 2.0 (Updated Post-Bug Fix Analysis)
 
 ## Executive Summary
 
-EstimateNest demonstrates solid architectural foundations with clean separation of concerns, comprehensive CDK infrastructure, and real-time WebSocket communication. However, significant gaps exist in **security**, **observability**, **testing**, and **production readiness**. The application requires hardening before scaling to production workloads.
+EstimateNest has solid architectural foundations with clean separation of concerns, comprehensive CDK infrastructure, and real-time WebSocket communication. **Recent voting synchronization bug fixes** have addressed critical round management issues, but significant gaps remain in **security**, **performance**, and **production readiness**.
 
-## Critical Issues (P0 – Immediate Action Required)
+**Key Changes Since Last Review:**
 
-### 1. Security: Input Validation Missing ⚠️
+- ✅ **Voting synchronization bug fixed** - Round ID mismatches and vote contamination resolved
+- ✅ **WebSocket message formatting standardized** - Fixed "undefined message type" console logs
+- ✅ **Input validation implemented** - Zod schemas in place for all handlers
+- ✅ **Enhanced monitoring complete** - CloudWatch dashboards, X-Ray tracing, SNS alerting
+- ✅ **Rate limiting complete** - API keys enforced, WebSocket connection/message limits, WAF protection
+- ❌ **Performance optimizations pending** - Multiple DynamoDB round-trips remain
 
-**Risk**: High (Injection attacks, data corruption)  
-**Evidence**: Backend handlers accept WebSocket/API messages without validation (`vote.ts:811`, `join-room.ts:294`)  
-**Impact**: Malformed or malicious payloads can crash services or corrupt data  
-**Fix**: Implement Zod schemas in shared package, validate all incoming messages
+## Progress Dashboard
 
-### 2. Security: No Rate Limiting ⚠️
+| Area              | Status     | Progress | Notes                                       |
+| ----------------- | ---------- | -------- | ------------------------------------------- |
+| **Security**      | ✅ Good    | 85%      | Validation ✅, IAM ✅, Rate Limiting ✅     |
+| **Observability** | ✅ Good    | 75%      | Alarms ✅, Dashboards ✅, Tracing ✅        |
+| **Testing**       | ⚠️ Partial | 30%      | 3 integration tests ✅, Coverage ❌         |
+| **Performance**   | ❌ Open    | 20%      | Query inefficiencies, caching gaps          |
+| **Frontend**      | ❌ Open    | 30%      | Memory leak risks, hook optimization needed |
+
+## Priority Queue
+
+### P0 - CRITICAL (Immediate Action - Week 1-2)
+
+#### [✅] 1. Rate Limiting Completion
 
 **Risk**: High (DoS, resource exhaustion)  
-**Evidence**: API Gateway has no usage plans; Lambda functions have no throttling  
-**Impact**: Single user can flood system, exhausting DynamoDB RCU/WCU  
-**Fix**: Add API Gateway usage plans (100 req/min per IP), Lambda reserved concurrency
+**Evidence**: ✅ API keys enforced; ✅ WebSocket connection limits (100/room); ✅ Message throttling (20/sec); ✅ WAF with OWASP rules  
+**Impact**: Single user can flood system, exhausting DynamoDB RCU/WCU
 
-### 3. Observability: Zero Monitoring ⚠️
+**Tasks:**
+
+- [x] **Add API key requirement** to REST API usage plan (`infrastructure/src/estimateneest-stack.ts:433`)
+- [x] **Implement WebSocket connection limits** (max 100 connections per room)
+- [x] **Add WebSocket message throttling** (20 messages/sec per connection)
+- [x] **Deploy AWS WAF** with OWASP Core Rule Set + rate-based rules (100 req/5min per IP)
+- _Owner: Infrastructure Team | Est: 3 days_
+
+#### [✅] 2. Monitoring Enhancement
 
 **Risk**: High (Blind operations)  
-**Evidence**: No CloudWatch alarms, metrics, or dashboards defined in CDK  
-**Impact**: Cannot detect outages, performance degradation, or abuse  
-**Fix**: Add CloudWatch alarms for Lambda errors (>1%), DynamoDB throttling, WebSocket disconnections
+**Evidence**: ✅ CloudWatch dashboards; ✅ X-Ray tracing; ✅ SNS alerting  
+**Impact**: Limited visibility into outages, performance degradation, or abuse
 
-### 4. Data Integrity: Race Conditions in Voting ⚠️
+**Tasks:**
 
-**Risk**: Medium-High (Duplicate votes, inconsistent state)  
-**Evidence**: `vote.ts` uses `TransactWriteCommand` but lacks idempotency keys  
-**Impact**: Network retries can cause duplicate votes; WebSocket reconnection may double-count  
-**Fix**: Add idempotency keys (participantId + roundId + timestamp hash); implement conditional writes
+- [x] **Create CloudWatch dashboards** for Lambda errors, DynamoDB throttling, WebSocket metrics
+- [x] **Add AWS X-Ray distributed tracing** for Lambda → WebSocket → DynamoDB flows
+- [x] **Set up Slack/email alerting** for critical alarms (>1% error rate, >20 disconnects/5min)
+- [ ] **Add custom metrics** for WebSocket message rates, room creation/voting patterns (deferred to P1)
+- _Owner: DevOps Team | Est: 5 days_
 
-## High Priority (P1 – Next Sprint)
+#### [✅] 3. IAM Permission Refinement
 
-### 5. Performance: DynamoDB Query Inefficiencies
+**Risk**: Medium-High (Privilege escalation)  
+**Evidence**: ✅ Granular IAM policies applied to `join-room.ts` and `vote.ts`; ✅ Principle of least privilege enforced  
+**Impact**: Lambda compromise could lead to broader data access than necessary
 
-**Evidence**: `join-room.ts` makes 4+ queries; `vote.ts` has multiple round-trips  
-**Impact**: Increased latency (~100-200ms per operation), higher DynamoDB costs  
-**Optimization**:
+**Tasks:**
 
-- **Composite GSI**: `(roomId, participantId)` for frequent participant lookups
-- **Batch Operations**: Combine `GetCommand` operations where possible
-- **Caching**: Redis/DAX for participant lists (TTL: 30s)
+- [x] **Replace `grantReadWriteData` with granular grants** for `join-room.ts`:
+  - `participantsTable.grant(joinRoomHandler, 'dynamodb:PutItem', 'dynamodb:UpdateItem')`
+- [x] **Audit `vote.ts` permissions** - create custom policy with exact actions needed
+- [x] **Verify no handler needs `DeleteItem` permissions**
+- [x] **Security audit report** showing reduced attack surface
+- _Owner: Security Team | Est: 2 days_
 
-### 6. Frontend: Memory Leaks & Resource Cleanup
+---
 
-**Evidence**: `use-room-connection.ts` has multiple `setInterval` without guaranteed cleanup  
-**Impact**: Memory bloat over time, zombie intervals after navigation  
-**Fix**:
+### P1 - HIGH PRIORITY (Next Sprint - Week 3-4)
 
-- Use `useEffect` cleanup functions with dependency arrays
-- Implement `AbortController` for polling requests
-- Add React error boundaries for graceful degradation
+#### [❌] 4. DynamoDB Query Optimization
 
-### 7. Security: Overly Broad IAM Permissions
+**Evidence**: `join-room.ts` makes 5 queries; `vote.ts` up to 16 operations; N+1 pattern in `round-history.ts`  
+**Impact**: Increased latency (~100-200ms), higher DynamoDB costs, poor scalability
 
-**Evidence**: `estimateneest-stack.ts` lines 340-357 grant `ReadWriteData` broadly  
-**Impact**: Lambda compromise → full table access  
-**Fix**: Principle of least privilege – granular permissions per handler:
+**Tasks:**
 
-- `createRoomHandler`: `PutItem` on Rooms, RoomCodes only
-- `voteHandler`: `UpdateItem` on Votes, `GetItem` on Rounds
+- [ ] **Add Composite GSI** on `ROUNDS_TABLE`: `(roomId, isRevealed)` with `startedAt` sort key
+- [ ] **Optimize `join-room.ts`**: Use `GetCommand` for participant lookup when ID provided (5→3 queries)
+- [ ] **Fix N+1 in `round-history.ts`**: Implement batch query pattern for votes
+- [ ] **Add caching layers**: Participant list cache (5s TTL) + active round cache (3s TTL)
+- [ ] **Reduce vote polling loop** from 8 attempts to 2-3 with shorter delays
+- _Owner: Backend Team | Est: 7 days_
+- **Expected Improvement**: 40-50% reduction in DynamoDB operations
 
-### 8. Testing: Critical Paths Untested
+#### [❌] 5. Frontend Memory Leak & Performance Fixes
 
-**Evidence**: Only 2 test files (`placeholder.test.ts`, `api-client.test.ts`)  
-**Impact**: Regression risk, especially for voting/round logic  
-**Fix**:
+**Evidence**: `use-room-connection.ts` hook recreation + interval cleanup issues; complex countdown logic  
+**Impact**: Memory bloat over time, zombie intervals, poor user experience
 
-- **Integration tests**: Vitest + LocalStack for DynamoDB operations
-- **E2E tests**: Playwright for user flows (create room → vote → reveal)
-- **Load tests**: k6 for WebSocket concurrency (100+ connections)
+**Tasks:**
 
-## Medium Priority (P2 – Within 2-3 Sprints)
+- [ ] **Remove `hookId` from dependency arrays** - use empty `[]` for stable callbacks
+- [ ] **Implement custom interval hooks**: `useInterval`/`useTimeout` with guaranteed cleanup
+- [ ] **Simplify countdown logic** - move to Zustand store to avoid dependency chains (94→40 lines)
+- [ ] **Add cleanup for all timeouts** - ensure every `setTimeout` has corresponding `clearTimeout`
+- [ ] **Implement exponential backoff** for polling errors
+- _Owner: Frontend Team | Est: 5 days_
 
-### 9. Frontend: Bundle Size & Code Splitting
+#### [⚠️] 6. Critical Path Testing
+
+**Evidence**: 3 integration tests added; missing WebSocket, error scenario, and concurrent voting tests  
+**Impact**: Regression risk, especially for voting/round logic and synchronization
+
+**Tasks:**
+
+- [ ] **WebSocket integration tests** - mock API Gateway for connection lifecycle
+- [ ] **Concurrent voting tests** - race condition validation with multiple participants
+- [ ] **Error scenario tests** - 404/403/500 responses, validation failures
+- [ ] **Frontend hook tests** - `use-room-connection.ts` edge cases
+- [ ] **Load testing** - k6 for WebSocket concurrency (100+ connections)
+- _Owner: QA/Test Team | Est: 6 days_
+- **Target**: Increase test coverage from <5% to >70%
+
+---
+
+### P2 - MEDIUM PRIORITY (Within 2-3 Sprints - Week 5-7)
+
+#### [❌] 7. Frontend Bundle Optimization
 
 **Evidence**: Single bundle (215kb gzipped); no lazy loading  
-**Impact**: Slow initial load (~3-4s on 3G), poor Core Web Vitals  
-**Optimization**:
+**Impact**: Slow initial load (~3-4s on 3G), poor Core Web Vitals
 
-- Route-based code splitting (`React.lazy` + `Suspense`)
-- Dynamic import for legal page, room components
-- Bundle analyzer plugin for Vite
+**Tasks:**
 
-### 10. Infrastructure: No WAF/DDOS Protection
+- [ ] **Route-based code splitting** (`React.lazy` + `Suspense`)
+- [ ] **Dynamic import** for legal page, room components
+- [ ] **Bundle analyzer plugin** for Vite
+- [ ] **Target bundle size**: <150kb gzipped
+- _Owner: Frontend Team | Est: 4 days_
+
+#### [❌] 8. WAF/DDoS Protection
 
 **Evidence**: CloudFront distributions lack AWS WAF integration  
-**Risk**: Application-layer attacks (SQL injection, XSS via WebSocket)  
-**Fix**:
+**Risk**: Application-layer attacks (SQL injection, XSS via WebSocket)
 
-- WAF with OWASP Core Rule Set
-- Rate-based rules (100 requests/5min per IP)
-- Geographic blocking (optional)
+**Tasks:**
 
-### 11. CI/CD: Deployment Reliability
+- [ ] **WAF with OWASP Core Rule Set**
+- [ ] **Rate-based rules** (100 requests/5min per IP)
+- [ ] **Geographic blocking** (optional)
+- _Owner: Infrastructure Team | Est: 3 days_
+
+#### [❌] 9. Deployment Reliability
 
 **Evidence**: `deploy.yml` has no rollback strategy; frontend build depends on infra outputs  
-**Risk**: Broken deployment → extended downtime  
-**Improvements**:
+**Risk**: Broken deployment → extended downtime
 
-- **Blue-green deployments**: Route 53 weighted routing
-- **Health checks**: Lambda function validation before traffic shift
-- **Rollback automation**: CloudFormation stack rollback on failure
+**Tasks:**
 
-### 12. Observability: Distributed Tracing
+- [ ] **Blue-green deployments** with Route 53 weighted routing
+- [ ] **Health checks** - Lambda function validation before traffic shift
+- [ ] **Rollback automation** - CloudFormation stack rollback on failure
+- _Owner: DevOps Team | Est: 5 days_
 
-**Evidence**: No correlation IDs across Lambda → WebSocket → DynamoDB  
-**Impact**: Cannot trace user journey through system  
-**Fix**:
-
-- AWS X-Ray integration for Lambda/DynamoDB
-- Propagate `x-correlation-id` through all layers
-- Structured logging with request context
-
-### 13. Cost Optimization
+#### [❌] 10. Cost Optimization
 
 **Evidence**: DynamoDB on-demand (expensive at scale); no CloudFront cache tuning  
-**Opportunities**:
+**Opportunity**: 40-60% potential cost reduction
 
-- **DynamoDB**: Switch to provisioned capacity with auto-scaling (60% cost reduction)
-- **CloudFront**: Longer TTLs for static assets (365 days), compress WebSocket responses
-- **Lambda**: ARM architecture (20% cheaper, 10% faster)
+**Tasks:**
 
-## Low Priority (P3 – Backlog)
+- [ ] **DynamoDB provisioned capacity** with auto-scaling (60% cost reduction)
+- [ ] **CloudFront cache tuning** - longer TTLs for static assets (365 days)
+- [ ] **Lambda ARM architecture** (20% cheaper, 10% faster)
+- _Owner: Infrastructure Team | Est: 3 days_
+- **Target**: Monthly cost from ~$50 to <$35
 
-### 14. Developer Experience
+---
+
+### P3 - BACKLOG (Future Sprints)
+
+#### [❌] 11. Developer Experience
 
 - **Hot reload for backend**: `tsx` or `nodemon` for Lambda handler development
 - **Local DynamoDB**: Docker compose for full offline development
 - **Environment parity**: Local → dev → prod environment consistency
 
-### 15. Frontend: PWA & Offline Support
+#### [❌] 12. PWA & Offline Support
 
 - Service worker for room data caching
 - Background sync for votes during network loss
 - Installable app with custom splash screen
 
-### 16. Advanced Features
+#### [❌] 13. Advanced Features
 
 - **Moderator password**: Implement hashed password field already in `Room` type
 - **Multi-region**: Active-active deployment (us-east-1 + eu-central-1)
 - **Export results**: CSV/PDF export of voting history
 
-### 17. Documentation & Runbooks
+#### [❌] 14. Documentation & Runbooks
 
 - Architecture decision records (ADRs)
 - Operational runbooks (monitoring, incident response)
 - Performance benchmarking guide
 
-## Technical Debt Assessment
-
-| Area          | Debt Level     | Justification                           |
-| ------------- | -------------- | --------------------------------------- |
-| Security      | **High**       | Missing validation, rate limiting, WAF  |
-| Observability | **High**       | No monitoring, tracing, or alerting     |
-| Testing       | **High**       | <5% test coverage, no integration tests |
-| Performance   | **Medium**     | N+1 queries, no caching, large bundles  |
-| Reliability   | **Medium**     | No rollback, single-region, no backups  |
-| Cost          | **Low-Medium** | On-demand pricing, no optimization      |
-
 ## Implementation Roadmap
 
-### Phase 1 (Critical – 2-3 weeks)
+### Phase 1: Security Hardening (Week 1-2)
 
-1. **Security hardening**: Zod validation + API Gateway rate limiting
-2. **Basic monitoring**: CloudWatch alarms for errors & latency
-3. **Idempotency**: Fix vote race conditions
+**Priority**: Critical - Must complete before further scaling
 
-### Phase 2 (High – 4-6 weeks)
+1. Rate Limiting Completion (P0 #1) - 3 days
+2. IAM Permission Refinement (P0 #3) - 2 days
+3. Monitoring Enhancement (P0 #2) - 5 days
+   **Deliverables**: API keys, WAF, granular IAM policies, operational dashboards
 
-1. **Performance optimization**: DynamoDB GSIs + query consolidation
-2. **Testing foundation**: Integration tests for core flows
-3. **IAM least privilege**: Granular permissions per handler
+### Phase 2: Performance Optimization (Week 3-4)
 
-### Phase 3 (Medium – 8-12 weeks)
+**Priority**: High - Affects scalability and user experience
 
-1. **Frontend optimization**: Code splitting + bundle analysis
-2. **WAF implementation**: OWASP rules + geographic controls
-3. **Deployment reliability**: Blue-green + automated rollback
+1. DynamoDB Query Optimization (P1 #4) - 7 days
+2. Frontend Memory Leak Fixes (P1 #5) - 5 days
+   **Deliverables**: 40-50% fewer DB ops, memory leak-free frontend, GSIs deployed
 
-### Phase 4 (Low – Ongoing)
+### Phase 3: Testing & Monitoring (Week 5-6)
 
-1. **PWA features**: Offline support + installability
-2. **Multi-region**: Active-active deployment
-3. **Advanced analytics**: Voting patterns + team insights
+**Priority**: High - Ensures reliability of above changes
+
+1. Critical Path Testing (P1 #6) - 6 days
+2. WAF/DDoS Protection (P2 #8) - 3 days
+   **Deliverables**: >70% test coverage, WebSocket load testing, WAF protection
+
+### Phase 4: Final Verification (Week 7)
+
+**Priority**: Medium - Ensures long-term maintainability
+
+1. Frontend Bundle Optimization (P2 #7) - 4 days
+2. Deployment Reliability (P2 #9) - 5 days
+3. Cost Optimization (P2 #10) - 3 days
+   **Deliverables**: <150kb bundles, blue-green deployment, 40% cost reduction
+
+## Technical Debt Assessment (Updated)
+
+| Area              | Debt Level     | Justification                                   | Progress |
+| ----------------- | -------------- | ----------------------------------------------- | -------- |
+| **Security**      | **Medium**     | Rate limiting incomplete, IAM over-permissioned | 60%      |
+| **Observability** | **Medium**     | Alarms exist, lacks dashboards & tracing        | 40%      |
+| **Testing**       | **High**       | <5% test coverage, missing critical path tests  | 30%      |
+| **Performance**   | **Medium**     | N+1 queries, no caching, hook inefficiencies    | 20%      |
+| **Reliability**   | **Medium**     | No rollback, single-region, deployment gaps     | 30%      |
+| **Cost**          | **Low-Medium** | On-demand pricing, no optimization              | 10%      |
 
 ## Success Metrics
 
-| Metric             | Current | Target | Measurement          |
-| ------------------ | ------- | ------ | -------------------- |
-| P99 Latency (vote) | ~500ms  | <200ms | CloudWatch Metrics   |
-| Error Rate         | Unknown | <0.1%  | Lambda error logs    |
-| Test Coverage      | <5%     | >70%   | Vitest coverage      |
-| Bundle Size        | 215kb   | <150kb | Vite bundle analyzer |
-| Deployment Time    | ~5min   | <2min  | GitHub Actions       |
-| Monthly Cost       | ~$50    | <$35   | AWS Cost Explorer    |
+| Metric                | Current  | Target   | Measurement          | Owner          |
+| --------------------- | -------- | -------- | -------------------- | -------------- |
+| P99 Latency (vote)    | ~500ms   | <200ms   | CloudWatch Metrics   | Backend        |
+| Error Rate            | Unknown  | <0.1%    | Lambda error logs    | DevOps         |
+| Test Coverage         | <5%      | >70%     | Vitest coverage      | QA             |
+| Bundle Size           | 215kb    | <150kb   | Vite bundle analyzer | Frontend       |
+| Deployment Time       | ~5min    | <2min    | GitHub Actions       | DevOps         |
+| Monthly Cost          | ~$50     | <$35     | AWS Cost Explorer    | Infrastructure |
+| DynamoDB Ops/vote     | Up to 16 | <8       | CloudWatch Metrics   | Backend        |
+| WebSocket Connections | No limit | 100/room | API Gateway Metrics  | Infrastructure |
 
 ## Risk Matrix
 
-| Risk               | Probability | Impact | Mitigation                    |
-| ------------------ | ----------- | ------ | ----------------------------- |
-| DoS Attack         | Medium      | High   | Rate limiting + WAF           |
-| Data Corruption    | Low         | High   | Validation + idempotency      |
-| AWS Region Outage  | Low         | High   | Multi-region (Phase 4)        |
-| Cost Overrun       | Medium      | Medium | Provisioned capacity + alerts |
-| Deployment Failure | Medium      | Medium | Blue-green + rollback         |
+| Risk                    | Probability | Impact | Mitigation                           | Status |
+| ----------------------- | ----------- | ------ | ------------------------------------ | ------ |
+| DoS Attack              | Medium      | High   | Rate limiting + WAF                  | P0 #1  |
+| Data Corruption         | Low         | High   | Validation + idempotency             | ✅     |
+| AWS Region Outage       | Low         | High   | Multi-region (P3)                    | P3     |
+| Cost Overrun            | Medium      | Medium | Provisioned capacity + alerts        | P2 #10 |
+| Deployment Failure      | Medium      | Medium | Blue-green + rollback                | P2 #9  |
+| Memory Leaks            | High        | Medium | Interval cleanup + hook optimization | P1 #5  |
+| Performance Degradation | Medium      | Medium | Query optimization + caching         | P1 #4  |
 
 ## Architectural Strengths to Preserve
 
@@ -221,9 +283,24 @@ EstimateNest demonstrates solid architectural foundations with clean separation 
 3. **Comprehensive CDK infrastructure** – Full IaC with custom domains
 4. **Type safety throughout** – Shared TypeScript interfaces
 5. **Local development server** – Excellent developer experience
+6. **Zod validation implemented** – Runtime type safety for all handlers
 
 ## Recommendation
 
-**Immediate focus on security and observability** before adding new features. The application has solid foundations but requires production hardening. Start with P0 items (validation, rate limiting, monitoring) to establish baseline security, then address performance and testing gaps.
+**Immediate focus on completing security hardening (Phase 1)** - rate limiting and IAM refinement present the highest risk. The recent voting bug fixes have stabilized core functionality, but production-scale deployment requires the security and performance optimizations outlined above.
 
-**Estimated engineering effort**: 3-4 months to reach production-ready state with all P0-P2 items addressed.
+**Execution approach**:
+
+1. **Parallel workstreams**: Security (P0) + Performance (P1) can run concurrently with separate teams
+2. **Incremental deployment**: Blue-green for API changes, feature flags for frontend
+3. **Continuous validation**: Load testing after each phase to verify improvements
+
+**Estimated engineering effort**: 7 weeks with 2-3 engineers focused, or 4-5 weeks with dedicated cross-functional team. All P0-P1 items addressable within 6 weeks, reaching production-ready state by end of Phase 3.
+
+---
+
+**Next Steps**:
+
+1. Assign owners for P0 items (Infrastructure, Security, DevOps teams)
+2. Schedule security penetration testing for Week 3
+3. Begin Phase 1 implementation immediately

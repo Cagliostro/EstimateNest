@@ -12,7 +12,10 @@ import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -73,6 +76,13 @@ export class EstimateNestStack extends cdk.Stack {
       timeToLiveAttribute: 'expiresAt',
     });
 
+    const rateLimitTable = new dynamodb.Table(this, 'RateLimitTable', {
+      partitionKey: { name: 'key', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'timestamp', type: dynamodb.AttributeType.NUMBER },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: 'expiresAt',
+    });
+
     // ====================
     // Lambda Functions
     // ====================
@@ -92,6 +102,7 @@ export class EstimateNestStack extends cdk.Stack {
       bundling: {
         format: lambdaNodejs.OutputFormat.ESM,
       },
+      tracing: lambda.Tracing.ACTIVE,
     });
 
     const websocketConnectHandler = new lambdaNodejs.NodejsFunction(
@@ -110,6 +121,7 @@ export class EstimateNestStack extends cdk.Stack {
         bundling: {
           format: lambdaNodejs.OutputFormat.ESM,
         },
+        tracing: lambda.Tracing.ACTIVE,
       }
     );
 
@@ -129,6 +141,7 @@ export class EstimateNestStack extends cdk.Stack {
         bundling: {
           format: lambdaNodejs.OutputFormat.ESM,
         },
+        tracing: lambda.Tracing.ACTIVE,
       }
     );
 
@@ -144,10 +157,12 @@ export class EstimateNestStack extends cdk.Stack {
         ROUNDS_TABLE: roundsTable.tableName,
         PARTICIPANTS_TABLE: participantsTable.tableName,
         ROOMS_TABLE: roomsTable.tableName,
+        RATE_LIMIT_TABLE: rateLimitTable.tableName,
       },
       bundling: {
         format: lambdaNodejs.OutputFormat.ESM,
       },
+      tracing: lambda.Tracing.ACTIVE,
     });
 
     const webSocketApi = new apigatewayv2.WebSocketApi(this, 'WebSocketApi', {
@@ -304,6 +319,7 @@ export class EstimateNestStack extends cdk.Stack {
       bundling: {
         format: lambdaNodejs.OutputFormat.ESM,
       },
+      tracing: lambda.Tracing.ACTIVE,
     });
 
     const roundHistoryHandler = new lambdaNodejs.NodejsFunction(this, 'RoundHistoryHandler', {
@@ -321,6 +337,7 @@ export class EstimateNestStack extends cdk.Stack {
       bundling: {
         format: lambdaNodejs.OutputFormat.ESM,
       },
+      tracing: lambda.Tracing.ACTIVE,
     });
 
     const updateRoomHandler = new lambdaNodejs.NodejsFunction(this, 'UpdateRoomHandler', {
@@ -338,6 +355,7 @@ export class EstimateNestStack extends cdk.Stack {
       bundling: {
         format: lambdaNodejs.OutputFormat.ESM,
       },
+      tracing: lambda.Tracing.ACTIVE,
     });
 
     // Grant permissions - principle of least privilege
@@ -346,7 +364,13 @@ export class EstimateNestStack extends cdk.Stack {
     roomCodesTable.grantWriteData(createRoomHandler);
     // join-room.ts: Reads room codes, reads/writes participants, reads rounds and votes
     roomCodesTable.grantReadData(joinRoomHandler);
-    participantsTable.grantReadWriteData(joinRoomHandler);
+    // Granular permissions for participants table: GetItem, Query, PutItem, UpdateItem
+    joinRoomHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:PutItem', 'dynamodb:UpdateItem'],
+        resources: [participantsTable.tableArn],
+      })
+    );
     roundsTable.grantReadData(joinRoomHandler);
     votesTable.grantReadData(joinRoomHandler);
     // round-history.ts: Reads room codes, rounds, and votes
@@ -356,11 +380,49 @@ export class EstimateNestStack extends cdk.Stack {
     // websocket-connect.ts and websocket-disconnect.ts: Read/write participants only
     participantsTable.grantReadWriteData(websocketConnectHandler);
     participantsTable.grantReadWriteData(websocketDisconnectHandler);
-    // vote.ts (WebSocket): Read/write votes, rounds, participants; read rooms
-    votesTable.grantReadWriteData(voteHandler);
-    roundsTable.grantReadWriteData(voteHandler);
-    participantsTable.grantReadWriteData(voteHandler);
-    roomsTable.grantReadData(voteHandler);
+    // vote.ts (WebSocket): Read/write votes, rounds, participants; read rooms; rate limiting
+    // Granular permissions per table
+    // roomsTable: GetItem only
+    voteHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:GetItem'],
+        resources: [roomsTable.tableArn],
+      })
+    );
+    // rateLimitTable: Query, PutItem
+    voteHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:Query', 'dynamodb:PutItem'],
+        resources: [rateLimitTable.tableArn],
+      })
+    );
+    // participantsTable: Query, UpdateItem
+    voteHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:Query', 'dynamodb:UpdateItem'],
+        resources: [participantsTable.tableArn],
+      })
+    );
+    // roundsTable: GetItem, Query, PutItem, UpdateItem, TransactWriteItems
+    voteHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          'dynamodb:GetItem',
+          'dynamodb:Query',
+          'dynamodb:PutItem',
+          'dynamodb:UpdateItem',
+          'dynamodb:TransactWriteItems',
+        ],
+        resources: [roundsTable.tableArn],
+      })
+    );
+    // votesTable: Query, PutItem, TransactWriteItems
+    voteHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:Query', 'dynamodb:PutItem', 'dynamodb:TransactWriteItems'],
+        resources: [votesTable.tableArn],
+      })
+    );
     // update-room.ts: Read/write rooms, read room codes, read participants (for moderator check)
     roomsTable.grantReadWriteData(updateRoomHandler);
     roomCodesTable.grantReadData(updateRoomHandler);
@@ -420,12 +482,20 @@ export class EstimateNestStack extends cdk.Stack {
     }
 
     const roomsResource = restApi.root.addResource('rooms');
-    roomsResource.addMethod('POST', new apigateway.LambdaIntegration(createRoomHandler));
+    roomsResource.addMethod('POST', new apigateway.LambdaIntegration(createRoomHandler), {
+      apiKeyRequired: true,
+    });
     const roomByCodeResource = roomsResource.addResource('{code}');
-    roomByCodeResource.addMethod('GET', new apigateway.LambdaIntegration(joinRoomHandler));
-    roomByCodeResource.addMethod('PUT', new apigateway.LambdaIntegration(updateRoomHandler));
+    roomByCodeResource.addMethod('GET', new apigateway.LambdaIntegration(joinRoomHandler), {
+      apiKeyRequired: true,
+    });
+    roomByCodeResource.addMethod('PUT', new apigateway.LambdaIntegration(updateRoomHandler), {
+      apiKeyRequired: true,
+    });
     const roomHistoryResource = roomByCodeResource.addResource('history');
-    roomHistoryResource.addMethod('GET', new apigateway.LambdaIntegration(roundHistoryHandler));
+    roomHistoryResource.addMethod('GET', new apigateway.LambdaIntegration(roundHistoryHandler), {
+      apiKeyRequired: true,
+    });
 
     // ====================
     // API Gateway Rate Limiting (Usage Plan)
@@ -444,6 +514,17 @@ export class EstimateNestStack extends cdk.Stack {
     usagePlan.addApiStage({
       stage: restApi.deploymentStage,
     });
+
+    // Create API Key for REST API with deterministic value for each environment
+    const apiKeyValue = `estimatenest-${props.envName}-${this.account}-${this.region}`;
+    const restApiKey = new apigateway.CfnApiKey(this, 'RestApiKey', {
+      name: `estimatenest-rest-${props.envName}-key`,
+      enabled: true,
+      value: apiKeyValue,
+    });
+
+    // Associate API Key with Usage Plan
+    usagePlan.addApiKey(restApiKey);
 
     // ====================
     // API Gateway (WebSocket)
@@ -590,6 +671,14 @@ export class EstimateNestStack extends cdk.Stack {
     }
 
     // ====================
+    // SNS Alerting Topic
+    // ====================
+
+    const alertTopic = new sns.Topic(this, 'AlertTopic', {
+      displayName: `EstimateNest-${props.envName}-Alerts`,
+    });
+
+    // ====================
     // CloudWatch Alarms
     // ====================
 
@@ -631,6 +720,10 @@ export class EstimateNestStack extends cdk.Stack {
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       });
 
+      // Add SNS alert actions
+      errorRateAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+      errorRateAlarm.addOkAction(new cloudwatchActions.SnsAction(alertTopic));
+
       // Add alarm description
       errorRateAlarm.node.addMetadata('description', `Error rate >1% for ${func.functionName}`);
     });
@@ -644,7 +737,7 @@ export class EstimateNestStack extends cdk.Stack {
       });
 
       // Throttle alarm
-      new cloudwatch.Alarm(this, `DynamoDBThrottleAlarm${index}`, {
+      const throttleAlarm = new cloudwatch.Alarm(this, `DynamoDBThrottleAlarm${index}`, {
         alarmName: `${table.tableName}-Throttles`,
         metric: throttledRequests,
         threshold: 1,
@@ -652,6 +745,9 @@ export class EstimateNestStack extends cdk.Stack {
         comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       });
+      // Add SNS alert actions
+      throttleAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+      throttleAlarm.addOkAction(new cloudwatchActions.SnsAction(alertTopic));
     });
 
     // WebSocket API error alarm (using CloudWatch metrics from API Gateway)
@@ -665,7 +761,7 @@ export class EstimateNestStack extends cdk.Stack {
       period: cdk.Duration.minutes(5),
     });
 
-    new cloudwatch.Alarm(this, 'WebSocketApi4xxAlarm', {
+    const webSocketApi4xxAlarm = new cloudwatch.Alarm(this, 'WebSocketApi4xxAlarm', {
       alarmName: `WebSocketApi-${webSocketApi.apiId}-4XXErrors`,
       metric: webSocketApiMetricErrors,
       threshold: 10,
@@ -673,6 +769,9 @@ export class EstimateNestStack extends cdk.Stack {
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
+    // Add SNS alert actions
+    webSocketApi4xxAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+    webSocketApi4xxAlarm.addOkAction(new cloudwatchActions.SnsAction(alertTopic));
 
     // WebSocket disconnect alarm
     const webSocketDisconnectMetric = new cloudwatch.Metric({
@@ -685,7 +784,7 @@ export class EstimateNestStack extends cdk.Stack {
       period: cdk.Duration.minutes(5),
     });
 
-    new cloudwatch.Alarm(this, 'WebSocketDisconnectAlarm', {
+    const webSocketDisconnectAlarm = new cloudwatch.Alarm(this, 'WebSocketDisconnectAlarm', {
       alarmName: `WebSocketApi-${webSocketApi.apiId}-DisconnectCount`,
       metric: webSocketDisconnectMetric,
       threshold: 20, // Alert if more than 20 disconnections in 5 minutes
@@ -693,6 +792,316 @@ export class EstimateNestStack extends cdk.Stack {
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
+    // Add SNS alert actions
+    webSocketDisconnectAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+    webSocketDisconnectAlarm.addOkAction(new cloudwatchActions.SnsAction(alertTopic));
+
+    // REST API error alarm (4XX errors including rate limiting)
+    const restApiMetricErrors = new cloudwatch.Metric({
+      namespace: 'AWS/ApiGateway',
+      metricName: '4XXError',
+      dimensionsMap: {
+        ApiId: restApi.restApiId,
+        Stage: restApi.deploymentStage.stageName,
+      },
+      statistic: 'Sum',
+      period: cdk.Duration.minutes(5),
+    });
+
+    const restApi4xxAlarm = new cloudwatch.Alarm(this, 'RestApi4xxAlarm', {
+      alarmName: `RestApi-${restApi.restApiId}-4XXErrors`,
+      metric: restApiMetricErrors,
+      threshold: 10,
+      evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    // Add SNS alert actions
+    restApi4xxAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+    restApi4xxAlarm.addOkAction(new cloudwatchActions.SnsAction(alertTopic));
+
+    // ====================
+    // CloudWatch Dashboard
+    // ====================
+
+    const dashboard = new cloudwatch.Dashboard(this, 'MonitoringDashboard', {
+      dashboardName: `EstimateNest-${props.envName}-Monitoring`,
+    });
+
+    // Lambda error rate widget
+    const lambdaErrorWidget = new cloudwatch.GraphWidget({
+      title: 'Lambda Error Rates',
+      left: lambdaFunctions.map((func) =>
+        func.metricErrors({ statistic: 'Sum', period: cdk.Duration.minutes(5) })
+      ),
+      right: lambdaFunctions.map((func) =>
+        func.metricInvocations({ statistic: 'Sum', period: cdk.Duration.minutes(5) })
+      ),
+      leftYAxis: { label: 'Errors', showUnits: false },
+      rightYAxis: { label: 'Invocations', showUnits: false },
+      width: 24,
+    });
+
+    // DynamoDB throttling widget
+    const dynamoDbThrottleWidget = new cloudwatch.GraphWidget({
+      title: 'DynamoDB Throttled Requests',
+      left: tables.map((table) =>
+        table.metricThrottledRequests({ statistic: 'Sum', period: cdk.Duration.minutes(5) })
+      ),
+      leftYAxis: { label: 'Throttles', showUnits: false },
+      width: 24,
+    });
+
+    // WebSocket metrics widget
+    const webSocketWidget = new cloudwatch.GraphWidget({
+      title: 'WebSocket API Metrics',
+      left: [
+        new cloudwatch.Metric({
+          namespace: 'AWS/ApiGatewayV2',
+          metricName: 'ConnectCount',
+          dimensionsMap: { ApiId: webSocketApi.apiId },
+          statistic: 'Sum',
+          period: cdk.Duration.minutes(5),
+        }),
+        new cloudwatch.Metric({
+          namespace: 'AWS/ApiGatewayV2',
+          metricName: 'DisconnectCount',
+          dimensionsMap: { ApiId: webSocketApi.apiId },
+          statistic: 'Sum',
+          period: cdk.Duration.minutes(5),
+        }),
+        new cloudwatch.Metric({
+          namespace: 'AWS/ApiGatewayV2',
+          metricName: 'MessageCount',
+          dimensionsMap: { ApiId: webSocketApi.apiId },
+          statistic: 'Sum',
+          period: cdk.Duration.minutes(5),
+        }),
+      ],
+      leftYAxis: { label: 'Count', showUnits: false },
+      width: 24,
+    });
+
+    // REST API errors widget
+    const restApiWidget = new cloudwatch.GraphWidget({
+      title: 'REST API 4XX Errors',
+      left: [restApiMetricErrors],
+      leftYAxis: { label: 'Errors', showUnits: false },
+      width: 24,
+    });
+
+    // Add widgets to dashboard
+    dashboard.addWidgets(lambdaErrorWidget);
+    dashboard.addWidgets(dynamoDbThrottleWidget);
+    dashboard.addWidgets(webSocketWidget);
+    dashboard.addWidgets(restApiWidget);
+
+    // WAF blocked requests alarm (if WAF is enabled)
+    // Will be added after WAF is created (see below)
+
+    // ====================
+    // WAF (Web Application Firewall)
+    // ====================
+
+    // Regional Web ACL for API Gateway (REST and WebSocket)
+    const regionalWebAcl = new wafv2.CfnWebACL(this, 'RegionalWebACL', {
+      defaultAction: { allow: {} },
+      scope: 'REGIONAL',
+      visibilityConfig: {
+        cloudWatchMetricsEnabled: true,
+        metricName: `estimatenest-${props.envName}-regional-webacl`,
+        sampledRequestsEnabled: true,
+      },
+      rules: [
+        // AWS Managed Rules - OWASP Top 10
+        {
+          name: 'AWS-AWSManagedRulesCommonRuleSet',
+          priority: 0,
+          overrideAction: { none: {} },
+          statement: {
+            managedRuleGroupStatement: {
+              vendorName: 'AWS',
+              name: 'AWSManagedRulesCommonRuleSet',
+            },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: `estimatenest-${props.envName}-owasp-common`,
+            sampledRequestsEnabled: true,
+          },
+        },
+        // Rate-based rule for REST API (limit 100 requests per 5 minutes per IP)
+        {
+          name: 'RateLimitREST',
+          priority: 1,
+          action: { block: {} },
+          statement: {
+            rateBasedStatement: {
+              limit: 100,
+              aggregateKeyType: 'IP',
+              // Apply to REST API paths
+              scopeDownStatement: {
+                byteMatchStatement: {
+                  fieldToMatch: { uriPath: {} },
+                  positionalConstraint: 'STARTS_WITH',
+                  searchString: '/rooms',
+                  textTransformations: [{ priority: 0, type: 'NONE' }],
+                },
+              },
+            },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: `estimatenest-${props.envName}-rest-ratelimit`,
+            sampledRequestsEnabled: true,
+          },
+        },
+        // Rate-based rule for WebSocket API (limit 20 connections per 5 minutes per IP)
+        {
+          name: 'RateLimitWebSocket',
+          priority: 2,
+          action: { block: {} },
+          statement: {
+            rateBasedStatement: {
+              limit: 20,
+              aggregateKeyType: 'IP',
+              // Apply to WebSocket connect ($connect route)
+              scopeDownStatement: {
+                byteMatchStatement: {
+                  fieldToMatch: { uriPath: {} },
+                  positionalConstraint: 'EXACTLY',
+                  searchString: '$connect',
+                  textTransformations: [{ priority: 0, type: 'NONE' }],
+                },
+              },
+            },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: `estimatenest-${props.envName}-ws-ratelimit`,
+            sampledRequestsEnabled: true,
+          },
+        },
+      ],
+    });
+
+    // Associate Web ACL with REST API Gateway
+    new wafv2.CfnWebACLAssociation(this, 'RestApiWebACLAssociation', {
+      resourceArn: `arn:aws:apigateway:${this.region}::/restapis/${restApi.restApiId}/stages/${restApi.deploymentStage.stageName}`,
+      webAclArn: regionalWebAcl.attrArn,
+    });
+
+    // Associate Web ACL with WebSocket API Gateway
+    new wafv2.CfnWebACLAssociation(this, 'WebSocketApiWebACLAssociation', {
+      resourceArn: `arn:aws:apigateway:${this.region}::/apis/${webSocketApi.apiId}/stages/${props.envName}`,
+      webAclArn: regionalWebAcl.attrArn,
+    });
+
+    // Global Web ACL for CloudFront (if using custom domain)
+    if (certificate && hostedZone) {
+      const globalWebAcl = new wafv2.CfnWebACL(this, 'GlobalWebACL', {
+        defaultAction: { allow: {} },
+        scope: 'CLOUDFRONT',
+        visibilityConfig: {
+          cloudWatchMetricsEnabled: true,
+          metricName: `estimatenest-${props.envName}-global-webacl`,
+          sampledRequestsEnabled: true,
+        },
+        rules: [
+          {
+            name: 'AWS-AWSManagedRulesCommonRuleSet',
+            priority: 0,
+            overrideAction: { none: {} },
+            statement: {
+              managedRuleGroupStatement: {
+                vendorName: 'AWS',
+                name: 'AWSManagedRulesCommonRuleSet',
+              },
+            },
+            visibilityConfig: {
+              cloudWatchMetricsEnabled: true,
+              metricName: `estimatenest-${props.envName}-cf-owasp`,
+              sampledRequestsEnabled: true,
+            },
+          },
+        ],
+      });
+
+      // Associate with CloudFront distribution
+      new wafv2.CfnWebACLAssociation(this, 'CloudFrontWebACLAssociation', {
+        resourceArn: `arn:aws:cloudfront::${this.account}:distribution/${distribution.distributionId}`,
+        webAclArn: globalWebAcl.attrArn,
+      });
+
+      // Global Web ACL blocked requests alarm
+      const globalBlockedMetric = new cloudwatch.Metric({
+        namespace: 'AWS/WAFV2',
+        metricName: 'BlockedRequests',
+        dimensionsMap: {
+          WebACL: globalWebAcl.ref,
+          Region: 'global', // CloudFront scope uses global region
+        },
+        statistic: 'Sum',
+        period: cdk.Duration.minutes(5),
+      });
+
+      const globalWebAclBlockedAlarm = new cloudwatch.Alarm(this, 'GlobalWebAclBlockedAlarm', {
+        alarmName: `GlobalWebACL-${globalWebAcl.ref}-BlockedRequests`,
+        metric: globalBlockedMetric,
+        threshold: 10,
+        evaluationPeriods: 2,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      // Add SNS alert actions
+      globalWebAclBlockedAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+      globalWebAclBlockedAlarm.addOkAction(new cloudwatchActions.SnsAction(alertTopic));
+    }
+
+    // WAF blocked requests alarms
+    // Regional Web ACL blocked requests
+    const regionalBlockedMetric = new cloudwatch.Metric({
+      namespace: 'AWS/WAFV2',
+      metricName: 'BlockedRequests',
+      dimensionsMap: {
+        WebACL: regionalWebAcl.ref,
+        Region: this.region,
+      },
+      statistic: 'Sum',
+      period: cdk.Duration.minutes(5),
+    });
+
+    const regionalWebAclBlockedAlarm = new cloudwatch.Alarm(this, 'RegionalWebAclBlockedAlarm', {
+      alarmName: `RegionalWebACL-${regionalWebAcl.ref}-BlockedRequests`,
+      metric: regionalBlockedMetric,
+      threshold: 10,
+      evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    // Add SNS alert actions
+    regionalWebAclBlockedAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+    regionalWebAclBlockedAlarm.addOkAction(new cloudwatchActions.SnsAction(alertTopic));
+
+    // WAF blocked requests widget
+    const wafWidget = new cloudwatch.GraphWidget({
+      title: 'WAF Blocked Requests',
+      left: [
+        new cloudwatch.Metric({
+          namespace: 'AWS/WAFV2',
+          metricName: 'BlockedRequests',
+          dimensionsMap: {
+            WebACL: regionalWebAcl.ref,
+            Region: this.region,
+          },
+          statistic: 'Sum',
+          period: cdk.Duration.minutes(5),
+        }),
+      ],
+      leftYAxis: { label: 'Blocked Requests', showUnits: false },
+      width: 24,
+    });
+    dashboard.addWidgets(wafWidget);
 
     // ====================
     // Outputs
@@ -722,6 +1131,11 @@ export class EstimateNestStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, 'WebSocketUrl', {
       value: webSocketCustomUrl || webSocketStage.url,
+    });
+
+    new cdk.CfnOutput(this, 'RestApiKeyValue', {
+      value: apiKeyValue,
+      description: 'API Key value for REST API requests',
     });
   }
 }

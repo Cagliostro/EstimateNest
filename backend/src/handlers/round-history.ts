@@ -1,10 +1,11 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import AWSXRay from 'aws-xray-sdk';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { Round, Vote, validateRoomCodePath } from '@estimatenest/shared';
 import { ZodError } from 'zod';
 
-const client = new DynamoDBClient({});
+const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
 const docClient = DynamoDBDocumentClient.from(client);
 
 const ROOM_CODES_TABLE = process.env.ROOM_CODES_TABLE!;

@@ -1,10 +1,11 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import AWSXRay from 'aws-xray-sdk';
 import { DynamoDBDocumentClient, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { broadcastToRoom } from '../utils/broadcast';
 import { Participant } from '@estimatenest/shared';
 
-const client = new DynamoDBClient({});
+const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
 const docClient = DynamoDBDocumentClient.from(client);
 
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;

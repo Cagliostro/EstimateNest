@@ -1,16 +1,21 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import AWSXRay from 'aws-xray-sdk';
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  UpdateCommand,
+  QueryCommand,
+} from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { Room, validateUpdateRoomRequest, validateRoomCodePath } from '@estimatenest/shared';
 import { ZodError } from 'zod';
 
-const client = new DynamoDBClient({});
+const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
 const docClient = DynamoDBDocumentClient.from(client);
 
 const ROOMS_TABLE = process.env.ROOMS_TABLE!;
 const ROOM_CODES_TABLE = process.env.ROOM_CODES_TABLE!;
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
-const QueryCommand = DynamoDBDocumentClient.from(client).send.constructor.prototype.constructor;
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   try {

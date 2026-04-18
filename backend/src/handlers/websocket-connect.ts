@@ -1,11 +1,12 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import AWSXRay from 'aws-xray-sdk';
 import { DynamoDBDocumentClient, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda';
 import { broadcastToRoom } from '../utils/broadcast';
 import { Participant, validateWebSocketConnectionParams } from '@estimatenest/shared';
 import { ZodError } from 'zod';
 
-const client = new DynamoDBClient({});
+const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
 const docClient = DynamoDBDocumentClient.from(client);
 
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
@@ -41,6 +42,30 @@ export const handler = async (
       'stage:',
       event.requestContext.stage
     );
+
+    // Check connection limit (max 100 active connections per room)
+    const activeParticipantsResult = await docClient.send(
+      new QueryCommand({
+        TableName: PARTICIPANTS_TABLE,
+        KeyConditionExpression: 'roomId = :roomId',
+        FilterExpression: 'attribute_exists(connectionId) AND connectionId <> :rest',
+        ExpressionAttributeValues: {
+          ':roomId': roomId,
+          ':rest': 'REST',
+        },
+        Select: 'COUNT',
+      })
+    );
+
+    if (activeParticipantsResult.Count >= 100) {
+      return {
+        statusCode: 429,
+        body: JSON.stringify({
+          type: 'error',
+          payload: { error: 'Connection limit exceeded (max 100 connections per room)' },
+        }),
+      };
+    }
 
     // Update participant with WebSocket connection ID
     await docClient.send(

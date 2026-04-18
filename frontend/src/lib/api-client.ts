@@ -51,11 +51,16 @@ export const apiClient = {
    * Create a new planning poker room
    */
   async createRoom(request: CreateRoomRequest): Promise<CreateRoomResponse> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (config.apiKey) {
+      headers['x-api-key'] = config.apiKey;
+    }
+
     const response = await fetch(`${config.apiUrl}/rooms`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(request),
     });
 
@@ -88,7 +93,14 @@ export const apiClient = {
       url.searchParams.set('participantId', participantId);
     }
 
-    const response = await fetch(url.toString());
+    const headers: Record<string, string> = {};
+    if (config.apiKey) {
+      headers['x-api-key'] = config.apiKey;
+    }
+
+    const response = await fetch(url.toString(), {
+      headers,
+    });
 
     if (!response.ok) {
       let errorMessage = `Failed to join room: ${response.status}`;
@@ -109,7 +121,14 @@ export const apiClient = {
    * @param code Room short code
    */
   async fetchRoundHistory(code: string): Promise<RoundHistoryItem[]> {
-    const response = await fetch(`${config.apiUrl}/rooms/${code}/history`);
+    const headers: Record<string, string> = {};
+    if (config.apiKey) {
+      headers['x-api-key'] = config.apiKey;
+    }
+
+    const response = await fetch(`${config.apiUrl}/rooms/${code}/history`, {
+      headers,
+    });
 
     if (!response.ok) {
       let errorMessage = `Failed to fetch round history: ${response.status}`;
