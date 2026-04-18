@@ -993,7 +993,7 @@ export class EstimateNestStack extends cdk.Stack {
 
     // Associate Web ACL with WebSocket API Gateway
     const webSocketStageArn = cdk.Fn.sub(
-      'arn:aws:apigateway:${AWS::Region}::/apis/${ApiId}/stages/${StageName}',
+      'arn:aws:apigateway:${AWS::Region}:${AWS::AccountId}:/apis/${ApiId}/stages/${StageName}',
       {
         ApiId: webSocketApi.apiId, // CDK token that resolves to the CloudFormation Ref
         StageName: webSocketStage.stageName, // static string (e.g., 'prod')
