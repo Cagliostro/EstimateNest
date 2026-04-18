@@ -25,8 +25,8 @@ export const handler = async (
       return {
         statusCode: 400,
         body: JSON.stringify({
-          error: 'Invalid roomId or participantId format',
-          details: error.errors,
+          type: 'error',
+          payload: { error: 'Invalid roomId or participantId format', details: error.errors },
         }),
       };
     }
@@ -97,7 +97,7 @@ export const handler = async (
 
     return {
       statusCode: 200,
-      body: JSON.stringify({ message: 'Connected' }),
+      body: JSON.stringify({ type: 'connected', payload: { message: 'Connected' } }),
     };
   } catch (error) {
     console.error('WebSocket connect error:', error);
@@ -107,15 +107,15 @@ export const handler = async (
       return {
         statusCode: 400,
         body: JSON.stringify({
-          error: 'Invalid input format',
-          details: error.errors,
+          type: 'error',
+          payload: { error: 'Invalid input format', details: error.errors },
         }),
       };
     }
 
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: 'Internal server error' }),
+      body: JSON.stringify({ type: 'error', payload: { error: 'Internal server error' } }),
     };
   }
 };

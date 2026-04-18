@@ -86,22 +86,7 @@ export const useRoomStore = create<RoomState>((set) => ({
       votes: [...state.votes.filter((v) => v.participantId !== vote.participantId), vote],
     })),
 
-  setVotes: (votes) =>
-    set((state) => {
-      // Merge votes: keep existing votes unless replaced by new ones with same participantId
-      const mergedVotes = [...state.votes];
-      votes.forEach((newVote) => {
-        const existingIndex = mergedVotes.findIndex(
-          (v) => v.participantId === newVote.participantId
-        );
-        if (existingIndex >= 0) {
-          mergedVotes[existingIndex] = newVote;
-        } else {
-          mergedVotes.push(newVote);
-        }
-      });
-      return { votes: mergedVotes };
-    }),
+  setVotes: (votes) => set({ votes }),
 
   revealVotes: () => set({ isRevealed: true }),
 

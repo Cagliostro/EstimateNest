@@ -156,6 +156,13 @@ export const errorMessageSchema = z.object({
   }),
 });
 
+export const ackMessageSchema = z.object({
+  type: z.literal('ack'),
+  payload: z.object({
+    message: z.string(),
+  }),
+});
+
 export const webSocketMessageSchema = z.discriminatedUnion('type', [
   joinMessageSchema,
   updateParticipantMessageSchema,
@@ -167,6 +174,7 @@ export const webSocketMessageSchema = z.discriminatedUnion('type', [
   participantListMessageSchema,
   roundUpdateMessageSchema,
   participantUpdatedMessageSchema,
+  ackMessageSchema,
   autoRevealCountdownMessageSchema,
   errorMessageSchema,
 ]);

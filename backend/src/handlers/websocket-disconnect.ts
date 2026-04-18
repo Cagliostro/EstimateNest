@@ -30,7 +30,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     const participant = queryResult.Items?.[0];
     if (!participant) {
       // No participant found with this connectionId, just return success
-      return { statusCode: 200, body: JSON.stringify({ message: 'Disconnected' }) };
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ type: 'disconnected', payload: { message: 'Disconnected' } }),
+      };
     }
 
     const { roomId, participantId } = participant;
@@ -85,13 +88,13 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     return {
       statusCode: 200,
-      body: JSON.stringify({ message: 'Disconnected' }),
+      body: JSON.stringify({ type: 'disconnected', payload: { message: 'Disconnected' } }),
     };
   } catch (error) {
     console.error('WebSocket disconnect error:', error);
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: 'Internal server error' }),
+      body: JSON.stringify({ type: 'error', payload: { error: 'Internal server error' } }),
     };
   }
 };

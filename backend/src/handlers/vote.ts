@@ -133,7 +133,7 @@ async function handleVote(
     }
   } else {
     console.log('No roundId provided, finding or creating active round');
-    // Find or create active round
+    // Find all unrevealed rounds (should be at most one, but handle multiple)
     const activeRoundsResult = await docClient.send(
       new QueryCommand({
         TableName: ROUNDS_TABLE,
@@ -143,14 +143,22 @@ async function handleVote(
           ':roomId': roomId,
           ':false': false,
         },
-        Limit: 1,
         ConsistentRead: true,
       })
     );
 
-    if (activeRoundsResult.Items && activeRoundsResult.Items.length > 0) {
-      const item = activeRoundsResult.Items[0];
-      console.log('Active round found:', item.roundId || item.id);
+    const items = activeRoundsResult.Items || [];
+    // Sort by startedAt descending to get the most recent round
+    items.sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+
+    if (items.length > 0) {
+      if (items.length > 1) {
+        console.warn(
+          `⚠️ Found ${items.length} unrevealed rounds for room ${roomId}. This should not happen. Using most recent.`
+        );
+      }
+      const item = items[0];
+      console.log('Active round found:', item.roundId || item.id, 'startedAt:', item.startedAt);
       // Map DynamoDB attributes to Round interface
       round = {
         id: item.roundId || item.id,
@@ -255,10 +263,27 @@ async function handleVote(
     (p) => p.connectionId && p.connectionId !== 'REST'
   );
 
+  // Log participant details for debugging
+  console.log(
+    'All participants:',
+    participants.map((p) => ({
+      id: p.id,
+      name: p.name,
+      connectionId: p.connectionId,
+      isModerator: p.isModerator,
+    }))
+  );
+  console.log(
+    'Active participants:',
+    activeParticipants.map((p) => ({ id: p.id, name: p.name, connectionId: p.connectionId }))
+  );
+
   // Fetch all votes for this round to broadcast, with aggressive retry for consistency
   let votes: Vote[] = [];
   const expectedVoteCount = activeParticipants.length;
-  console.log(`Expected vote count: ${expectedVoteCount} (active participants)`);
+  console.log(
+    `Expected vote count: ${expectedVoteCount} (active participants), roundId: ${roundId}`
+  );
 
   const MAX_ATTEMPTS = 8;
   const BASE_DELAY_MS = 200;
@@ -277,6 +302,10 @@ async function handleVote(
     );
     votes = (votesResult.Items as Vote[]) || [];
     console.log(`Votes query attempt ${attempt + 1}:`, votes.length, 'votes');
+    console.log(
+      `Votes details:`,
+      votes.map((v) => ({ participantId: v.participantId, value: v.value, voteId: v.id }))
+    );
 
     // Log which votes we found vs expected participants
     const foundParticipantIds = votes.map((v) => v.participantId);
@@ -379,6 +408,9 @@ async function handleVote(
     votes.map((v) => ({ participantId: v.participantId, value: v.value }))
   );
   const allVoted = votes.length === activeParticipants.length && activeParticipants.length > 0;
+  console.log(
+    `All voted check: votes=${votes.length}, activeParticipants=${activeParticipants.length}, allVoted=${allVoted}, round.isRevealed=${round.isRevealed}`
+  );
 
   // Fetch room to check auto-reveal settings (cached)
   const room = (await getRoomWithCache(roomId)) as Room | undefined;
@@ -720,7 +752,7 @@ async function handleNewRound(
 
   const { roomId } = participant;
 
-  // Check for existing active round
+  // Check for existing unrevealed rounds (should be at most one, but handle all)
   const activeRoundsResult = await docClient.send(
     new QueryCommand({
       TableName: ROUNDS_TABLE,
@@ -730,80 +762,90 @@ async function handleNewRound(
         ':roomId': roomId,
         ':false': false,
       },
-      Limit: 1,
       ConsistentRead: true,
     })
   );
 
-  let round: Round;
-  let roundId: string;
-
+  // If there are existing unrevealed rounds, mark them all as revealed first
   if (activeRoundsResult.Items && activeRoundsResult.Items.length > 0) {
-    // Update existing active round
-    const item = activeRoundsResult.Items[0];
-    roundId = item.roundId || item.id;
-    console.log('Updating existing active round:', roundId);
+    console.log(`Found ${activeRoundsResult.Items.length} unrevealed rounds, marking as revealed`);
 
-    const updateExpressions = [];
-    const expressionAttributeNames: Record<string, string> = {};
-    const expressionAttributeValues: Record<string, string> = {};
+    for (const existingItem of activeRoundsResult.Items) {
+      const existingRoundId = existingItem.roundId || existingItem.id;
+      console.log('Marking unrevealed round as revealed:', existingRoundId);
 
-    if (title !== undefined) {
-      updateExpressions.push('#title = :title');
-      expressionAttributeNames['#title'] = 'title';
-      expressionAttributeValues[':title'] = title;
-    }
-    if (description !== undefined) {
-      updateExpressions.push('#description = :description');
-      expressionAttributeNames['#description'] = 'description';
-      expressionAttributeValues[':description'] = description;
-    }
+      const revealedAt = new Date().toISOString();
 
-    if (updateExpressions.length > 0) {
+      // Mark existing round as revealed and clear any scheduled reveal
       await docClient.send(
         new UpdateCommand({
           TableName: ROUNDS_TABLE,
-          Key: { roomId, roundId },
-          UpdateExpression: 'SET ' + updateExpressions.join(', '),
-          ExpressionAttributeNames: expressionAttributeNames,
-          ExpressionAttributeValues: expressionAttributeValues,
+          Key: { roomId, roundId: existingRoundId },
+          UpdateExpression:
+            'SET isRevealed = :true, revealedAt = :revealedAt REMOVE scheduledRevealAt',
+          ExpressionAttributeValues: {
+            ':true': true,
+            ':revealedAt': revealedAt,
+          },
         })
       );
+
+      // Fetch votes for the existing round
+      const existingVotesResult = await docClient.send(
+        new QueryCommand({
+          TableName: VOTES_TABLE,
+          KeyConditionExpression: 'roundId = :roundId',
+          ExpressionAttributeValues: {
+            ':roundId': existingRoundId,
+          },
+          ConsistentRead: true,
+        })
+      );
+      const existingVotes = (existingVotesResult.Items as Vote[]) || [];
+
+      // Broadcast the existing round as revealed
+      const existingRound: Round = {
+        id: existingRoundId,
+        roomId: existingItem.roomId,
+        title: existingItem.title,
+        description: existingItem.description,
+        startedAt: existingItem.startedAt,
+        revealedAt,
+        isRevealed: true,
+      };
+
+      await broadcastToRoom(event, roomId, {
+        type: 'roundUpdate',
+        payload: { round: existingRound, votes: existingVotes },
+      });
+
+      console.log('Existing round marked as revealed:', existingRoundId);
     }
-
-    // Map DynamoDB attributes to Round interface
-    round = {
-      id: roundId,
-      roomId: item.roomId,
-      title: title !== undefined ? title : item.title,
-      description: description !== undefined ? description : item.description,
-      startedAt: item.startedAt,
-      revealedAt: item.revealedAt,
-      isRevealed: item.isRevealed,
-    };
-  } else {
-    // Create new round
-    roundId = uuidv4();
-    const now = new Date().toISOString();
-    round = {
-      id: roundId,
-      roomId,
-      title,
-      description,
-      startedAt: now,
-      isRevealed: false,
-    };
-
-    await docClient.send(
-      new PutCommand({
-        TableName: ROUNDS_TABLE,
-        Item: {
-          ...round,
-          roundId,
-        },
-      })
-    );
   }
+
+  // Always create a new round with new ID
+  const roundId = uuidv4();
+  const now = new Date().toISOString();
+  const round: Round = {
+    id: roundId,
+    roomId,
+    title,
+    description,
+    startedAt: now,
+    isRevealed: false,
+  };
+
+  await docClient.send(
+    new PutCommand({
+      TableName: ROUNDS_TABLE,
+      Item: {
+        ...round,
+        roundId,
+      },
+    })
+  );
+
+  console.log('Created new round:', roundId);
 
   // Fetch any existing votes for this round (consistent read)
   const votesResult = await docClient.send(
