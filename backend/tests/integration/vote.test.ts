@@ -46,6 +46,7 @@ describe('vote handler', () => {
     process.env.ROUNDS_TABLE = 'test-rounds-table';
     process.env.VOTES_TABLE = 'test-votes-table';
     process.env.ROOMS_TABLE = 'test-rooms-table';
+    process.env.RATE_LIMIT_TABLE = 'test-rate-limit-table';
 
     mockEvent = {
       requestContext: {
@@ -65,6 +66,13 @@ describe('vote handler', () => {
     // Valid UUIDs for participant and room
     const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
     const roomId = '11111111-2222-3333-8444-555555555555';
+
+    // Mock rate limit check (QueryCommand for count)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Count: 0,
+    });
+    // Mock rate limit record (PutCommand)
+    mockDynamoDB.send.mockResolvedValueOnce({});
 
     // Mock participant query
     mockDynamoDB.send.mockResolvedValueOnce({
@@ -126,6 +134,13 @@ describe('vote handler', () => {
     // Valid UUIDs for participant and room
     const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
     const roomId = '11111111-2222-3333-8444-555555555555';
+
+    // Mock rate limit check (QueryCommand for count)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Count: 0,
+    });
+    // Mock rate limit record (PutCommand)
+    mockDynamoDB.send.mockResolvedValueOnce({});
 
     // Mock participant query
     mockDynamoDB.send.mockResolvedValueOnce({
