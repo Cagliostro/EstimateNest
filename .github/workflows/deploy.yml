@@ -174,6 +174,13 @@ jobs:
             --output text)
           echo "frontend_url=$FRONTEND_URL" >> $GITHUB_OUTPUT
 
+          # Get REST API Key value
+          REST_API_KEY=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='RestApiKeyValue'].OutputValue" \
+            --output text)
+          echo "rest_api_key_value=$REST_API_KEY" >> $GITHUB_OUTPUT
+
           echo "Bucket: $BUCKET_NAME"
           echo "Distribution: $DISTRIBUTION_ID"
           echo "REST API: $REST_API_URL"
@@ -185,10 +192,14 @@ jobs:
           export VITE_API_URL="${{ steps.outputs.outputs.rest_api_url }}"
           export VITE_WEBSOCKET_URL="${{ steps.outputs.outputs.websocket_url }}"
           export VITE_FRONTEND_URL="${{ steps.outputs.outputs.frontend_url }}"
+          export VITE_API_KEY="${{ steps.outputs.outputs.rest_api_key_value }}"
+          export VITE_API_KEY_ENABLED="true"
           echo "Building frontend with env:"
           echo "VITE_API_URL=$VITE_API_URL"
           echo "VITE_WEBSOCKET_URL=$VITE_WEBSOCKET_URL"
           echo "VITE_FRONTEND_URL=$VITE_FRONTEND_URL"
+          echo "VITE_API_KEY=***"
+          echo "VITE_API_KEY_ENABLED=$VITE_API_KEY_ENABLED"
           # Clean previous build and ensure correct working directory for PostCSS
           rm -rf frontend/dist
           cd frontend && npm run build

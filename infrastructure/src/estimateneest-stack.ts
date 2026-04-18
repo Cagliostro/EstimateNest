@@ -987,13 +987,13 @@ export class EstimateNestStack extends cdk.Stack {
 
     // Associate Web ACL with REST API Gateway
     new wafv2.CfnWebACLAssociation(this, 'RestApiWebACLAssociation', {
-      resourceArn: `arn:aws:apigateway:${this.region}::/restapis/${restApi.restApiId}/stages/${restApi.deploymentStage.stageName}`,
+      resourceArn: `arn:aws:apigateway:${this.region}:${this.account}:/restapis/${restApi.restApiId}/stages/${restApi.deploymentStage.stageName}`,
       webAclArn: regionalWebAcl.attrArn,
     });
 
     // Associate Web ACL with WebSocket API Gateway
     new wafv2.CfnWebACLAssociation(this, 'WebSocketApiWebACLAssociation', {
-      resourceArn: `arn:aws:apigateway:${this.region}::/apis/${webSocketApi.apiId}/stages/${props.envName}`,
+      resourceArn: `arn:aws:apigateway:${this.region}:${this.account}:/apis/${webSocketApi.apiId}/stages/${props.envName}`,
       webAclArn: regionalWebAcl.attrArn,
     });
 
