@@ -459,10 +459,8 @@ export class EstimateNestStack extends cdk.Stack {
     // ====================
 
     // Configure CORS: allow custom domain if configured, otherwise all origins
-    const corsAllowOrigins =
-      props.certificateArn && props.hostedZoneId
-        ? [`https://${props.domainName}`]
-        : apigateway.Cors.ALL_ORIGINS;
+    // TODO: Revert to stricter CORS after debugging
+    const corsAllowOrigins = apigateway.Cors.ALL_ORIGINS;
 
     const restApi = new apigateway.RestApi(this, 'RestApi', {
       restApiName: `estimatenest-rest-${props.envName}`,
@@ -920,10 +918,29 @@ export class EstimateNestStack extends cdk.Stack {
         sampledRequestsEnabled: true,
       },
       rules: [
+        // Allow OPTIONS requests for CORS preflight
+        {
+          name: 'AllowOPTIONS',
+          priority: 0,
+          action: { allow: {} },
+          statement: {
+            byteMatchStatement: {
+              fieldToMatch: { method: {} },
+              positionalConstraint: 'EXACTLY',
+              searchString: 'OPTIONS',
+              textTransformations: [{ priority: 0, type: 'NONE' }],
+            },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: `estimatenest-${props.envName}-allow-options`,
+            sampledRequestsEnabled: true,
+          },
+        },
         // AWS Managed Rules - OWASP Top 10
         {
           name: 'AWS-AWSManagedRulesCommonRuleSet',
-          priority: 0,
+          priority: 1,
           overrideAction: { none: {} },
           statement: {
             managedRuleGroupStatement: {
@@ -940,7 +957,7 @@ export class EstimateNestStack extends cdk.Stack {
         // Rate-based rule for REST API (limit 100 requests per 5 minutes per IP)
         {
           name: 'RateLimitREST',
-          priority: 1,
+          priority: 2,
           action: { block: {} },
           statement: {
             rateBasedStatement: {
