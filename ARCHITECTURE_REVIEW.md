@@ -34,7 +34,7 @@ EstimateNest has solid architectural foundations with clean separation of concer
 #### [✅] 1. Rate Limiting Completion
 
 **Risk**: High (DoS, resource exhaustion)  
-**Evidence**: ✅ API keys enforced; ✅ WebSocket connection limits (100/room); ✅ Message throttling (20/sec); ✅ WAF with OWASP rules  
+**Evidence**: ✅ API keys enforced; ✅ WebSocket connection limits (100/room); ✅ Message throttling (20/sec); ✅ WAF with OWASP rules; ✅ API Gateway throttling for WebSocket  
 **Impact**: Single user can flood system, exhausting DynamoDB RCU/WCU
 
 **Tasks:**
@@ -42,7 +42,7 @@ EstimateNest has solid architectural foundations with clean separation of concer
 - [x] **Add API key requirement** to REST API usage plan (`infrastructure/src/estimateneest-stack.ts:433`)
 - [x] **Implement WebSocket connection limits** (max 100 connections per room)
 - [x] **Add WebSocket message throttling** (20 messages/sec per connection)
-- [x] **Deploy AWS WAF** with OWASP Core Rule Set + rate-based rules (100 req/5min per IP)
+- [x] **Deploy AWS WAF** with OWASP Core Rule Set + rate-based rules (100 req/5min per IP) for REST API; WebSocket protected via API Gateway throttling (20 burst, 5 steady-state)
 - _Owner: Infrastructure Team | Est: 3 days_
 
 #### [✅] 2. Monitoring Enhancement
@@ -139,9 +139,9 @@ EstimateNest has solid architectural foundations with clean separation of concer
 - [ ] **Target bundle size**: <150kb gzipped
 - _Owner: Frontend Team | Est: 4 days_
 
-#### [❌] 8. WAF/DDoS Protection
+#### [❌] 8. CloudFront WAF/DDoS Protection
 
-**Evidence**: CloudFront distributions lack AWS WAF integration  
+**Evidence**: CloudFront distributions lack AWS WAF integration; REST API has regional WAF with OWASP rules  
 **Risk**: Application-layer attacks (SQL injection, XSS via WebSocket)
 
 **Tasks:**

@@ -237,6 +237,13 @@ export class EstimateNestStack extends cdk.Stack {
       autoDeploy: true,
     });
 
+    // Add throttling settings via L1 construct
+    const cfnStage = webSocketStage.node.defaultChild as apigatewayv2.CfnStage;
+    cfnStage.defaultRouteSettings = {
+      throttlingBurstLimit: 20,
+      throttlingRateLimit: 5,
+    };
+
     // ====================
     // API Gateway Custom Domains
     // ====================
@@ -956,32 +963,6 @@ export class EstimateNestStack extends cdk.Stack {
             sampledRequestsEnabled: true,
           },
         },
-        // Rate-based rule for WebSocket API (limit 20 connections per 5 minutes per IP)
-        {
-          name: 'RateLimitWebSocket',
-          priority: 2,
-          action: { block: {} },
-          statement: {
-            rateBasedStatement: {
-              limit: 20,
-              aggregateKeyType: 'IP',
-              // Apply to WebSocket connect ($connect route)
-              scopeDownStatement: {
-                byteMatchStatement: {
-                  fieldToMatch: { uriPath: {} },
-                  positionalConstraint: 'EXACTLY',
-                  searchString: '$connect',
-                  textTransformations: [{ priority: 0, type: 'NONE' }],
-                },
-              },
-            },
-          },
-          visibilityConfig: {
-            cloudWatchMetricsEnabled: true,
-            metricName: `estimatenest-${props.envName}-ws-ratelimit`,
-            sampledRequestsEnabled: true,
-          },
-        },
       ],
     });
 
@@ -990,30 +971,6 @@ export class EstimateNestStack extends cdk.Stack {
       resourceArn: restApi.deploymentStage.stageArn,
       webAclArn: regionalWebAcl.attrArn,
     });
-
-    // Associate Web ACL with WebSocket API Gateway
-    const webSocketStageArn = cdk.Fn.sub(
-      'arn:aws:apigateway:${AWS::Region}:${AWS::AccountId}:/apis/${ApiId}/stages/${StageName}',
-      {
-        ApiId: webSocketApi.apiId, // CDK token that resolves to the CloudFormation Ref
-        StageName: webSocketStage.stageName, // static string (e.g., 'prod')
-      }
-    );
-
-    const webSocketWafAssociation = new wafv2.CfnWebACLAssociation(
-      this,
-      'WebSocketApiWebACLAssociation',
-      {
-        resourceArn: webSocketStageArn,
-        webAclArn: regionalWebAcl.attrArn,
-      }
-    );
-
-    // Ensure the stage exists before attempting WAF association
-    const webSocketStageCfn = webSocketStage.node.defaultChild as cdk.CfnResource;
-    if (webSocketStageCfn) {
-      webSocketWafAssociation.addDependency(webSocketStageCfn);
-    }
 
     // Global Web ACL for CloudFront (if using custom domain)
     // Note: WAFv2 with CLOUDFRONT scope must be deployed in us-east-1 region
