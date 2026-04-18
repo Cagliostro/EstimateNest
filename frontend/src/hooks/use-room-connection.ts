@@ -408,10 +408,18 @@ export function useRoomConnection() {
   // Countdown function ref to access latest revealVotes
   const triggerReveal = useCallback(() => {
     const { currentRound } = useRoomStore.getState();
+    const { isModerator } = useParticipantStore.getState();
+
     if (!currentRound) {
       console.error('Auto-reveal failed: No active round');
       return;
     }
+
+    if (!isModerator) {
+      console.log(`[EstimateNest] Non-moderator skipping auto-reveal, waiting for moderator`);
+      return;
+    }
+
     console.log(`[EstimateNest] Auto-reveal triggered, revealing round:`, currentRound.id);
     service.revealVotes(currentRound.id);
   }, [service]);

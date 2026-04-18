@@ -76,6 +76,13 @@ export class EstimateNestStack extends cdk.Stack {
       timeToLiveAttribute: 'expiresAt',
     });
 
+    votesTable.addGlobalSecondaryIndex({
+      indexName: 'RoomIdIndex',
+      partitionKey: { name: 'roomId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'roundId', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const rateLimitTable = new dynamodb.Table(this, 'RateLimitTable', {
       partitionKey: { name: 'key', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'timestamp', type: dynamodb.AttributeType.NUMBER },
@@ -93,6 +100,8 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 256,
 
       environment: {
         ROOMS_TABLE: roomsTable.tableName,
@@ -114,6 +123,8 @@ export class EstimateNestStack extends cdk.Stack {
         handler: 'handler',
         projectRoot: path.join(__dirname, '..', '..'),
         depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+        timeout: cdk.Duration.seconds(5),
+        memorySize: 256,
 
         environment: {
           PARTICIPANTS_TABLE: participantsTable.tableName,
@@ -134,6 +145,8 @@ export class EstimateNestStack extends cdk.Stack {
         handler: 'handler',
         projectRoot: path.join(__dirname, '..', '..'),
         depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+        timeout: cdk.Duration.seconds(5),
+        memorySize: 256,
 
         environment: {
           PARTICIPANTS_TABLE: participantsTable.tableName,
@@ -151,6 +164,8 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+      timeout: cdk.Duration.seconds(10),
+      memorySize: 256,
 
       environment: {
         VOTES_TABLE: votesTable.tableName,
@@ -315,6 +330,8 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 256,
 
       environment: {
         ROOM_CODES_TABLE: roomCodesTable.tableName,
@@ -335,6 +352,8 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 256,
 
       environment: {
         ROOM_CODES_TABLE: roomCodesTable.tableName,
@@ -353,6 +372,8 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 256,
 
       environment: {
         ROOMS_TABLE: roomsTable.tableName,
@@ -825,6 +846,21 @@ export class EstimateNestStack extends cdk.Stack {
     restApi4xxAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
     restApi4xxAlarm.addOkAction(new cloudwatchActions.SnsAction(alertTopic));
 
+    // DynamoDB latency alarm (Votes table)
+    const votesTableLatencyAlarm = new cloudwatch.Alarm(this, 'VotesTableLatencyAlarm', {
+      alarmName: `DynamoDB-${votesTable.tableName}-LatencyP99`,
+      metric: votesTable.metricSuccessfulRequestLatency({
+        statistic: 'p99',
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 100, // milliseconds
+      evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    votesTableLatencyAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+    votesTableLatencyAlarm.addOkAction(new cloudwatchActions.SnsAction(alertTopic));
+
     // ====================
     // CloudWatch Dashboard
     // ====================
@@ -854,6 +890,16 @@ export class EstimateNestStack extends cdk.Stack {
         table.metricThrottledRequests({ statistic: 'Sum', period: cdk.Duration.minutes(5) })
       ),
       leftYAxis: { label: 'Throttles', showUnits: false },
+      width: 24,
+    });
+
+    // DynamoDB latency widget
+    const dynamoDbLatencyWidget = new cloudwatch.GraphWidget({
+      title: 'DynamoDB Latency (p99)',
+      left: tables.map((table) =>
+        table.metricSuccessfulRequestLatency({ statistic: 'p99', period: cdk.Duration.minutes(5) })
+      ),
+      leftYAxis: { label: 'Latency (ms)', showUnits: false },
       width: 24,
     });
 
@@ -898,6 +944,7 @@ export class EstimateNestStack extends cdk.Stack {
     // Add widgets to dashboard
     dashboard.addWidgets(lambdaErrorWidget);
     dashboard.addWidgets(dynamoDbThrottleWidget);
+    dashboard.addWidgets(dynamoDbLatencyWidget);
     dashboard.addWidgets(webSocketWidget);
     dashboard.addWidgets(restApiWidget);
 
