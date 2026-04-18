@@ -852,6 +852,7 @@ export class EstimateNestStack extends cdk.Stack {
       metric: votesTable.metricSuccessfulRequestLatency({
         statistic: 'p99',
         period: cdk.Duration.minutes(5),
+        dimensionsMap: { Operation: 'Query' },
       }),
       threshold: 100, // milliseconds
       evaluationPeriods: 2,
@@ -885,9 +886,12 @@ export class EstimateNestStack extends cdk.Stack {
 
     // DynamoDB throttling widget
     const dynamoDbThrottleWidget = new cloudwatch.GraphWidget({
-      title: 'DynamoDB Throttled Requests',
+      title: 'DynamoDB Throttled Requests (Query)',
       left: tables.map((table) =>
-        table.metricThrottledRequests({ statistic: 'Sum', period: cdk.Duration.minutes(5) })
+        table.metricThrottledRequestsForOperation('Query', {
+          statistic: 'Sum',
+          period: cdk.Duration.minutes(5),
+        })
       ),
       leftYAxis: { label: 'Throttles', showUnits: false },
       width: 24,
@@ -895,9 +899,13 @@ export class EstimateNestStack extends cdk.Stack {
 
     // DynamoDB latency widget
     const dynamoDbLatencyWidget = new cloudwatch.GraphWidget({
-      title: 'DynamoDB Latency (p99)',
+      title: 'DynamoDB Query Latency (p99)',
       left: tables.map((table) =>
-        table.metricSuccessfulRequestLatency({ statistic: 'p99', period: cdk.Duration.minutes(5) })
+        table.metricSuccessfulRequestLatency({
+          statistic: 'p99',
+          period: cdk.Duration.minutes(5),
+          dimensionsMap: { Operation: 'Query' },
+        })
       ),
       leftYAxis: { label: 'Latency (ms)', showUnits: false },
       width: 24,
