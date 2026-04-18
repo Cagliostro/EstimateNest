@@ -64,10 +64,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     const rounds = (roundsResult.Items as Round[]) || [];
 
-    // For each round, fetch votes and compute stats
-    const history: RoundHistoryItem[] = [];
-    for (const round of rounds) {
-      const votesResult = await docClient.send(
+    // Fetch votes for all rounds in parallel (N queries but concurrent)
+    const votePromises = rounds.map((round) =>
+      docClient.send(
         new QueryCommand({
           TableName: VOTES_TABLE,
           KeyConditionExpression: 'roundId = :roundId',
@@ -75,7 +74,15 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
             ':roundId': round.id,
           },
         })
-      );
+      )
+    );
+    const voteResults = await Promise.all(votePromises);
+
+    // Compute stats for each round
+    const history: RoundHistoryItem[] = [];
+    for (let i = 0; i < rounds.length; i++) {
+      const round = rounds[i];
+      const votesResult = voteResults[i];
       const votes = (votesResult.Items as Vote[]) || [];
       const numericVotes = votes
         .map((v) => (typeof v.value === 'number' ? v.value : parseFloat(v.value as string)))

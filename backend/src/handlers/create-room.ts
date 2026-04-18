@@ -18,6 +18,12 @@ const ROOMS_TABLE = process.env.ROOMS_TABLE!;
 const ROOM_CODES_TABLE = process.env.ROOM_CODES_TABLE!;
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+  console.log('Create room handler invoked', { path: event.path, httpMethod: event.httpMethod });
+  console.log('Environment variables:', {
+    ROOMS_TABLE: process.env.ROOMS_TABLE,
+    ROOM_CODES_TABLE: process.env.ROOM_CODES_TABLE,
+    DOMAIN_NAME: process.env.DOMAIN_NAME,
+  });
   try {
     // Parse and validate request body
     const rawBody = event.body ? JSON.parse(event.body) : {};

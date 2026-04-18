@@ -273,6 +273,7 @@ async function handleVote(
             TableName: VOTES_TABLE,
             Item: {
               ...vote,
+              roomId,
               idempotencyKey,
             },
             ConditionExpression: 'attribute_not_exists(idempotencyKey) OR idempotencyKey <> :key',
@@ -337,11 +338,15 @@ async function handleVote(
     `Expected vote count: ${expectedVoteCount} (active participants), roundId: ${roundId}`
   );
 
-  const MAX_ATTEMPTS = 8;
-  const BASE_DELAY_MS = 200;
-  const MAX_DELAY_MS = 2000;
+  const MAX_ATTEMPTS = 4;
+  const BASE_DELAY_MS = 100;
+  const MAX_DELAY_MS = 1000;
+  const totalQueryStart = Date.now();
+  let attemptsUsed = 0;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    attemptsUsed++;
+    const queryStart = Date.now();
     const votesResult = await docClient.send(
       new QueryCommand({
         TableName: VOTES_TABLE,
@@ -352,8 +357,14 @@ async function handleVote(
         ConsistentRead: true,
       })
     );
+    const queryDuration = Date.now() - queryStart;
     votes = (votesResult.Items as Vote[]) || [];
-    console.log(`Votes query attempt ${attempt + 1}:`, votes.length, 'votes');
+    console.log(
+      `Votes query attempt ${attempt + 1}:`,
+      votes.length,
+      'votes',
+      `(${queryDuration}ms)`
+    );
     console.log(
       `Votes details:`,
       votes.map((v) => ({ participantId: v.participantId, value: v.value, voteId: v.id }))
@@ -387,6 +398,9 @@ async function handleVote(
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
+  const totalQueryDuration = Date.now() - totalQueryStart;
+  console.log(`Total votes query duration: ${totalQueryDuration}ms, attempts: ${attemptsUsed}`);
+
   // Check if we're still missing votes after all retries
   const foundParticipantIds = votes.map((v) => v.participantId);
   const missingParticipantIdsAfterRetry = activeParticipants
@@ -398,8 +412,8 @@ async function handleVote(
     console.warn(
       `🚨 After ${MAX_ATTEMPTS} retries, still missing votes for participants: ${missingParticipantIdsAfterRetry.join(', ')}`
     );
-    console.warn(`Waiting 5 seconds for final attempt...`);
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    console.warn(`Waiting 2 seconds for final attempt...`);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // Final attempt
     const finalVotesResult = await docClient.send(
@@ -459,9 +473,9 @@ async function handleVote(
     'votes',
     votes.map((v) => ({ participantId: v.participantId, value: v.value }))
   );
-  const allVoted = votes.length === activeParticipants.length && activeParticipants.length > 0;
+  const allVoted = votes.length === participants.length && participants.length > 0;
   console.log(
-    `All voted check: votes=${votes.length}, activeParticipants=${activeParticipants.length}, allVoted=${allVoted}, round.isRevealed=${round.isRevealed}`
+    `All voted check: votes=${votes.length}, participants=${participants.length}, activeParticipants=${activeParticipants.length}, allVoted=${allVoted}, round.isRevealed=${round.isRevealed}`
   );
 
   // Fetch room to check auto-reveal settings (cached)
@@ -545,18 +559,7 @@ async function handleReveal(
 
   const { roomId } = participant;
 
-  // Fetch room to check allowAllParticipantsToReveal setting (cached)
-  const room = (await getRoomWithCache(roomId)) as Room | undefined;
-  if (!room) {
-    throw new Error('Room not found');
-  }
-
-  // Check if participant is moderator or room allows all participants to reveal
-  if (!participant.isModerator && !room.allowAllParticipantsToReveal) {
-    throw new Error('Only moderators can reveal votes');
-  }
-
-  // Get the round
+  // Get the round first to check for scheduled auto-reveal
   const roundResult = await docClient.send(
     new GetCommand({
       TableName: ROUNDS_TABLE,
@@ -567,6 +570,32 @@ async function handleReveal(
   const item = roundResult.Item;
   if (!item) {
     throw new Error('Round not found');
+  }
+
+  // Check if this is an auto-reveal (scheduledRevealAt is set and in the past)
+  const isAutoReveal = item.scheduledRevealAt && new Date(item.scheduledRevealAt) <= new Date();
+  console.log('Auto-reveal check:', {
+    scheduledRevealAt: item.scheduledRevealAt,
+    scheduledRevealAtDate: item.scheduledRevealAt
+      ? new Date(item.scheduledRevealAt).toISOString()
+      : null,
+    now: new Date().toISOString(),
+    isAutoReveal,
+    participantIsModerator: participant.isModerator,
+    participantId: participant.id,
+    participantName: participant.name,
+  });
+
+  // Fetch room to check allowAllParticipantsToReveal setting (cached)
+  const room = (await getRoomWithCache(roomId)) as Room | undefined;
+  if (!room) {
+    throw new Error('Room not found');
+  }
+
+  // Check if participant is moderator or room allows all participants to reveal
+  // OR if this is an auto-reveal (scheduled reveal time has passed)
+  if (!participant.isModerator && !room.allowAllParticipantsToReveal && !isAutoReveal) {
+    throw new Error('Only moderators can reveal votes');
   }
   // Map DynamoDB attributes to Round interface
   const round = {
@@ -584,13 +613,13 @@ async function handleReveal(
   }
 
   // Update round as revealed
-  console.log('Revealing round:', { roomId, roundId });
+  console.log('Revealing round:', { roomId, roundId, isAutoReveal });
   const revealedAt = new Date().toISOString();
   await docClient.send(
     new UpdateCommand({
       TableName: ROUNDS_TABLE,
       Key: { roomId, roundId },
-      UpdateExpression: 'SET isRevealed = :true, revealedAt = :revealedAt',
+      UpdateExpression: 'SET isRevealed = :true, revealedAt = :revealedAt REMOVE scheduledRevealAt',
       ExpressionAttributeValues: {
         ':true': true,
         ':revealedAt': revealedAt,
@@ -748,7 +777,6 @@ async function handleUpdateParticipant(
       ExpressionAttributeValues: {
         ':roomId': roomId,
       },
-      ConsistentRead: true,
     })
   );
 

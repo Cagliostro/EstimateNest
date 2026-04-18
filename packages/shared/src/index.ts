@@ -44,6 +44,7 @@ export interface Vote {
   participantId: string;
   value: number | string; // numeric or custom string (e.g., "XS", "M", "L")
   votedAt: string;
+  roomId?: string;
 }
 
 export type CardDeck = {

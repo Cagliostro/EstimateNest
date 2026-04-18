@@ -45,7 +45,6 @@ export async function broadcastToRoom(
       ExpressionAttributeValues: {
         ':roomId': roomId,
       },
-      ConsistentRead: true,
     })
   );
 

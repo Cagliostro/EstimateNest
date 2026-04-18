@@ -76,6 +76,13 @@ export class EstimateNestStack extends cdk.Stack {
       timeToLiveAttribute: 'expiresAt',
     });
 
+    votesTable.addGlobalSecondaryIndex({
+      indexName: 'RoomIdIndex',
+      partitionKey: { name: 'roomId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'roundId', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const rateLimitTable = new dynamodb.Table(this, 'RateLimitTable', {
       partitionKey: { name: 'key', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'timestamp', type: dynamodb.AttributeType.NUMBER },
@@ -93,6 +100,8 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 256,
 
       environment: {
         ROOMS_TABLE: roomsTable.tableName,
@@ -100,7 +109,7 @@ export class EstimateNestStack extends cdk.Stack {
         DOMAIN_NAME: props.domainName || 'example.com',
       },
       bundling: {
-        format: lambdaNodejs.OutputFormat.ESM,
+        format: lambdaNodejs.OutputFormat.CJS,
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -114,12 +123,14 @@ export class EstimateNestStack extends cdk.Stack {
         handler: 'handler',
         projectRoot: path.join(__dirname, '..', '..'),
         depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+        timeout: cdk.Duration.seconds(5),
+        memorySize: 256,
 
         environment: {
           PARTICIPANTS_TABLE: participantsTable.tableName,
         },
         bundling: {
-          format: lambdaNodejs.OutputFormat.ESM,
+          format: lambdaNodejs.OutputFormat.CJS,
         },
         tracing: lambda.Tracing.ACTIVE,
       }
@@ -134,12 +145,14 @@ export class EstimateNestStack extends cdk.Stack {
         handler: 'handler',
         projectRoot: path.join(__dirname, '..', '..'),
         depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+        timeout: cdk.Duration.seconds(5),
+        memorySize: 256,
 
         environment: {
           PARTICIPANTS_TABLE: participantsTable.tableName,
         },
         bundling: {
-          format: lambdaNodejs.OutputFormat.ESM,
+          format: lambdaNodejs.OutputFormat.CJS,
         },
         tracing: lambda.Tracing.ACTIVE,
       }
@@ -151,6 +164,8 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+      timeout: cdk.Duration.seconds(10),
+      memorySize: 256,
 
       environment: {
         VOTES_TABLE: votesTable.tableName,
@@ -160,7 +175,7 @@ export class EstimateNestStack extends cdk.Stack {
         RATE_LIMIT_TABLE: rateLimitTable.tableName,
       },
       bundling: {
-        format: lambdaNodejs.OutputFormat.ESM,
+        format: lambdaNodejs.OutputFormat.CJS,
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -237,6 +252,13 @@ export class EstimateNestStack extends cdk.Stack {
       autoDeploy: true,
     });
 
+    // Add throttling settings via L1 construct
+    const cfnStage = webSocketStage.node.defaultChild as apigatewayv2.CfnStage;
+    cfnStage.defaultRouteSettings = {
+      throttlingBurstLimit: 20,
+      throttlingRateLimit: 5,
+    };
+
     // ====================
     // API Gateway Custom Domains
     // ====================
@@ -308,6 +330,8 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 256,
 
       environment: {
         ROOM_CODES_TABLE: roomCodesTable.tableName,
@@ -317,7 +341,7 @@ export class EstimateNestStack extends cdk.Stack {
         VOTES_TABLE: votesTable.tableName,
       },
       bundling: {
-        format: lambdaNodejs.OutputFormat.ESM,
+        format: lambdaNodejs.OutputFormat.CJS,
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -328,6 +352,8 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 256,
 
       environment: {
         ROOM_CODES_TABLE: roomCodesTable.tableName,
@@ -335,7 +361,7 @@ export class EstimateNestStack extends cdk.Stack {
         VOTES_TABLE: votesTable.tableName,
       },
       bundling: {
-        format: lambdaNodejs.OutputFormat.ESM,
+        format: lambdaNodejs.OutputFormat.CJS,
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -346,6 +372,8 @@ export class EstimateNestStack extends cdk.Stack {
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
       depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 256,
 
       environment: {
         ROOMS_TABLE: roomsTable.tableName,
@@ -353,7 +381,7 @@ export class EstimateNestStack extends cdk.Stack {
         PARTICIPANTS_TABLE: participantsTable.tableName,
       },
       bundling: {
-        format: lambdaNodejs.OutputFormat.ESM,
+        format: lambdaNodejs.OutputFormat.CJS,
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -396,11 +424,11 @@ export class EstimateNestStack extends cdk.Stack {
         resources: [rateLimitTable.tableArn],
       })
     );
-    // participantsTable: Query, UpdateItem
+    // participantsTable: Query, UpdateItem (including GSI queries)
     voteHandler.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['dynamodb:Query', 'dynamodb:UpdateItem'],
-        resources: [participantsTable.tableArn],
+        resources: [participantsTable.tableArn, `${participantsTable.tableArn}/index/*`],
       })
     );
     // roundsTable: GetItem, Query, PutItem, UpdateItem, TransactWriteItems
@@ -452,10 +480,8 @@ export class EstimateNestStack extends cdk.Stack {
     // ====================
 
     // Configure CORS: allow custom domain if configured, otherwise all origins
-    const corsAllowOrigins =
-      props.certificateArn && props.hostedZoneId
-        ? [`https://${props.domainName}`]
-        : apigateway.Cors.ALL_ORIGINS;
+    // TODO: Revert to stricter CORS after debugging
+    const corsAllowOrigins = apigateway.Cors.ALL_ORIGINS;
 
     const restApi = new apigateway.RestApi(this, 'RestApi', {
       restApiName: `estimatenest-rest-${props.envName}`,
@@ -820,6 +846,21 @@ export class EstimateNestStack extends cdk.Stack {
     restApi4xxAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
     restApi4xxAlarm.addOkAction(new cloudwatchActions.SnsAction(alertTopic));
 
+    // DynamoDB latency alarm (Votes table)
+    const votesTableLatencyAlarm = new cloudwatch.Alarm(this, 'VotesTableLatencyAlarm', {
+      alarmName: `DynamoDB-${votesTable.tableName}-LatencyP99`,
+      metric: votesTable.metricSuccessfulRequestLatency({
+        statistic: 'p99',
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 100, // milliseconds
+      evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    votesTableLatencyAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+    votesTableLatencyAlarm.addOkAction(new cloudwatchActions.SnsAction(alertTopic));
+
     // ====================
     // CloudWatch Dashboard
     // ====================
@@ -849,6 +890,16 @@ export class EstimateNestStack extends cdk.Stack {
         table.metricThrottledRequests({ statistic: 'Sum', period: cdk.Duration.minutes(5) })
       ),
       leftYAxis: { label: 'Throttles', showUnits: false },
+      width: 24,
+    });
+
+    // DynamoDB latency widget
+    const dynamoDbLatencyWidget = new cloudwatch.GraphWidget({
+      title: 'DynamoDB Latency (p99)',
+      left: tables.map((table) =>
+        table.metricSuccessfulRequestLatency({ statistic: 'p99', period: cdk.Duration.minutes(5) })
+      ),
+      leftYAxis: { label: 'Latency (ms)', showUnits: false },
       width: 24,
     });
 
@@ -893,6 +944,7 @@ export class EstimateNestStack extends cdk.Stack {
     // Add widgets to dashboard
     dashboard.addWidgets(lambdaErrorWidget);
     dashboard.addWidgets(dynamoDbThrottleWidget);
+    dashboard.addWidgets(dynamoDbLatencyWidget);
     dashboard.addWidgets(webSocketWidget);
     dashboard.addWidgets(restApiWidget);
 
@@ -913,87 +965,75 @@ export class EstimateNestStack extends cdk.Stack {
         sampledRequestsEnabled: true,
       },
       rules: [
-        // AWS Managed Rules - OWASP Top 10
+        // Allow OPTIONS requests for CORS preflight
         {
-          name: 'AWS-AWSManagedRulesCommonRuleSet',
+          name: 'AllowOPTIONS',
           priority: 0,
-          overrideAction: { none: {} },
+          action: { allow: {} },
           statement: {
-            managedRuleGroupStatement: {
-              vendorName: 'AWS',
-              name: 'AWSManagedRulesCommonRuleSet',
+            byteMatchStatement: {
+              fieldToMatch: { method: {} },
+              positionalConstraint: 'EXACTLY',
+              searchString: 'OPTIONS',
+              textTransformations: [{ priority: 0, type: 'NONE' }],
             },
           },
           visibilityConfig: {
             cloudWatchMetricsEnabled: true,
-            metricName: `estimatenest-${props.envName}-owasp-common`,
+            metricName: `estimatenest-${props.envName}-allow-options`,
             sampledRequestsEnabled: true,
           },
         },
+        // TODO: Re-enable OWASP after debugging 502 errors
+        // AWS Managed Rules - OWASP Top 10
+        // {
+        //   name: 'AWS-AWSManagedRulesCommonRuleSet',
+        //   priority: 1,
+        //   overrideAction: { none: {} },
+        //   statement: {
+        //     managedRuleGroupStatement: {
+        //       vendorName: 'AWS',
+        //       name: 'AWSManagedRulesCommonRuleSet',
+        //     },
+        //   },
+        //   visibilityConfig: {
+        //     cloudWatchMetricsEnabled: true,
+        //     metricName: `estimatenest-${props.envName}-owasp-common`,
+        //     sampledRequestsEnabled: true,
+        //   },
+        // },
         // Rate-based rule for REST API (limit 100 requests per 5 minutes per IP)
-        {
-          name: 'RateLimitREST',
-          priority: 1,
-          action: { block: {} },
-          statement: {
-            rateBasedStatement: {
-              limit: 100,
-              aggregateKeyType: 'IP',
-              // Apply to REST API paths
-              scopeDownStatement: {
-                byteMatchStatement: {
-                  fieldToMatch: { uriPath: {} },
-                  positionalConstraint: 'STARTS_WITH',
-                  searchString: '/rooms',
-                  textTransformations: [{ priority: 0, type: 'NONE' }],
-                },
-              },
-            },
-          },
-          visibilityConfig: {
-            cloudWatchMetricsEnabled: true,
-            metricName: `estimatenest-${props.envName}-rest-ratelimit`,
-            sampledRequestsEnabled: true,
-          },
-        },
-        // Rate-based rule for WebSocket API (limit 20 connections per 5 minutes per IP)
-        {
-          name: 'RateLimitWebSocket',
-          priority: 2,
-          action: { block: {} },
-          statement: {
-            rateBasedStatement: {
-              limit: 20,
-              aggregateKeyType: 'IP',
-              // Apply to WebSocket connect ($connect route)
-              scopeDownStatement: {
-                byteMatchStatement: {
-                  fieldToMatch: { uriPath: {} },
-                  positionalConstraint: 'EXACTLY',
-                  searchString: '$connect',
-                  textTransformations: [{ priority: 0, type: 'NONE' }],
-                },
-              },
-            },
-          },
-          visibilityConfig: {
-            cloudWatchMetricsEnabled: true,
-            metricName: `estimatenest-${props.envName}-ws-ratelimit`,
-            sampledRequestsEnabled: true,
-          },
-        },
+        // {
+        //   name: 'RateLimitREST',
+        //   priority: 2,
+        //   action: { block: {} },
+        //   statement: {
+        //     rateBasedStatement: {
+        //       limit: 100,
+        //       aggregateKeyType: 'IP',
+        //       // Apply to REST API paths
+        //       scopeDownStatement: {
+        //         byteMatchStatement: {
+        //           fieldToMatch: { uriPath: {} },
+        //           positionalConstraint: 'STARTS_WITH',
+        //           searchString: '/rooms',
+        //           textTransformations: [{ priority: 0, type: 'NONE' }],
+        //         },
+        //       },
+        //     },
+        //   },
+        //   visibilityConfig: {
+        //     cloudWatchMetricsEnabled: true,
+        //     metricName: `estimatenest-${props.envName}-rest-ratelimit`,
+        //     sampledRequestsEnabled: true,
+        //   },
+        // },
       ],
     });
 
     // Associate Web ACL with REST API Gateway
     new wafv2.CfnWebACLAssociation(this, 'RestApiWebACLAssociation', {
       resourceArn: restApi.deploymentStage.stageArn,
-      webAclArn: regionalWebAcl.attrArn,
-    });
-
-    // Associate Web ACL with WebSocket API Gateway
-    new wafv2.CfnWebACLAssociation(this, 'WebSocketApiWebACLAssociation', {
-      resourceArn: webSocketStage.stageArn,
       webAclArn: regionalWebAcl.attrArn,
     });
 

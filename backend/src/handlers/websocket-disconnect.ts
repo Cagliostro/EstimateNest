@@ -24,7 +24,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           ':cid': connectionId,
         },
         Limit: 1,
-        ConsistentRead: true,
       })
     );
 
