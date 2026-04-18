@@ -998,7 +998,8 @@ export class EstimateNestStack extends cdk.Stack {
     });
 
     // Global Web ACL for CloudFront (if using custom domain)
-    if (certificate && hostedZone) {
+    // Note: WAFv2 with CLOUDFRONT scope must be deployed in us-east-1 region
+    if (certificate && hostedZone && this.region === 'us-east-1') {
       const globalWebAcl = new wafv2.CfnWebACL(this, 'GlobalWebACL', {
         defaultAction: { allow: {} },
         scope: 'CLOUDFRONT',
