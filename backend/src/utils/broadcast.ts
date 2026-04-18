@@ -50,6 +50,12 @@ export async function broadcastToRoom(
   );
 
   const participants = participantsResult.Items || [];
+  console.log(
+    `Broadcasting message type: ${message.type}`,
+    message.type === 'roundUpdate'
+      ? `roundId: ${(message.payload as { round?: { id: string } }).round?.id}`
+      : ''
+  );
   console.log(`Broadcast: ${participants.length} participants total, room ${roomId}`);
   const activeParticipants = participants.filter(
     (p) => p.connectionId && p.connectionId !== 'REST' && p.connectionId !== excludeConnectionId

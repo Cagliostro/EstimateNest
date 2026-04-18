@@ -59,9 +59,10 @@ export function useRoomConnection() {
 
         case 'roundUpdate':
           console.log(`[EstimateNest] [${hookId}] roundUpdate received:`, {
-            round: message.payload.round,
+            roundId: message.payload.round.id,
             votesCount: message.payload.votes.length,
             isRevealed: message.payload.round.isRevealed,
+            participantIds: message.payload.votes.map((v) => v.participantId),
           });
           useRoomStore.getState().setCurrentRound(message.payload.round);
           useRoomStore.getState().setVotes(message.payload.votes);

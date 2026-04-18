@@ -720,7 +720,7 @@ async function handleNewRound(
 
   const { roomId } = participant;
 
-  // Check for existing active round
+  // Check for existing unrevealed round
   const activeRoundsResult = await docClient.send(
     new QueryCommand({
       TableName: ROUNDS_TABLE,
@@ -735,75 +735,83 @@ async function handleNewRound(
     })
   );
 
-  let round: Round;
-  let roundId: string;
-
+  // If there's an existing unrevealed round, mark it as revealed first
   if (activeRoundsResult.Items && activeRoundsResult.Items.length > 0) {
-    // Update existing active round
-    const item = activeRoundsResult.Items[0];
-    roundId = item.roundId || item.id;
-    console.log('Updating existing active round:', roundId);
+    const existingItem = activeRoundsResult.Items[0];
+    const existingRoundId = existingItem.roundId || existingItem.id;
+    console.log('Found existing unrevealed round, marking as revealed:', existingRoundId);
 
-    const updateExpressions = [];
-    const expressionAttributeNames: Record<string, string> = {};
-    const expressionAttributeValues: Record<string, string> = {};
+    const revealedAt = new Date().toISOString();
 
-    if (title !== undefined) {
-      updateExpressions.push('#title = :title');
-      expressionAttributeNames['#title'] = 'title';
-      expressionAttributeValues[':title'] = title;
-    }
-    if (description !== undefined) {
-      updateExpressions.push('#description = :description');
-      expressionAttributeNames['#description'] = 'description';
-      expressionAttributeValues[':description'] = description;
-    }
-
-    if (updateExpressions.length > 0) {
-      await docClient.send(
-        new UpdateCommand({
-          TableName: ROUNDS_TABLE,
-          Key: { roomId, roundId },
-          UpdateExpression: 'SET ' + updateExpressions.join(', '),
-          ExpressionAttributeNames: expressionAttributeNames,
-          ExpressionAttributeValues: expressionAttributeValues,
-        })
-      );
-    }
-
-    // Map DynamoDB attributes to Round interface
-    round = {
-      id: roundId,
-      roomId: item.roomId,
-      title: title !== undefined ? title : item.title,
-      description: description !== undefined ? description : item.description,
-      startedAt: item.startedAt,
-      revealedAt: item.revealedAt,
-      isRevealed: item.isRevealed,
-    };
-  } else {
-    // Create new round
-    roundId = uuidv4();
-    const now = new Date().toISOString();
-    round = {
-      id: roundId,
-      roomId,
-      title,
-      description,
-      startedAt: now,
-      isRevealed: false,
-    };
-
+    // Mark existing round as revealed and clear any scheduled reveal
     await docClient.send(
-      new PutCommand({
+      new UpdateCommand({
         TableName: ROUNDS_TABLE,
-        Item: {
-          ...round,
-          roundId,
+        Key: { roomId, roundId: existingRoundId },
+        UpdateExpression:
+          'SET isRevealed = :true, revealedAt = :revealedAt REMOVE scheduledRevealAt',
+        ExpressionAttributeValues: {
+          ':true': true,
+          ':revealedAt': revealedAt,
         },
       })
     );
+
+    // Fetch votes for the existing round
+    const existingVotesResult = await docClient.send(
+      new QueryCommand({
+        TableName: VOTES_TABLE,
+        KeyConditionExpression: 'roundId = :roundId',
+        ExpressionAttributeValues: {
+          ':roundId': existingRoundId,
+        },
+        ConsistentRead: true,
+      })
+    );
+    const existingVotes = (existingVotesResult.Items as Vote[]) || [];
+
+    // Broadcast the existing round as revealed
+    const existingRound: Round = {
+      id: existingRoundId,
+      roomId: existingItem.roomId,
+      title: existingItem.title,
+      description: existingItem.description,
+      startedAt: existingItem.startedAt,
+      revealedAt,
+      isRevealed: true,
+    };
+
+    await broadcastToRoom(event, roomId, {
+      type: 'roundUpdate',
+      payload: { round: existingRound, votes: existingVotes },
+    });
+
+    console.log('Existing round marked as revealed:', existingRoundId);
   }
+
+  // Always create a new round with new ID
+  const roundId = uuidv4();
+  const now = new Date().toISOString();
+  const round: Round = {
+    id: roundId,
+    roomId,
+    title,
+    description,
+    startedAt: now,
+    isRevealed: false,
+  };
+
+  await docClient.send(
+    new PutCommand({
+      TableName: ROUNDS_TABLE,
+      Item: {
+        ...round,
+        roundId,
+      },
+    })
+  );
+
+  console.log('Created new round:', roundId);
 
   // Fetch any existing votes for this round (consistent read)
   const votesResult = await docClient.send(
