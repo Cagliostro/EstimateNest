@@ -50,6 +50,9 @@ export async function broadcastToRoom(
   );
 
   const participants = participantsResult.Items || [];
+  if (!message.type) {
+    console.error('⚠️ Broadcast message missing type field! Message:', JSON.stringify(message));
+  }
   console.log(
     `Broadcasting message type: ${message.type}`,
     message.type === 'roundUpdate'
@@ -157,6 +160,12 @@ export async function sendToConnection(
   );
   const apiGatewayClient = new ApiGatewayManagementApiClient({ endpoint });
   console.log(`SendToConnection endpoint: ${endpoint}, connection: ${connectionId}`);
+  if (!message.type) {
+    console.error(
+      '⚠️ SendToConnection message missing type field! Message:',
+      JSON.stringify(message)
+    );
+  }
 
   const maxRetries = 3;
   let lastError;
