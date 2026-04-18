@@ -403,11 +403,11 @@ export class EstimateNestStack extends cdk.Stack {
         resources: [rateLimitTable.tableArn],
       })
     );
-    // participantsTable: Query, UpdateItem
+    // participantsTable: Query, UpdateItem (including GSI queries)
     voteHandler.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['dynamodb:Query', 'dynamodb:UpdateItem'],
-        resources: [participantsTable.tableArn],
+        resources: [participantsTable.tableArn, `${participantsTable.tableArn}/index/*`],
       })
     );
     // roundsTable: GetItem, Query, PutItem, UpdateItem, TransactWriteItems
@@ -939,48 +939,48 @@ export class EstimateNestStack extends cdk.Stack {
         },
         // TODO: Re-enable OWASP after debugging 502 errors
         // AWS Managed Rules - OWASP Top 10
-        // {
-        //   name: 'AWS-AWSManagedRulesCommonRuleSet',
-        //   priority: 1,
-        //   overrideAction: { none: {} },
-        //   statement: {
-        //     managedRuleGroupStatement: {
-        //       vendorName: 'AWS',
-        //       name: 'AWSManagedRulesCommonRuleSet',
-        //     },
-        //   },
-        //   visibilityConfig: {
-        //     cloudWatchMetricsEnabled: true,
-        //     metricName: `estimatenest-${props.envName}-owasp-common`,
-        //     sampledRequestsEnabled: true,
-        //   },
-        // },
+        {
+          name: 'AWS-AWSManagedRulesCommonRuleSet',
+          priority: 1,
+          overrideAction: { none: {} },
+          statement: {
+            managedRuleGroupStatement: {
+              vendorName: 'AWS',
+              name: 'AWSManagedRulesCommonRuleSet',
+            },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: `estimatenest-${props.envName}-owasp-common`,
+            sampledRequestsEnabled: true,
+          },
+        },
         // Rate-based rule for REST API (limit 100 requests per 5 minutes per IP)
-        // {
-        //   name: 'RateLimitREST',
-        //   priority: 2,
-        //   action: { block: {} },
-        //   statement: {
-        //     rateBasedStatement: {
-        //       limit: 100,
-        //       aggregateKeyType: 'IP',
-        //       // Apply to REST API paths
-        //       scopeDownStatement: {
-        //         byteMatchStatement: {
-        //           fieldToMatch: { uriPath: {} },
-        //           positionalConstraint: 'STARTS_WITH',
-        //           searchString: '/rooms',
-        //           textTransformations: [{ priority: 0, type: 'NONE' }],
-        //         },
-        //       },
-        //     },
-        //   },
-        //   visibilityConfig: {
-        //     cloudWatchMetricsEnabled: true,
-        //     metricName: `estimatenest-${props.envName}-rest-ratelimit`,
-        //     sampledRequestsEnabled: true,
-        //   },
-        // },
+        {
+          name: 'RateLimitREST',
+          priority: 2,
+          action: { block: {} },
+          statement: {
+            rateBasedStatement: {
+              limit: 100,
+              aggregateKeyType: 'IP',
+              // Apply to REST API paths
+              scopeDownStatement: {
+                byteMatchStatement: {
+                  fieldToMatch: { uriPath: {} },
+                  positionalConstraint: 'STARTS_WITH',
+                  searchString: '/rooms',
+                  textTransformations: [{ priority: 0, type: 'NONE' }],
+                },
+              },
+            },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: `estimatenest-${props.envName}-rest-ratelimit`,
+            sampledRequestsEnabled: true,
+          },
+        },
       ],
     });
 
