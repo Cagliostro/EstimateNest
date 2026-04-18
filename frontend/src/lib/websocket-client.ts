@@ -10,6 +10,7 @@ export interface ConnectionOptions {
   hookId?: string;
   onMessage?: MessageHandler;
   onStateChange?: (state: ConnectionState) => void;
+  onError?: (errorType: string, message: string, details?: Record<string, unknown>) => void;
   reconnectAttempts?: number;
   reconnectDelay?: number;
 }
@@ -19,6 +20,7 @@ export class WebSocketClient {
   private state: ConnectionState = 'disconnected';
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectCount = 0;
+  private shouldReconnect = true;
   private options: ConnectionOptions;
 
   constructor(options: ConnectionOptions) {
@@ -60,6 +62,7 @@ export class WebSocketClient {
     }
 
     this.setState('connecting');
+    this.shouldReconnect = true;
     this.reconnectCount = 0;
 
     const { roomId, participantId } = this.options;
@@ -88,6 +91,25 @@ export class WebSocketClient {
         const data = JSON.parse(event.data);
         // Check if this is an API Gateway Lambda response
         if (typeof data === 'object' && data !== null && 'statusCode' in data && 'body' in data) {
+          // Handle HTTP error status codes (4xx, 5xx)
+          if (data.statusCode >= 400) {
+            const body = typeof data.body === 'string' ? JSON.parse(data.body) : data.body;
+            const errorType = body?.type === 'error' ? body.payload?.error : 'HTTP_ERROR';
+            const errorMessage = body?.payload?.error || body?.error || `HTTP ${data.statusCode}`;
+            this.error('WebSocket Lambda error response:', errorType, errorMessage, data);
+            this.options.onError?.(errorType, errorMessage, { statusCode: data.statusCode, body });
+            // For 429 (rate limit), also set state to error to prevent reconnection
+            if (data.statusCode === 429) {
+              this.setState('error');
+              // Close the connection after rate limit error
+              this.ws?.close(1008, 'Rate limit exceeded');
+            }
+            // Still pass error messages to onMessage so UI can display them
+            if (body && typeof body === 'object' && body.type === 'error') {
+              this.options.onMessage?.(body);
+            }
+            return;
+          }
           // It's a Lambda response, parse the body
           try {
             const body = typeof data.body === 'string' ? JSON.parse(data.body) : data.body;
@@ -118,7 +140,27 @@ export class WebSocketClient {
     this.ws.onclose = (event) => {
       this.log('WebSocket closed:', event.code, event.reason);
       this.setState('disconnected');
-      this.attemptReconnect();
+
+      // Check if this is a rate limit closure (code 1008 or reason contains "rate limit")
+      const isRateLimit =
+        event.code === 1008 ||
+        event.reason.includes('rate limit') ||
+        event.reason.includes('Rate limit');
+      if (isRateLimit) {
+        this.shouldReconnect = false;
+        this.options.onError?.(
+          'RATE_LIMIT',
+          'Rate limit exceeded, please wait before reconnecting',
+          { code: event.code, reason: event.reason }
+        );
+      }
+
+      // Only attempt reconnect if we should reconnect
+      if (this.shouldReconnect) {
+        this.attemptReconnect();
+      } else {
+        this.log('Not attempting reconnect due to rate limit');
+      }
     };
   }
 
@@ -195,6 +237,12 @@ export class WebSocketClient {
   }
 
   private attemptReconnect(): void {
+    // Don't reconnect if rate limit exceeded
+    if (!this.shouldReconnect) {
+      this.log('Not reconnecting due to rate limit');
+      return;
+    }
+
     if (this.reconnectCount >= this.options.reconnectAttempts!) {
       console.log('Max reconnect attempts reached');
       return;

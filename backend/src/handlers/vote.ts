@@ -1,5 +1,6 @@
 // Vote handler for WebSocket messages
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import AWSXRay from 'aws-xray-sdk';
 import {
   DynamoDBDocumentClient,
   GetCommand,
@@ -35,13 +36,64 @@ function createSuccessResponse(message: string): string {
   return createResponse('ack', { message });
 }
 
-const client = new DynamoDBClient({});
+/**
+ * Check and increment rate limit for a connection and message type
+ * Returns true if allowed, false if rate limited
+ */
+async function checkRateLimit(
+  connectionId: string,
+  messageType: string,
+  limit: number = 20,
+  windowSeconds: number = 1
+): Promise<boolean> {
+  const key = `${connectionId}:${messageType}`;
+  const now = Date.now();
+  const windowStart = now - windowSeconds * 1000;
+
+  // Count messages in current window
+  const countResult = await docClient.send(
+    new QueryCommand({
+      TableName: RATE_LIMIT_TABLE,
+      KeyConditionExpression: '#key = :key AND #timestamp >= :windowStart',
+      ExpressionAttributeNames: {
+        '#key': 'key',
+        '#timestamp': 'timestamp',
+      },
+      ExpressionAttributeValues: {
+        ':key': key,
+        ':windowStart': windowStart,
+      },
+      Select: 'COUNT',
+    })
+  );
+
+  if (countResult.Count >= limit) {
+    return false;
+  }
+
+  // Record this message
+  await docClient.send(
+    new PutCommand({
+      TableName: RATE_LIMIT_TABLE,
+      Item: {
+        key,
+        timestamp: now,
+        expiresAt: Math.floor(now / 1000) + windowSeconds + 60, // TTL: window + 60 seconds buffer
+      },
+    })
+  );
+
+  return true;
+}
+
+const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
 const docClient = DynamoDBDocumentClient.from(client);
 
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 const ROUNDS_TABLE = process.env.ROUNDS_TABLE!;
 const VOTES_TABLE = process.env.VOTES_TABLE!;
 const ROOMS_TABLE = process.env.ROOMS_TABLE!;
+const RATE_LIMIT_TABLE = process.env.RATE_LIMIT_TABLE!;
 // Simple in-memory cache for room settings (10s TTL) - reduces DynamoDB reads
 const roomSettingsCache = new Map<string, { room: Record<string, unknown>; timestamp: number }>();
 const ROOM_CACHE_TTL_MS = 10 * 1000; // 10 seconds
@@ -1023,6 +1075,16 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
   // Use validated message (type-safe)
   const validatedMessage = validationResult.data;
   message = validatedMessage;
+
+  // Rate limiting: 20 messages per second per connection per message type
+  const connectionId = event.requestContext.connectionId;
+  const allowed = await checkRateLimit(connectionId, message.type);
+  if (!allowed) {
+    return {
+      statusCode: 429,
+      body: createErrorResponse('Rate limit exceeded', 'RATE_LIMIT'),
+    };
+  }
 
   try {
     let result;

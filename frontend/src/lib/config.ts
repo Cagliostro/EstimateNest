@@ -16,6 +16,9 @@ export const config = {
   // Frontend domain (for constructing room URLs)
   frontendUrl: stripTrailingSlash(import.meta.env.VITE_FRONTEND_URL || 'http://localhost:5173'),
 
+  // API Key for REST API (required for rate limiting)
+  apiKey: import.meta.env.VITE_API_KEY || '',
+
   // Environment (development, production)
   env: import.meta.env.MODE || 'development',
 
@@ -23,5 +26,6 @@ export const config = {
   features: {
     autoReconnect: true,
     optimisticUpdates: true,
+    apiKeyEnabled: import.meta.env.VITE_API_KEY_ENABLED === 'true' || false,
   },
 } as const;
