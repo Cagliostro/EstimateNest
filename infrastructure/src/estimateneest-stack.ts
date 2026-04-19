@@ -21,6 +21,7 @@ import * as path from 'path';
 
 export interface EstimateNestStackProps extends cdk.StackProps {
   envName: string;
+  deploymentColor?: 'blue' | 'green';
   domainName: string;
   certificateArn: string;
   hostedZoneId: string;
@@ -32,6 +33,10 @@ export class EstimateNestStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: EstimateNestStackProps) {
     super(scope, id, props);
 
+    const isProduction = props.envName === 'prod';
+    const deploymentColor = props.deploymentColor || 'blue';
+    const colorSuffix = deploymentColor ? `-${deploymentColor}` : '';
+
     // ====================
     // DynamoDB Tables
     // ====================
@@ -39,20 +44,32 @@ export class EstimateNestStack extends cdk.Stack {
     const roomsTable = new dynamodb.Table(this, 'RoomsTable', {
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      billingMode: isProduction
+        ? dynamodb.BillingMode.PROVISIONED
+        : dynamodb.BillingMode.PAY_PER_REQUEST,
+      readCapacity: isProduction ? 5 : undefined,
+      writeCapacity: isProduction ? 5 : undefined,
       timeToLiveAttribute: 'expiresAt',
     });
 
     const roomCodesTable = new dynamodb.Table(this, 'RoomCodesTable', {
       partitionKey: { name: 'shortCode', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      billingMode: isProduction
+        ? dynamodb.BillingMode.PROVISIONED
+        : dynamodb.BillingMode.PAY_PER_REQUEST,
+      readCapacity: isProduction ? 5 : undefined,
+      writeCapacity: isProduction ? 5 : undefined,
       timeToLiveAttribute: 'expiresAt',
     });
 
     const participantsTable = new dynamodb.Table(this, 'ParticipantsTable', {
       partitionKey: { name: 'roomId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'participantId', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      billingMode: isProduction
+        ? dynamodb.BillingMode.PROVISIONED
+        : dynamodb.BillingMode.PAY_PER_REQUEST,
+      readCapacity: isProduction ? 5 : undefined,
+      writeCapacity: isProduction ? 5 : undefined,
       timeToLiveAttribute: 'expiresAt',
     });
 
@@ -65,14 +82,22 @@ export class EstimateNestStack extends cdk.Stack {
     const roundsTable = new dynamodb.Table(this, 'RoundsTable', {
       partitionKey: { name: 'roomId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'roundId', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      billingMode: isProduction
+        ? dynamodb.BillingMode.PROVISIONED
+        : dynamodb.BillingMode.PAY_PER_REQUEST,
+      readCapacity: isProduction ? 5 : undefined,
+      writeCapacity: isProduction ? 5 : undefined,
       timeToLiveAttribute: 'expiresAt',
     });
 
     const votesTable = new dynamodb.Table(this, 'VotesTable', {
       partitionKey: { name: 'roundId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'participantId', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      billingMode: isProduction
+        ? dynamodb.BillingMode.PROVISIONED
+        : dynamodb.BillingMode.PAY_PER_REQUEST,
+      readCapacity: isProduction ? 5 : undefined,
+      writeCapacity: isProduction ? 5 : undefined,
       timeToLiveAttribute: 'expiresAt',
     });
 
@@ -86,9 +111,43 @@ export class EstimateNestStack extends cdk.Stack {
     const rateLimitTable = new dynamodb.Table(this, 'RateLimitTable', {
       partitionKey: { name: 'key', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'timestamp', type: dynamodb.AttributeType.NUMBER },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      billingMode: isProduction
+        ? dynamodb.BillingMode.PROVISIONED
+        : dynamodb.BillingMode.PAY_PER_REQUEST,
+      readCapacity: isProduction ? 5 : undefined,
+      writeCapacity: isProduction ? 5 : undefined,
       timeToLiveAttribute: 'expiresAt',
     });
+
+    // ====================
+    // DynamoDB Auto-Scaling (Production only)
+    // ====================
+    if (isProduction) {
+      const tables = [
+        roomsTable,
+        roomCodesTable,
+        participantsTable,
+        roundsTable,
+        votesTable,
+        rateLimitTable,
+      ];
+      tables.forEach((table) => {
+        const readScaling = table.autoScaleReadCapacity({
+          minCapacity: 5,
+          maxCapacity: 50,
+        });
+        readScaling.scaleOnUtilization({
+          targetUtilizationPercent: 70,
+        });
+        const writeScaling = table.autoScaleWriteCapacity({
+          minCapacity: 5,
+          maxCapacity: 50,
+        });
+        writeScaling.scaleOnUtilization({
+          targetUtilizationPercent: 70,
+        });
+      });
+    }
 
     // ====================
     // Lambda Functions
@@ -96,6 +155,7 @@ export class EstimateNestStack extends cdk.Stack {
 
     const createRoomHandler = new lambdaNodejs.NodejsFunction(this, 'CreateRoomHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
+      architecture: lambda.Architecture.ARM_64,
       entry: '../backend/dist/handlers/create-room.js',
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
@@ -119,6 +179,7 @@ export class EstimateNestStack extends cdk.Stack {
       'WebSocketConnectHandler',
       {
         runtime: lambda.Runtime.NODEJS_20_X,
+        architecture: lambda.Architecture.ARM_64,
         entry: '../backend/dist/handlers/websocket-connect.js',
         handler: 'handler',
         projectRoot: path.join(__dirname, '..', '..'),
@@ -141,6 +202,7 @@ export class EstimateNestStack extends cdk.Stack {
       'WebSocketDisconnectHandler',
       {
         runtime: lambda.Runtime.NODEJS_20_X,
+        architecture: lambda.Architecture.ARM_64,
         entry: '../backend/dist/handlers/websocket-disconnect.js',
         handler: 'handler',
         projectRoot: path.join(__dirname, '..', '..'),
@@ -160,6 +222,7 @@ export class EstimateNestStack extends cdk.Stack {
 
     const voteHandler = new lambdaNodejs.NodejsFunction(this, 'VoteHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
+      architecture: lambda.Architecture.ARM_64,
       entry: '../backend/dist/handlers/vote.js',
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
@@ -181,7 +244,7 @@ export class EstimateNestStack extends cdk.Stack {
     });
 
     const webSocketApi = new apigatewayv2.WebSocketApi(this, 'WebSocketApi', {
-      apiName: `estimatenest-ws-${props.envName}`,
+      apiName: `estimatenest-ws-${props.envName}${colorSuffix}`,
       routeSelectionExpression: '$request.body.type',
       connectRouteOptions: {
         integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
@@ -267,8 +330,14 @@ export class EstimateNestStack extends cdk.Stack {
     let restApiCustomUrl: string | undefined;
     let webSocketCustomUrl: string | undefined;
 
-    const restApiSubdomain = `api.${props.domainName}`;
-    const webSocketSubdomain = `ws.${props.domainName}`;
+    const restApiSubdomain =
+      deploymentColor === 'blue'
+        ? `api.${props.domainName}`
+        : `api-${deploymentColor}.${props.domainName}`;
+    const webSocketSubdomain =
+      deploymentColor === 'blue'
+        ? `ws.${props.domainName}`
+        : `ws-${deploymentColor}.${props.domainName}`;
 
     // If API certificate is provided, set up custom domains for REST and WebSocket APIs
     const apiCertificateArn = props.apiCertificateArn || props.certificateArn;
@@ -326,6 +395,7 @@ export class EstimateNestStack extends cdk.Stack {
 
     const joinRoomHandler = new lambdaNodejs.NodejsFunction(this, 'JoinRoomHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
+      architecture: lambda.Architecture.ARM_64,
       entry: '../backend/dist/handlers/join-room.js',
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
@@ -348,6 +418,7 @@ export class EstimateNestStack extends cdk.Stack {
 
     const roundHistoryHandler = new lambdaNodejs.NodejsFunction(this, 'RoundHistoryHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
+      architecture: lambda.Architecture.ARM_64,
       entry: '../backend/dist/handlers/round-history.js',
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
@@ -368,6 +439,7 @@ export class EstimateNestStack extends cdk.Stack {
 
     const updateRoomHandler = new lambdaNodejs.NodejsFunction(this, 'UpdateRoomHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
+      architecture: lambda.Architecture.ARM_64,
       entry: '../backend/dist/handlers/update-room.js',
       handler: 'handler',
       projectRoot: path.join(__dirname, '..', '..'),
@@ -379,6 +451,25 @@ export class EstimateNestStack extends cdk.Stack {
         ROOMS_TABLE: roomsTable.tableName,
         ROOM_CODES_TABLE: roomCodesTable.tableName,
         PARTICIPANTS_TABLE: participantsTable.tableName,
+      },
+      bundling: {
+        format: lambdaNodejs.OutputFormat.CJS,
+      },
+      tracing: lambda.Tracing.ACTIVE,
+    });
+
+    const healthHandler = new lambdaNodejs.NodejsFunction(this, 'HealthHandler', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      architecture: lambda.Architecture.ARM_64,
+      entry: '../backend/dist/handlers/health.js',
+      handler: 'handler',
+      projectRoot: path.join(__dirname, '..', '..'),
+      depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+      timeout: cdk.Duration.seconds(3),
+      memorySize: 128,
+
+      environment: {
+        ENVIRONMENT: props.envName,
       },
       bundling: {
         format: lambdaNodejs.OutputFormat.CJS,
@@ -484,7 +575,7 @@ export class EstimateNestStack extends cdk.Stack {
     const corsAllowOrigins = apigateway.Cors.ALL_ORIGINS;
 
     const restApi = new apigateway.RestApi(this, 'RestApi', {
-      restApiName: `estimatenest-rest-${props.envName}`,
+      restApiName: `estimatenest-rest-${props.envName}${colorSuffix}`,
       defaultCorsPreflightOptions: {
         allowOrigins: corsAllowOrigins,
         allowMethods: apigateway.Cors.ALL_METHODS,
@@ -506,6 +597,9 @@ export class EstimateNestStack extends cdk.Stack {
         stage: webSocketStage,
       });
     }
+
+    const healthResource = restApi.root.addResource('health');
+    healthResource.addMethod('GET', new apigateway.LambdaIntegration(healthHandler));
 
     const roomsResource = restApi.root.addResource('rooms');
     roomsResource.addMethod('POST', new apigateway.LambdaIntegration(createRoomHandler), {
@@ -561,6 +655,7 @@ export class EstimateNestStack extends cdk.Stack {
     // ====================
 
     const frontendBucket = new s3.Bucket(this, 'FrontendBucket', {
+      bucketName: `estimatenest-${props.envName}${colorSuffix}-frontend-${this.account}-${this.region}`,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
@@ -570,6 +665,15 @@ export class EstimateNestStack extends cdk.Stack {
     // Security headers policy for CloudFront
     const securityHeadersPolicy = cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS;
 
+    // Cache policy for static assets
+    const cachePolicy = new cloudfront.CachePolicy(this, 'StaticCachePolicy', {
+      defaultTtl: cdk.Duration.days(365),
+      minTtl: cdk.Duration.days(1),
+      maxTtl: cdk.Duration.days(365),
+      enableAcceptEncodingGzip: true,
+      enableAcceptEncodingBrotli: true,
+    });
+
     // If domain is provided, set up custom domain
     let distributionProps: cloudfront.DistributionProps = {
       defaultRootObject: 'index.html',
@@ -578,6 +682,7 @@ export class EstimateNestStack extends cdk.Stack {
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         responseHeadersPolicy: securityHeadersPolicy,
+        cachePolicy: cachePolicy,
       },
       errorResponses: [
         {
@@ -613,10 +718,15 @@ export class EstimateNestStack extends cdk.Stack {
     const distribution = new cloudfront.Distribution(this, 'Distribution', distributionProps);
 
     if (certificate && hostedZone) {
+      // Weighted Route 53 record for blue-green deployments
+      // Each deployment color adds its own weighted record entry
+      const weight = deploymentColor === 'blue' ? 100 : 0;
       new route53.ARecord(this, 'CloudFrontAliasRecord', {
         zone: hostedZone,
         recordName: props.domainName,
         target: route53.RecordTarget.fromAlias(new route53Targets.CloudFrontTarget(distribution)),
+        weight: weight,
+        setIdentifier: `cloudfront-${deploymentColor}`,
       });
 
       // Create www redirect for production root domain
@@ -686,12 +796,20 @@ export class EstimateNestStack extends cdk.Stack {
           ],
         });
 
+        // Weighted Route 53 record for www redirect (blue-green)
         new route53.ARecord(this, 'WwwCloudFrontAliasRecord', {
           zone: hostedZone,
           recordName: wwwDomainName,
           target: route53.RecordTarget.fromAlias(
             new route53Targets.CloudFrontTarget(wwwDistribution)
           ),
+          weight: weight,
+          setIdentifier: `www-cloudfront-${deploymentColor}`,
+        });
+
+        // Output for www CloudFront domain (for blue-green traffic switching)
+        new cdk.CfnOutput(this, 'WwwCloudFrontDomainName', {
+          value: wwwDistribution.distributionDomainName,
         });
       }
     }
@@ -992,50 +1110,49 @@ export class EstimateNestStack extends cdk.Stack {
             sampledRequestsEnabled: true,
           },
         },
-        // TODO: Re-enable OWASP after debugging 502 errors
         // AWS Managed Rules - OWASP Top 10
-        // {
-        //   name: 'AWS-AWSManagedRulesCommonRuleSet',
-        //   priority: 1,
-        //   overrideAction: { none: {} },
-        //   statement: {
-        //     managedRuleGroupStatement: {
-        //       vendorName: 'AWS',
-        //       name: 'AWSManagedRulesCommonRuleSet',
-        //     },
-        //   },
-        //   visibilityConfig: {
-        //     cloudWatchMetricsEnabled: true,
-        //     metricName: `estimatenest-${props.envName}-owasp-common`,
-        //     sampledRequestsEnabled: true,
-        //   },
-        // },
+        {
+          name: 'AWS-AWSManagedRulesCommonRuleSet',
+          priority: 1,
+          overrideAction: { none: {} },
+          statement: {
+            managedRuleGroupStatement: {
+              vendorName: 'AWS',
+              name: 'AWSManagedRulesCommonRuleSet',
+            },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: `estimatenest-${props.envName}-owasp-common`,
+            sampledRequestsEnabled: true,
+          },
+        },
         // Rate-based rule for REST API (limit 100 requests per 5 minutes per IP)
-        // {
-        //   name: 'RateLimitREST',
-        //   priority: 2,
-        //   action: { block: {} },
-        //   statement: {
-        //     rateBasedStatement: {
-        //       limit: 100,
-        //       aggregateKeyType: 'IP',
-        //       // Apply to REST API paths
-        //       scopeDownStatement: {
-        //         byteMatchStatement: {
-        //           fieldToMatch: { uriPath: {} },
-        //           positionalConstraint: 'STARTS_WITH',
-        //           searchString: '/rooms',
-        //           textTransformations: [{ priority: 0, type: 'NONE' }],
-        //         },
-        //       },
-        //     },
-        //   },
-        //   visibilityConfig: {
-        //     cloudWatchMetricsEnabled: true,
-        //     metricName: `estimatenest-${props.envName}-rest-ratelimit`,
-        //     sampledRequestsEnabled: true,
-        //   },
-        // },
+        {
+          name: 'RateLimitREST',
+          priority: 2,
+          action: { block: {} },
+          statement: {
+            rateBasedStatement: {
+              limit: 100,
+              aggregateKeyType: 'IP',
+              // Apply to REST API paths
+              scopeDownStatement: {
+                byteMatchStatement: {
+                  fieldToMatch: { uriPath: {} },
+                  positionalConstraint: 'STARTS_WITH',
+                  searchString: '/rooms',
+                  textTransformations: [{ priority: 0, type: 'NONE' }],
+                },
+              },
+            },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: `estimatenest-${props.envName}-rest-ratelimit`,
+            sampledRequestsEnabled: true,
+          },
+        },
       ],
     });
 
@@ -1172,6 +1289,10 @@ export class EstimateNestStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, 'CloudFrontDistributionId', {
       value: distribution.distributionId,
+    });
+
+    new cdk.CfnOutput(this, 'CloudFrontDomainName', {
+      value: distribution.distributionDomainName,
     });
 
     new cdk.CfnOutput(this, 'RestApiUrl', {

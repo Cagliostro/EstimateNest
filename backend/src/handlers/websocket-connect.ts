@@ -3,12 +3,13 @@ import AWSXRay from 'aws-xray-sdk';
 import { DynamoDBDocumentClient, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda';
 import { broadcastToRoom } from '../utils/broadcast';
-import { Participant, validateWebSocketConnectionParams } from '@estimatenest/shared';
+import { validateWebSocketConnectionParams } from '@estimatenest/shared';
 import { ZodError } from 'zod';
+import getCacheManager from '../utils/cache';
 
 const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
 const docClient = DynamoDBDocumentClient.from(client);
-
+const cacheManager = getCacheManager();
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 
 export const handler = async (
@@ -79,20 +80,11 @@ export const handler = async (
         },
       })
     );
+    // Invalidate participant cache since connectionId updated
+    cacheManager.invalidateParticipants(roomId);
 
-    // Fetch all participants in the room (consistent read to see our own update)
-    const participantsResult = await docClient.send(
-      new QueryCommand({
-        TableName: PARTICIPANTS_TABLE,
-        KeyConditionExpression: 'roomId = :roomId',
-        ExpressionAttributeValues: {
-          ':roomId': roomId,
-        },
-        ConsistentRead: true,
-      })
-    );
-
-    const participants = (participantsResult.Items as Participant[]) || [];
+    // Fetch all participants in the room (cached, invalidated just above)
+    const participants = await cacheManager.getParticipantsWithCache(roomId);
 
     console.log(
       'WebSocket connect participants:',

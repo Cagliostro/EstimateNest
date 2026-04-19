@@ -7,16 +7,18 @@ const app = new cdk.App();
 
 // Read environment from context (default: dev)
 const envName = app.node.tryGetContext('env') || 'dev';
+const deploymentColor = app.node.tryGetContext('color') || 'blue';
 const envConfig = app.node.tryGetContext(envName);
 
 if (!envConfig) {
   throw new Error(`No configuration found for environment "${envName}"`);
 }
 
-const stackId = `EstimateNest-${envName}`;
+const stackId = `EstimateNest-${envName}${deploymentColor === 'blue' ? '' : `-${deploymentColor}`}`;
 
 new EstimateNestStack(app, stackId, {
   envName: envConfig.envName,
+  deploymentColor,
   domainName: envConfig.domainName,
   certificateArn: envConfig.certificateArn,
   apiCertificateArn: envConfig.apiCertificateArn,
@@ -30,6 +32,7 @@ new EstimateNestStack(app, stackId, {
   tags: {
     Project: 'EstimateNest',
     Environment: envName,
+    DeploymentColor: deploymentColor,
     DeploymentTimestamp: new Date().toISOString(),
   },
 });

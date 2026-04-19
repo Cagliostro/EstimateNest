@@ -1,10 +1,11 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { apiClient } from '../lib/api-client';
 import { WebSocketService } from '../lib/websocket-service';
 import { WebSocketMessage } from '@estimatenest/shared';
 import { useRoomStore } from '../store/room-store';
 import { useParticipantStore } from '../store/participant-store';
 import { useConnectionStore } from '../store/connection-store';
+import { useInterval } from './use-interval';
 
 export interface UseRoomConnectionOptions {
   autoReconnect?: boolean;
@@ -15,14 +16,17 @@ export function useRoomConnection() {
   const hookId = hookIdRef.current;
   const serviceRef = useRef(WebSocketService.getInstance());
   const service = serviceRef.current;
-  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   console.log(`[EstimateNest] [${hookId}] useRoomConnection hook created`);
 
   // Store states accessed via getState() to avoid dependency changes
 
-  // Countdown interval ref
-  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Polling state
+  const [pollingDelay, setPollingDelay] = useState<number | null>(null);
+  const pollingRoomCodeRef = useRef<string | null>(null);
+  const pollingParticipantIdRef = useRef<string | null>(null);
+
+  // Countdown will be handled by useInterval
 
   /**
    * Handle incoming WebSocket messages
@@ -111,42 +115,47 @@ export function useRoomConnection() {
    * Start polling for room state updates
    */
   const startPolling = useCallback((roomCode: string, participantId: string) => {
-    // Clear any existing interval
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
-    }
-
-    // Poll every 5 seconds
-    pollingIntervalRef.current = setInterval(async () => {
-      try {
-        const response = await apiClient.joinRoom(roomCode, undefined, participantId);
-        // Update store with latest state
-        if (response.participants) {
-          useRoomStore.getState().setParticipants(response.participants);
-        }
-        if (response.round) {
-          useRoomStore.getState().setCurrentRound(response.round);
-        }
-        if (response.votes) {
-          useRoomStore.getState().setVotes(response.votes);
-        }
-      } catch (error) {
-        console.warn('Polling failed:', error);
-        // Don't stop polling on transient errors
-      }
-    }, 5000);
+    pollingRoomCodeRef.current = roomCode;
+    pollingParticipantIdRef.current = participantId;
+    setPollingDelay(5000);
   }, []);
 
   /**
    * Stop polling
    */
   const stopPolling = useCallback(() => {
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
+    setPollingDelay(null);
+  }, []);
+
+  // Polling callback
+  const pollRoomState = useCallback(async () => {
+    const roomCode = pollingRoomCodeRef.current;
+    const participantId = pollingParticipantIdRef.current;
+
+    if (!roomCode || !participantId) {
+      return;
+    }
+
+    try {
+      const response = await apiClient.joinRoom(roomCode, undefined, participantId);
+      // Update store with latest state
+      if (response.participants) {
+        useRoomStore.getState().setParticipants(response.participants);
+      }
+      if (response.round) {
+        useRoomStore.getState().setCurrentRound(response.round);
+      }
+      if (response.votes) {
+        useRoomStore.getState().setVotes(response.votes);
+      }
+    } catch (error) {
+      console.warn('Polling failed:', error);
+      // Don't stop polling on transient errors
     }
   }, []);
+
+  // Polling interval
+  useInterval(pollRoomState, pollingDelay);
 
   /**
    * Create a new room
@@ -359,11 +368,6 @@ export function useRoomConnection() {
       console.log(`[EstimateNest] [${hookId}] Unregistering message handler`);
       service.removeMessageHandler(handleWebSocketMessage);
       handlersRegisteredRef.current = false;
-      // Clear countdown interval on unmount
-      if (countdownIntervalRef.current) {
-        clearInterval(countdownIntervalRef.current);
-        countdownIntervalRef.current = null;
-      }
       // Clear polling interval on unmount
       stopPolling();
     };
@@ -426,103 +430,31 @@ export function useRoomConnection() {
 
   // Get countdownSeconds from store
   const countdownSeconds = useRoomStore((state) => state.countdownSeconds);
-  const prevCountdownRef = useRef<number | null>(null);
 
-  // Handle countdown logic - runs when countdownSeconds changes
-  useEffect(() => {
-    console.log(
-      `[EstimateNest] Countdown effect triggered:`,
-      countdownSeconds,
-      `previous:`,
-      prevCountdownRef.current
-    );
+  // Countdown handler
+  const handleCountdownTick = useCallback(() => {
+    const current = useRoomStore.getState().countdownSeconds;
+    console.log(`[EstimateNest] Countdown tick, current:`, current);
 
-    // If countdown is being cleared (e.g., after reveal)
-    if (countdownSeconds === null || countdownSeconds <= 0) {
-      if (countdownIntervalRef.current) {
-        console.log(`[EstimateNest] Clearing countdown interval (countdown cleared)`);
-        clearInterval(countdownIntervalRef.current);
-        countdownIntervalRef.current = null;
-      }
-      prevCountdownRef.current = countdownSeconds;
+    if (current === null || current <= 0) {
+      // Countdown not active or already completed
       return;
     }
 
-    // Determine if this is a decrement from the interval's own tick
-    const isDecrementing =
-      prevCountdownRef.current !== null &&
-      prevCountdownRef.current > 0 &&
-      countdownSeconds < prevCountdownRef.current;
-
-    // If countdown value hasn't changed and interval is running, do nothing
-    if (countdownSeconds === prevCountdownRef.current && countdownIntervalRef.current) {
-      console.log(
-        `[EstimateNest] Countdown unchanged at ${countdownSeconds}, interval running, not restarting`
-      );
-      return;
+    if (current <= 1) {
+      // Countdown complete - reveal votes
+      console.log(`[EstimateNest] Countdown complete, triggering reveal`);
+      useRoomStore.getState().stopCountdown();
+      triggerReveal();
+    } else {
+      // Decrement countdown
+      console.log(`[EstimateNest] Decrementing countdown to`, current - 1);
+      useRoomStore.setState({ countdownSeconds: current - 1 });
     }
+  }, [triggerReveal]);
 
-    // If we're already in a countdown and the value is just decrementing (N → N-1), don't restart
-    // UNLESS the interval was cleared (e.g., due to hook remount)
-    if (isDecrementing && countdownIntervalRef.current) {
-      console.log(
-        `[EstimateNest] Countdown decrementing from ${prevCountdownRef.current} to ${countdownSeconds}, interval exists, not restarting`
-      );
-      prevCountdownRef.current = countdownSeconds;
-      return;
-    }
-
-    // If we're decrementing but interval was cleared, we need to restart it
-    if (isDecrementing && !countdownIntervalRef.current) {
-      console.log(
-        `[EstimateNest] Countdown decrementing from ${prevCountdownRef.current} to ${countdownSeconds}, but interval was cleared, restarting`
-      );
-      // Continue to interval restart logic below
-    }
-
-    // Otherwise, we need to start a new countdown (either initial start or a reset)
-    // Clear existing interval if any
-    if (countdownIntervalRef.current) {
-      console.log(`[EstimateNest] Clearing existing countdown interval for new countdown`);
-      clearInterval(countdownIntervalRef.current);
-      countdownIntervalRef.current = null;
-    }
-
-    console.log(`[EstimateNest] Starting countdown from`, countdownSeconds);
-    prevCountdownRef.current = countdownSeconds;
-
-    // Start countdown interval
-    countdownIntervalRef.current = setInterval(() => {
-      const { countdownSeconds: current } = useRoomStore.getState();
-      console.log(`[EstimateNest] Countdown tick, current:`, current);
-
-      if (current === null || current <= 1) {
-        // Countdown complete - reveal votes
-        console.log(`[EstimateNest] Countdown complete, triggering reveal`);
-        if (countdownIntervalRef.current) {
-          clearInterval(countdownIntervalRef.current);
-          countdownIntervalRef.current = null;
-        }
-        prevCountdownRef.current = null;
-        useRoomStore.getState().stopCountdown();
-        triggerReveal();
-      } else {
-        // Decrement countdown
-        console.log(`[EstimateNest] Decrementing countdown to`, current - 1);
-        useRoomStore.setState({ countdownSeconds: current - 1 });
-      }
-    }, 1000);
-
-    return () => {
-      // Only clear interval on unmount if we haven't already cleared it
-      if (countdownIntervalRef.current) {
-        console.log(`[EstimateNest] Cleanup: clearing countdown interval on unmount`);
-        clearInterval(countdownIntervalRef.current);
-        countdownIntervalRef.current = null;
-        // DO NOT reset prevCountdownRef here - it's used to detect decrementing between effect runs
-      }
-    };
-  }, [countdownSeconds, triggerReveal]);
+  // Countdown interval - runs every second when countdown is active
+  useInterval(handleCountdownTick, countdownSeconds !== null && countdownSeconds > 0 ? 1000 : null);
 
   return {
     createRoom,

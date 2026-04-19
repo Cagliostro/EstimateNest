@@ -3,11 +3,11 @@ import AWSXRay from 'aws-xray-sdk';
 import { DynamoDBDocumentClient, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { broadcastToRoom } from '../utils/broadcast';
-import { Participant } from '@estimatenest/shared';
+import getCacheManager from '../utils/cache';
 
 const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
 const docClient = DynamoDBDocumentClient.from(client);
-
+const cacheManager = getCacheManager();
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
@@ -49,23 +49,14 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         },
       })
     );
+    // Invalidate participant cache since connectionId removed
+    cacheManager.invalidateParticipants(roomId);
 
-    // Fetch all participants in the room (consistent read)
-    const participantsResult = await docClient.send(
-      new QueryCommand({
-        TableName: PARTICIPANTS_TABLE,
-        KeyConditionExpression: 'roomId = :roomId',
-        ExpressionAttributeValues: {
-          ':roomId': roomId,
-        },
-        ConsistentRead: true,
-      })
-    );
+    // Fetch all participants in the room (cached, invalidated just above)
+    const participants = await cacheManager.getParticipantsWithCache(roomId);
 
-    const participants = (participantsResult.Items as Participant[]) || [];
-
-    // Broadcast updated participant list to everyone in the room
-    await broadcastToRoom(
+    // Broadcast updated participant list to everyone in the room (fire-and-forget)
+    broadcastToRoom(
       event,
       roomId,
       {
@@ -73,10 +64,12 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         payload: { participants },
       },
       connectionId
-    );
+    ).catch((broadcastError) => {
+      console.warn('Broadcast participantList failed:', broadcastError);
+    });
 
-    // Also send a leave notification for clients that track individual leaves
-    await broadcastToRoom(
+    // Also send a leave notification for clients that track individual leaves (fire-and-forget)
+    broadcastToRoom(
       event,
       roomId,
       {
@@ -84,7 +77,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         payload: { participantId },
       },
       connectionId
-    );
+    ).catch((broadcastError) => {
+      console.warn('Broadcast leave failed:', broadcastError);
+    });
 
     return {
       statusCode: 200,

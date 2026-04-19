@@ -17,10 +17,11 @@ import {
   validateJoinRoomRequest,
 } from '@estimatenest/shared';
 import { ZodError } from 'zod';
+import getCacheManager from '../utils/cache';
 
 const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
 const docClient = DynamoDBDocumentClient.from(client);
-
+const cacheManager = getCacheManager();
 const ROOM_CODES_TABLE = process.env.ROOM_CODES_TABLE!;
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 const ROUNDS_TABLE = process.env.ROUNDS_TABLE!;
@@ -113,17 +114,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       };
     }
 
-    // Fetch all participants in the room (for moderator determination)
-    const participantsResult = await docClient.send(
-      new QueryCommand({
-        TableName: PARTICIPANTS_TABLE,
-        KeyConditionExpression: 'roomId = :roomId',
-        ExpressionAttributeValues: {
-          ':roomId': roomId,
-        },
-      })
-    );
-    const existingParticipants = (participantsResult.Items as Participant[]) || [];
+    // Fetch all participants in the room (for moderator determination) - cached
+    const existingParticipants = await cacheManager.getParticipantsWithCache(roomId);
 
     // Determine participant ID (provided for polling, or new)
     const providedParticipantId = validatedData.participantId;
@@ -173,6 +165,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         avatarSeed = createAvatarSeed(name);
         isModerator = existingParticipants.length === 0;
         await createParticipantRecord(roomId, participantId, name, avatarSeed, isModerator);
+        // Invalidate participant cache since new participant added
+        cacheManager.invalidateParticipants(roomId);
         // Add new participant to our list
         participants.push({
           id: participantId,
@@ -193,6 +187,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       avatarSeed = createAvatarSeed(name);
       isModerator = existingParticipants.length === 0;
       await createParticipantRecord(roomId, participantId, name, avatarSeed, isModerator);
+      // Invalidate participant cache since new participant added
+      cacheManager.invalidateParticipants(roomId);
       // Add new participant to our list
       participants.push({
         id: participantId,
