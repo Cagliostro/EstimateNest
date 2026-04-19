@@ -1,5 +1,5 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import {
   ApiGatewayManagementApiClient,
   PostToConnectionCommand,
@@ -7,10 +7,11 @@ import {
 } from '@aws-sdk/client-apigatewaymanagementapi';
 import { APIGatewayProxyEvent } from 'aws-lambda';
 import { WebSocketMessage } from '@estimatenest/shared';
+import getCacheManager from './cache';
 
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
-
+const cacheManager = getCacheManager();
 /**
  * Broadcast a WebSocket message to all participants in a room.
  * @param event The Lambda event (to extract domainName and stage)
@@ -38,17 +39,8 @@ export async function broadcastToRoom(
   const apiGatewayClient = new ApiGatewayManagementApiClient({ endpoint });
 
   // Fetch all participants in the room
-  const participantsResult = await docClient.send(
-    new QueryCommand({
-      TableName: process.env.PARTICIPANTS_TABLE!,
-      KeyConditionExpression: 'roomId = :roomId',
-      ExpressionAttributeValues: {
-        ':roomId': roomId,
-      },
-    })
-  );
-
-  const participants = participantsResult.Items || [];
+  // Fetch all participants in the room (cached)
+  const participants = await cacheManager.getParticipantsWithCache(roomId);
   if (!message.type) {
     console.error('⚠️ Broadcast message missing type field! Message:', JSON.stringify(message));
   }
@@ -125,6 +117,8 @@ export async function broadcastToRoom(
           console.log(
             `Cleaned up stale connection ${participant.connectionId} for participant ${participant.participantId}`
           );
+          // Invalidate participant cache since participant connection changed
+          cacheManager.invalidateParticipants(participant.roomId);
         } catch (cleanupError) {
           console.error('Failed to clean up stale connection:', cleanupError);
         }

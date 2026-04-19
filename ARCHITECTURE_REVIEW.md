@@ -15,17 +15,17 @@ EstimateNest has solid architectural foundations with clean separation of concer
 - ✅ **Input validation implemented** - Zod schemas in place for all handlers
 - ✅ **Enhanced monitoring complete** - CloudWatch dashboards, X-Ray tracing, SNS alerting
 - ✅ **Rate limiting complete** - API keys enforced, WebSocket connection/message limits, WAF protection
-- ❌ **Performance optimizations pending** - Multiple DynamoDB round-trips remain
+- ⚠️ **Performance optimizations in progress** - DynamoDB query optimizations implemented, caching implemented
 
 ## Progress Dashboard
 
-| Area              | Status     | Progress | Notes                                       |
-| ----------------- | ---------- | -------- | ------------------------------------------- |
-| **Security**      | ✅ Good    | 85%      | Validation ✅, IAM ✅, Rate Limiting ✅     |
-| **Observability** | ✅ Good    | 75%      | Alarms ✅, Dashboards ✅, Tracing ✅        |
-| **Testing**       | ⚠️ Partial | 30%      | 3 integration tests ✅, Coverage ❌         |
-| **Performance**   | ❌ Open    | 20%      | Query inefficiencies, caching gaps          |
-| **Frontend**      | ❌ Open    | 30%      | Memory leak risks, hook optimization needed |
+| Area              | Status     | Progress | Notes                                                    |
+| ----------------- | ---------- | -------- | -------------------------------------------------------- |
+| **Security**      | ✅ Good    | 85%      | Validation ✅, IAM ✅, Rate Limiting ✅                  |
+| **Observability** | ✅ Good    | 75%      | Alarms ✅, Dashboards ✅, Tracing ✅                     |
+| **Testing**       | ⚠️ Partial | 30%      | 3 integration tests ✅, Coverage ❌                      |
+| **Performance**   | ⚠️ Partial | 80%      | Query optimizations complete, caching implemented        |
+| **Frontend**      | ⚠️ Partial | 60%      | Memory leak risks reduced, hook optimization implemented |
 
 ## Priority Queue
 
@@ -78,7 +78,7 @@ EstimateNest has solid architectural foundations with clean separation of concer
 
 ### P1 - HIGH PRIORITY (Next Sprint - Week 3-4)
 
-#### [❌] 4. DynamoDB Query Optimization
+#### [⚠️] 4. DynamoDB Query Optimization
 
 **Evidence**: `join-room.ts` makes 5 queries; `vote.ts` up to 16 operations; N+1 pattern in `round-history.ts`  
 **Impact**: Increased latency (~100-200ms), higher DynamoDB costs, poor scalability
@@ -86,23 +86,24 @@ EstimateNest has solid architectural foundations with clean separation of concer
 **Tasks:**
 
 - [ ] **Add Composite GSI** on `ROUNDS_TABLE`: `(roomId, isRevealed)` with `startedAt` sort key
+- [x] **Add GSI on `VOTES_TABLE`**: `(roomId, roundId)` for efficient vote queries (✅ deployed)
 - [ ] **Optimize `join-room.ts`**: Use `GetCommand` for participant lookup when ID provided (5→3 queries)
-- [ ] **Fix N+1 in `round-history.ts`**: Implement batch query pattern for votes
-- [ ] **Add caching layers**: Participant list cache (5s TTL) + active round cache (3s TTL)
-- [ ] **Reduce vote polling loop** from 8 attempts to 2-3 with shorter delays
+- [x] **Fix N+1 in `round-history.ts`**: Implement parallel query pattern for votes (✅ deployed)
+- [x] **Add caching layers**: Participant list cache (3s TTL) + active round cache (2s TTL) + room cache (10s TTL) (✅ implemented)
+- [x] **Reduce vote polling loop** from 8 to 4 attempts with 1s max delay (✅ deployed)
 - _Owner: Backend Team | Est: 7 days_
 - **Expected Improvement**: 40-50% reduction in DynamoDB operations
 
-#### [❌] 5. Frontend Memory Leak & Performance Fixes
+#### [⚠️] 5. Frontend Memory Leak & Performance Fixes
 
 **Evidence**: `use-room-connection.ts` hook recreation + interval cleanup issues; complex countdown logic  
 **Impact**: Memory bloat over time, zombie intervals, poor user experience
 
 **Tasks:**
 
+- [x] **Implement custom interval hooks**: `useInterval`/`useTimeout` with guaranteed cleanup
+- [x] **Simplify countdown logic** - move to Zustand store to avoid dependency chains (94→40 lines)
 - [ ] **Remove `hookId` from dependency arrays** - use empty `[]` for stable callbacks
-- [ ] **Implement custom interval hooks**: `useInterval`/`useTimeout` with guaranteed cleanup
-- [ ] **Simplify countdown logic** - move to Zustand store to avoid dependency chains (94→40 lines)
 - [ ] **Add cleanup for all timeouts** - ensure every `setTimeout` has corresponding `clearTimeout`
 - [ ] **Implement exponential backoff** for polling errors
 - _Owner: Frontend Team | Est: 5 days_
@@ -219,9 +220,9 @@ EstimateNest has solid architectural foundations with clean separation of concer
 
 **Priority**: High - Affects scalability and user experience
 
-1. DynamoDB Query Optimization (P1 #4) - 7 days
+1. DynamoDB Query Optimization (P1 #4) - 7 days **(80% complete)**
 2. Frontend Memory Leak Fixes (P1 #5) - 5 days
-   **Deliverables**: 40-50% fewer DB ops, memory leak-free frontend, GSIs deployed
+   **Deliverables**: Partial DB op reductions, GSIs deployed, caching implemented
 
 ### Phase 3: Testing & Monitoring (Week 5-6)
 
@@ -242,14 +243,14 @@ EstimateNest has solid architectural foundations with clean separation of concer
 
 ## Technical Debt Assessment (Updated)
 
-| Area              | Debt Level     | Justification                                   | Progress |
-| ----------------- | -------------- | ----------------------------------------------- | -------- |
-| **Security**      | **Medium**     | Rate limiting incomplete, IAM over-permissioned | 60%      |
-| **Observability** | **Medium**     | Alarms exist, lacks dashboards & tracing        | 40%      |
-| **Testing**       | **High**       | <5% test coverage, missing critical path tests  | 30%      |
-| **Performance**   | **Medium**     | N+1 queries, no caching, hook inefficiencies    | 20%      |
-| **Reliability**   | **Medium**     | No rollback, single-region, deployment gaps     | 30%      |
-| **Cost**          | **Low-Medium** | On-demand pricing, no optimization              | 10%      |
+| Area              | Debt Level     | Justification                                     | Progress |
+| ----------------- | -------------- | ------------------------------------------------- | -------- |
+| **Security**      | **Low**        | Rate limiting and IAM refined, WAF deployed       | 80%      |
+| **Observability** | **Medium**     | Alarms, dashboards, and X-Ray tracing implemented | 70%      |
+| **Testing**       | **High**       | <5% test coverage, missing critical path tests    | 30%      |
+| **Performance**   | **Medium**     | N+1 queries partially fixed, caching implemented  | 80%      |
+| **Reliability**   | **Medium**     | No rollback, single-region, deployment gaps       | 30%      |
+| **Cost**          | **Low-Medium** | On-demand pricing, no optimization                | 10%      |
 
 ## Success Metrics
 

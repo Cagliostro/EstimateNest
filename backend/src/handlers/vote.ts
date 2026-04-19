@@ -22,6 +22,7 @@ import {
   safeParseWebSocketMessage,
 } from '@estimatenest/shared';
 import { broadcastToRoom, sendToConnection } from '../utils/broadcast';
+import getCacheManager from '../utils/cache';
 
 // Helper to create properly typed WebSocket responses
 function createResponse(type: string, payload: Record<string, unknown>): string {
@@ -92,29 +93,13 @@ const docClient = DynamoDBDocumentClient.from(client);
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 const ROUNDS_TABLE = process.env.ROUNDS_TABLE!;
 const VOTES_TABLE = process.env.VOTES_TABLE!;
-const ROOMS_TABLE = process.env.ROOMS_TABLE!;
 const RATE_LIMIT_TABLE = process.env.RATE_LIMIT_TABLE!;
-// Simple in-memory cache for room settings (10s TTL) - reduces DynamoDB reads
-const roomSettingsCache = new Map<string, { room: Record<string, unknown>; timestamp: number }>();
-const ROOM_CACHE_TTL_MS = 10 * 1000; // 10 seconds
+// Cache manager for reducing DynamoDB reads
+const cacheManager = getCacheManager();
 
+// Backward compatibility wrapper for existing room cache calls
 async function getRoomWithCache(roomId: string): Promise<Record<string, unknown> | undefined> {
-  const cached = roomSettingsCache.get(roomId);
-  const now = Date.now();
-  if (cached && now - cached.timestamp < ROOM_CACHE_TTL_MS) {
-    return cached.room;
-  }
-  const roomResult = await docClient.send(
-    new GetCommand({
-      TableName: ROOMS_TABLE,
-      Key: { id: roomId, sk: 'META' },
-    })
-  );
-  const room = roomResult.Item;
-  if (room) {
-    roomSettingsCache.set(roomId, { room, timestamp: now });
-  }
-  return room;
+  return cacheManager.getRoomWithCache(roomId);
 }
 
 async function handleVote(
@@ -185,42 +170,12 @@ async function handleVote(
     }
   } else {
     console.log('No roundId provided, finding or creating active round');
-    // Find all unrevealed rounds (should be at most one, but handle multiple)
-    const activeRoundsResult = await docClient.send(
-      new QueryCommand({
-        TableName: ROUNDS_TABLE,
-        KeyConditionExpression: 'roomId = :roomId',
-        FilterExpression: 'isRevealed = :false',
-        ExpressionAttributeValues: {
-          ':roomId': roomId,
-          ':false': false,
-        },
-        ConsistentRead: true,
-      })
-    );
+    // Get active round from cache (2s TTL)
+    const cachedRound = await cacheManager.getActiveRoundWithCache(roomId);
 
-    const items = activeRoundsResult.Items || [];
-    // Sort by startedAt descending to get the most recent round
-    items.sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
-
-    if (items.length > 0) {
-      if (items.length > 1) {
-        console.warn(
-          `⚠️ Found ${items.length} unrevealed rounds for room ${roomId}. This should not happen. Using most recent.`
-        );
-      }
-      const item = items[0];
-      console.log('Active round found:', item.roundId || item.id, 'startedAt:', item.startedAt);
-      // Map DynamoDB attributes to Round interface
-      round = {
-        id: item.roundId || item.id,
-        roomId: item.roomId,
-        title: item.title,
-        description: item.description,
-        startedAt: item.startedAt,
-        revealedAt: item.revealedAt,
-        isRevealed: item.isRevealed,
-      };
+    if (cachedRound) {
+      console.log('Active round found:', cachedRound.id, 'startedAt:', cachedRound.startedAt);
+      round = cachedRound;
       roundId = round.id;
     } else {
       // Create new round
@@ -242,6 +197,8 @@ async function handleVote(
           },
         })
       );
+      // Invalidate active round cache since we created a new round
+      cacheManager.invalidateActiveRound(roomId);
     }
   }
 
@@ -300,18 +257,8 @@ async function handleVote(
   );
   console.log('Vote transaction successful for participant:', participantId);
 
-  // Fetch participants first to know how many active participants exist
-  const participantsResult = await docClient.send(
-    new QueryCommand({
-      TableName: PARTICIPANTS_TABLE,
-      KeyConditionExpression: 'roomId = :roomId',
-      ExpressionAttributeValues: {
-        ':roomId': roomId,
-      },
-      ConsistentRead: true,
-    })
-  );
-  const participants = (participantsResult.Items as Participant[]) || [];
+  // Fetch participants first to know how many active participants exist (cached)
+  const participants = await cacheManager.getParticipantsWithCache(roomId);
   const activeParticipants = participants.filter(
     (p) => p.connectionId && p.connectionId !== 'REST'
   );
@@ -627,6 +574,8 @@ async function handleReveal(
     })
   );
 
+  // Invalidate active round cache since round is now revealed
+  cacheManager.invalidateActiveRound(roomId);
   round.isRevealed = true;
   round.revealedAt = revealedAt;
 
@@ -901,6 +850,8 @@ async function handleNewRound(
 
       console.log('Existing round marked as revealed:', existingRoundId);
     }
+    // Invalidate active round cache since we marked existing rounds as revealed
+    cacheManager.invalidateActiveRound(roomId);
   }
 
   // Always create a new round with new ID
@@ -926,6 +877,8 @@ async function handleNewRound(
   );
 
   console.log('Created new round:', roundId);
+  // Invalidate active round cache since we created a new active round
+  cacheManager.invalidateActiveRound(roomId);
 
   // Fetch any existing votes for this round (consistent read)
   const votesResult = await docClient.send(

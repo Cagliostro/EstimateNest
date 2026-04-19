@@ -3,10 +3,17 @@ import { handler } from '../../src/handlers/vote.js';
 import { APIGatewayProxyEvent } from 'aws-lambda';
 
 // Create mock DynamoDB client at module level using vi.hoisted to ensure it's available
-const { mockDynamoDB } = vi.hoisted(() => {
+const { mockDynamoDB, mockCacheManager } = vi.hoisted(() => {
   return {
     mockDynamoDB: {
       send: vi.fn(),
+    },
+    mockCacheManager: {
+      getParticipantsWithCache: vi.fn(),
+      getActiveRoundWithCache: vi.fn(),
+      getRoomWithCache: vi.fn(),
+      invalidateActiveRound: vi.fn(),
+      invalidateParticipants: vi.fn(),
     },
   };
 });
@@ -29,6 +36,11 @@ vi.mock('../../src/utils/broadcast', () => ({
   sendToConnection: vi.fn(() => Promise.resolve()),
 }));
 
+// Mock the cache module
+vi.mock('../../src/utils/cache', () => ({
+  default: vi.fn(() => mockCacheManager),
+}));
+
 describe('vote handler', () => {
   let mockEvent: Partial<APIGatewayProxyEvent>;
 
@@ -37,8 +49,26 @@ describe('vote handler', () => {
     // Reset the mock send function completely
     mockDynamoDB.send.mockReset();
     // Default mock that throws if called unexpectedly
-    mockDynamoDB.send.mockImplementation(() => {
+    mockDynamoDB.send.mockImplementation((command) => {
+      console.error('Unexpected DynamoDB call:', command.constructor.name);
       throw new Error('Unexpected call to DynamoDB - test should mock this call');
+    });
+
+    // Reset cache mocks
+    mockCacheManager.getParticipantsWithCache.mockReset();
+    mockCacheManager.getActiveRoundWithCache.mockReset();
+    mockCacheManager.getRoomWithCache.mockReset();
+    mockCacheManager.invalidateActiveRound.mockReset();
+    mockCacheManager.invalidateParticipants.mockReset();
+    // Default mock that throws if called unexpectedly
+    mockCacheManager.getParticipantsWithCache.mockImplementation(() => {
+      throw new Error('Unexpected call to getParticipantsWithCache - test should mock this call');
+    });
+    mockCacheManager.getActiveRoundWithCache.mockImplementation(() => {
+      throw new Error('Unexpected call to getActiveRoundWithCache - test should mock this call');
+    });
+    mockCacheManager.getRoomWithCache.mockImplementation(() => {
+      throw new Error('Unexpected call to getRoomWithCache - test should mock this call');
     });
 
     // Set environment variables required by the handler
@@ -74,7 +104,7 @@ describe('vote handler', () => {
     // Mock rate limit record (PutCommand)
     mockDynamoDB.send.mockResolvedValueOnce({});
 
-    // Mock participant query
+    // Mock participant query (by connectionId)
     mockDynamoDB.send.mockResolvedValueOnce({
       Items: [
         {
@@ -86,10 +116,8 @@ describe('vote handler', () => {
       ],
     });
 
-    // Mock active round query (no active round)
-    mockDynamoDB.send.mockResolvedValueOnce({
-      Items: [],
-    });
+    // Mock active round cache (no active round)
+    mockCacheManager.getActiveRoundWithCache.mockResolvedValueOnce(null);
 
     // Mock round creation (PutCommand)
     mockDynamoDB.send.mockResolvedValueOnce({});
@@ -97,29 +125,43 @@ describe('vote handler', () => {
     // Mock transaction write
     mockDynamoDB.send.mockResolvedValueOnce({});
 
-    // Mock votes query for broadcast
-    mockDynamoDB.send.mockResolvedValueOnce({
-      Items: [],
-    });
+    // Mock votes query for broadcast - will be called multiple times due to retry logic
+    // Mock 4 attempts in the loop (MAX_ATTEMPTS) and 1 final attempt
+    // Return a vote item matching the participant
+    const voteItem = {
+      id: 'vote-id-123',
+      roundId: 'round-id-123', // dummy, will be ignored
+      participantId: participantId,
+      value: 5,
+      createdAt: new Date().toISOString(),
+    };
+    for (let i = 0; i < 5; i++) {
+      mockDynamoDB.send.mockResolvedValueOnce({
+        Items: [voteItem],
+      });
+    }
 
-    // Mock participants query for auto-reveal check
-    mockDynamoDB.send.mockResolvedValueOnce({
-      Items: [
-        {
-          participantId,
-          roomId,
-        },
-      ],
-    });
-
-    // Mock room settings fetch
-    mockDynamoDB.send.mockResolvedValueOnce({
-      Item: {
-        id: roomId,
-        sk: 'META',
-        autoRevealEnabled: true,
-        autoRevealCountdownSeconds: 3,
+    // Mock participants cache (for auto-reveal check)
+    mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
+      {
+        participantId,
+        roomId,
+        isModerator: false,
+        connectionId: 'test-connection-id',
+        id: participantId,
+        name: 'Test User',
+        avatarSeed: 'test',
+        joinedAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
       },
+    ]);
+
+    // Mock room cache (for auto-reveal settings)
+    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
+      id: roomId,
+      sk: 'META',
+      autoRevealEnabled: true,
+      autoRevealCountdownSeconds: 3,
     });
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
@@ -128,6 +170,8 @@ describe('vote handler', () => {
     const body = JSON.parse(response.body);
     expect(body.type).toBe('ack');
     expect(body.payload.message).toBe('Vote recorded');
+    // Verify cache invalidation was called when new round created
+    expect(mockCacheManager.invalidateActiveRound).toHaveBeenCalledWith(roomId);
   });
 
   it('should reject duplicate vote with idempotency key', async () => {
@@ -142,7 +186,7 @@ describe('vote handler', () => {
     // Mock rate limit record (PutCommand)
     mockDynamoDB.send.mockResolvedValueOnce({});
 
-    // Mock participant query
+    // Mock participant query (by connectionId)
     mockDynamoDB.send.mockResolvedValueOnce({
       Items: [
         {
@@ -154,10 +198,8 @@ describe('vote handler', () => {
       ],
     });
 
-    // Mock active round query (no active round)
-    mockDynamoDB.send.mockResolvedValueOnce({
-      Items: [],
-    });
+    // Mock active round cache (no active round)
+    mockCacheManager.getActiveRoundWithCache.mockResolvedValueOnce(null);
 
     // Mock round creation
     mockDynamoDB.send.mockResolvedValueOnce({});
@@ -174,5 +216,7 @@ describe('vote handler', () => {
     expect(body.type).toBe('error');
     expect(body.payload.message).toBe('Already voted in this round');
     expect(body.payload.code).toBe('DUPLICATE_VOTE');
+    // Verify cache invalidation was called when new round created
+    expect(mockCacheManager.invalidateActiveRound).toHaveBeenCalledWith(roomId);
   });
 });
