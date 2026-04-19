@@ -128,16 +128,33 @@ jobs:
             echo "env=dev" >> $GITHUB_OUTPUT
           fi
 
+      - name: Determine deployment color
+        id: color
+        run: |
+          if [[ "${{ steps.env.outputs.env }}" == "prod" ]]; then
+            echo "color=green" >> $GITHUB_OUTPUT
+          else
+            echo "color=blue" >> $GITHUB_OUTPUT
+          fi
+
       - name: Bootstrap CDK (if needed)
-        run: npm run bootstrap --workspace=infrastructure -- --context env=${{ steps.env.outputs.env }}
+        run: npm run bootstrap --workspace=infrastructure -- --context env=${{ steps.env.outputs.env }} --context color=${{ steps.color.outputs.color }}
 
       - name: Deploy infrastructure
-        run: npm run deploy:${{ steps.env.outputs.env }}
+        run: |
+          cd infrastructure
+          npx cdk deploy --all --require-approval never --context env=${{ steps.env.outputs.env }} --context color=${{ steps.color.outputs.color }}
 
       - name: Get deployment outputs
         id: outputs
         run: |
-          STACK_NAME="EstimateNest-${{ steps.env.outputs.env }}"
+          # Determine stack name based on color (blue has no suffix for backward compatibility)
+          if [[ "${{ steps.color.outputs.color }}" == "blue" ]]; then
+            STACK_NAME="EstimateNest-${{ steps.env.outputs.env }}"
+          else
+            STACK_NAME="EstimateNest-${{ steps.env.outputs.env }}-${{ steps.color.outputs.color }}"
+          fi
+          echo "Using stack name: $STACK_NAME"
 
           # Get bucket name from CloudFormation outputs
           BUCKET_NAME=$(aws cloudformation describe-stacks \
@@ -152,6 +169,13 @@ jobs:
             --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" \
             --output text)
           echo "distribution_id=$DISTRIBUTION_ID" >> $GITHUB_OUTPUT
+
+          # Get CloudFront domain name from outputs
+          CLOUDFRONT_DOMAIN=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomainName'].OutputValue" \
+            --output text)
+          echo "cloudfront_domain=$CLOUDFRONT_DOMAIN" >> $GITHUB_OUTPUT
 
           # Get REST API URL
           REST_API_URL=$(aws cloudformation describe-stacks \
@@ -183,9 +207,41 @@ jobs:
 
           echo "Bucket: $BUCKET_NAME"
           echo "Distribution: $DISTRIBUTION_ID"
+          echo "CloudFront Domain: $CLOUDFRONT_DOMAIN"
           echo "REST API: $REST_API_URL"
           echo "WebSocket: $WEBSOCKET_URL"
           echo "Frontend: $FRONTEND_URL"
+
+          # Output deployment color information for blue-green
+          echo "Deployment Color: ${{ steps.color.outputs.color }}"
+          if [[ "${{ steps.color.outputs.color }}" == "green" ]]; then
+            echo "⚠️  Blue-Green Deployment Note:"
+            echo "This deployment is to the 'green' environment with weight 0 (no traffic)."
+            echo "Test URLs:"
+            echo "  - REST API: $REST_API_URL"
+            echo "  - WebSocket: $WEBSOCKET_URL"
+            echo "  - Health check: $REST_API_URL/health"
+            echo ""
+            echo "To switch traffic after verification:"
+            echo "1. Test the green deployment using the URLs above"
+            echo "2. Run: ./infrastructure/scripts/switch-traffic.sh ${{ steps.env.outputs.env }} green"
+            echo "3. Monitor application performance"
+          fi
+
+      - name: Health check
+        run: |
+          REST_API_URL="${{ steps.outputs.outputs.rest_api_url }}"
+          echo "Performing health check at $REST_API_URL/health"
+          for i in {1..5}; do
+            if curl -f -s -o /dev/null -w "%{http_code}" "$REST_API_URL/health" | grep -q "200"; then
+              echo "Health check passed"
+              exit 0
+            fi
+            echo "Attempt $i: Health check failed, retrying in 5 seconds..."
+            sleep 5
+          done
+          echo "Health check failed after 5 attempts"
+          exit 1
 
       - name: Build frontend
         run: |

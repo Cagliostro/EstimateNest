@@ -119,8 +119,9 @@ describe('vote handler', () => {
     // Mock active round cache (no active round)
     mockCacheManager.getActiveRoundWithCache.mockResolvedValueOnce(null);
 
-    // Mock round creation (PutCommand)
-    mockDynamoDB.send.mockResolvedValueOnce({});
+    // Mock round creation - two PutCommands: ACTIVE coordination item and round item
+    mockDynamoDB.send.mockResolvedValueOnce({}); // Conditional Put for ACTIVE item
+    mockDynamoDB.send.mockResolvedValueOnce({}); // Put for round item
 
     // Mock transaction write
     mockDynamoDB.send.mockResolvedValueOnce({});
@@ -201,8 +202,9 @@ describe('vote handler', () => {
     // Mock active round cache (no active round)
     mockCacheManager.getActiveRoundWithCache.mockResolvedValueOnce(null);
 
-    // Mock round creation
-    mockDynamoDB.send.mockResolvedValueOnce({});
+    // Mock round creation - two PutCommands: ACTIVE coordination item and round item
+    mockDynamoDB.send.mockResolvedValueOnce({}); // Conditional Put for ACTIVE item
+    mockDynamoDB.send.mockResolvedValueOnce({}); // Put for round item
 
     // Mock transaction write throwing ConditionalCheckFailedException
     const conditionalError = new Error('Conditional check failed');
