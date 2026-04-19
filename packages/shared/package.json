@@ -11,9 +11,11 @@
     "test": "echo 'No tests in shared package' && exit 0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.0.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.0.0",
+    "globals": "^15.0.0",
     "typescript": "^5.4.5"
   },
   "dependencies": {
