@@ -140,6 +140,25 @@ jobs:
       - name: Bootstrap CDK (if needed)
         run: npm run bootstrap --workspace=infrastructure -- --context env=${{ steps.env.outputs.env }} --context color=${{ steps.color.outputs.color }}
 
+      - name: Clean up failed stack if ROLLBACK_COMPLETE
+        run: |
+          # Determine stack name based on color (blue has no suffix for backward compatibility)
+          if [[ "${{ steps.color.outputs.color }}" == "blue" ]]; then
+            STACK_NAME="EstimateNest-${{ steps.env.outputs.env }}"
+          else
+            STACK_NAME="EstimateNest-${{ steps.env.outputs.env }}-${{ steps.color.outputs.color }}"
+          fi
+          echo "Checking stack $STACK_NAME"
+          STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NOT_FOUND")
+          echo "Stack status: $STATUS"
+          if [[ "$STATUS" == "ROLLBACK_COMPLETE" ]]; then
+            echo "Deleting stack $STACK_NAME (ROLLBACK_COMPLETE) before redeployment"
+            aws cloudformation delete-stack --stack-name "$STACK_NAME"
+            echo "Waiting for deletion to complete..."
+            aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
+            echo "Stack deleted successfully"
+          fi
+
       - name: Deploy infrastructure
         run: |
           cd infrastructure
