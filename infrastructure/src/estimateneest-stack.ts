@@ -591,6 +591,42 @@ export class EstimateNestStack extends cdk.Stack {
       },
     });
 
+    // Add CORS headers to gateway responses (403, 404, etc.)
+    // Without this, errors like missing API key won't have CORS headers
+    restApi.addGatewayResponse('Default4XX', {
+      type: apigateway.ResponseType.DEFAULT_4XX,
+      responseHeaders: {
+        'Access-Control-Allow-Origin': "'*'",
+        'Access-Control-Allow-Headers': "'*'",
+      },
+    });
+
+    restApi.addGatewayResponse('Default5XX', {
+      type: apigateway.ResponseType.DEFAULT_5XX,
+      responseHeaders: {
+        'Access-Control-Allow-Origin': "'*'",
+        'Access-Control-Allow-Headers': "'*'",
+      },
+    });
+
+    // Specific response for missing API key (403)
+    restApi.addGatewayResponse('AccessDenied', {
+      type: apigateway.ResponseType.ACCESS_DENIED,
+      responseHeaders: {
+        'Access-Control-Allow-Origin': "'*'",
+        'Access-Control-Allow-Headers': "'*'",
+      },
+    });
+
+    // Specific response for missing authentication token (403)
+    restApi.addGatewayResponse('MissingAuthenticationToken', {
+      type: apigateway.ResponseType.MISSING_AUTHENTICATION_TOKEN,
+      responseHeaders: {
+        'Access-Control-Allow-Origin': "'*'",
+        'Access-Control-Allow-Headers': "'*'",
+      },
+    });
+
     // Map custom domains if they were created
     if (restApiDomain) {
       restApiDomain.addBasePathMapping(restApi, {
