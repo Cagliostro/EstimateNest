@@ -220,9 +220,20 @@ EstimateNest has solid architectural foundations with clean separation of concer
 
 **Priority**: High - Affects scalability and user experience
 
-1. DynamoDB Query Optimization (P1 #4) - 7 days **(80% complete)**
-2. Frontend Memory Leak Fixes (P1 #5) - 5 days
-   **Deliverables**: Partial DB op reductions, GSIs deployed, caching implemented
+1. DynamoDB Query Optimization (P1 #4) - 7 days **(85% complete)**
+   - ✅ Caching implemented (participants 3s, active rounds 2s, rooms 10s)
+   - ✅ Vote polling loop reduced (8→4 attempts)
+   - ✅ GSI on VOTES_TABLE deployed
+   - ✅ N+1 pattern fixed in round-history.ts
+   - ⚠️ Composite GSI on ROUNDS_TABLE pending
+   - ⚠️ join-room.ts optimization pending (5→3 queries)
+2. Frontend Memory Leak Fixes (P1 #5) - 5 days **(60% complete)**
+   - ✅ Custom interval hooks with guaranteed cleanup
+   - ✅ Simplified countdown logic (94→40 lines)
+   - ⚠️ hookId cleanup in dependency arrays pending
+   - ⚠️ setTimeout cleanup pending
+   - ⚠️ Exponential backoff for polling errors pending
+     **Deliverables**: Caching implemented, memory leaks reduced, GSI optimization pending
 
 ### Phase 3: Testing & Monitoring (Week 5-6)
 
