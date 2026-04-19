@@ -5,7 +5,7 @@ import globals from 'globals';
 
 export default [
   {
-    ignores: ['dist', 'eslint.config.js', '**/*.test.ts', '**/*.test.cjs', 'test-*'],
+    ignores: ['dist', 'eslint.config.mjs', '**/*.test.ts', '**/*.test.cjs', 'test-*'],
   },
   js.configs.recommended,
   {
@@ -25,10 +25,13 @@ export default [
     },
     rules: {
       ...typescriptEslint.configs.recommended.rules,
-      '@typescript-eslint/no-unused-vars': ['error', { 
-        argsIgnorePattern: '^_',
-        caughtErrorsIgnorePattern: '^_',
-      }],
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
+      ],
     },
   },
 ];
