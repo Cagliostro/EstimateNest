@@ -223,6 +223,7 @@ describe('useRoomConnection', () => {
         participantId: 'test-participant-id',
         name: 'Test User',
         avatarSeed: 'test-seed',
+        webSocketUrl: 'wss://test.example.com',
         participants: [],
         round: null,
         votes: [],
