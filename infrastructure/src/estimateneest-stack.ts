@@ -708,9 +708,12 @@ export class EstimateNestStack extends cdk.Stack {
         zoneName: props.hostedZoneName,
       });
 
+      // Only add domain aliases for blue deployment to avoid CloudFront CNAME conflicts
+      // Green deployment will still receive traffic via weighted Route 53 records pointing to its CloudFront domain
+      const domainNames = deploymentColor === 'blue' ? [props.domainName] : [];
       distributionProps = {
         ...distributionProps,
-        domainNames: [props.domainName],
+        domainNames,
         certificate,
       };
     }
@@ -768,7 +771,7 @@ export class EstimateNestStack extends cdk.Stack {
 
         const wwwDistribution = new cloudfront.Distribution(this, 'WwwDistribution', {
           defaultRootObject: '',
-          domainNames: [wwwDomainName],
+          domainNames: deploymentColor === 'blue' ? [wwwDomainName] : [],
           certificate,
           defaultBehavior: {
             origin: new cloudfrontOrigins.S3Origin(frontendBucket),

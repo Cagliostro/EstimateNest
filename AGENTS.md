@@ -76,9 +76,9 @@ npm run test:coverage --workspace=frontend
 
 **Deploy**: `npm run deploy:dev` or `npm run deploy:prod`
 
-**Context**: `--context env=dev|prod` determines stack configuration
+**Context**: `--context env=dev|prod` determines stack configuration, `--context color=blue|green` for blue-green deployments (auto-determined in CI: prod→green, dev→blue)
 
-**Outputs extracted**: `FrontendBucketName`, `CloudFrontDistributionId`, `RestApiUrl`, `WebSocketUrl`, `FrontendUrl`
+**Outputs extracted**: `FrontendBucketName`, `CloudFrontDistributionId`, `CloudFrontDomainName`, `WwwCloudFrontDomainName`, `RestApiUrl`, `WebSocketUrl`, `FrontendUrl`
 
 **Frontend build**: Requires actual URLs from CDK outputs as env vars:
 
@@ -88,9 +88,13 @@ npm run test:coverage --workspace=frontend
 
 ## Deployment Flow
 
-- `main` → production
-- `development` → development
+- `main` → production (green stack, weight 0)
+- `development` → development (blue stack, weight 100)
 - CDK outputs are used to build frontend with real URLs before uploading to S3
+- Blue-green deployments: production deploys to green stack with weight 0, traffic switched after verification
+- Traffic switching: `./infrastructure/scripts/switch-traffic.sh prod green` (or `blue`, `rollback`)
+- Rollback automation: script detects current active color and switches to opposite
+- Health checks: `/health` endpoint validated before frontend build
 
 ## CI Build Env Vars (Ubuntu)
 
