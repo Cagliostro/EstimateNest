@@ -1121,7 +1121,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
   });
   try {
     console.log('Raw body (parsed):', event.body ? JSON.parse(event.body) : null);
-  } catch (e) {
+  } catch (_e) {
     console.log('Raw body (cannot parse):', event.body);
   }
   let message: WebSocketMessage;

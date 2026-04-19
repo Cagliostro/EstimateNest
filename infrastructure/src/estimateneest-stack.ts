@@ -561,7 +561,7 @@ export class EstimateNestStack extends cdk.Stack {
     webSocketApi.grantManageConnections(joinRoomHandler);
 
     // Also grant invoke permissions for sending messages
-    const invokeArn = webSocketApi.arnForExecuteApi('*', '/@connections/*');
+    const invokeArn = webSocketApi.arnForExecuteApiV2('*', '/@connections/*');
     [websocketConnectHandler, websocketDisconnectHandler, voteHandler, joinRoomHandler].forEach(
       (handler) => {
         handler.addToRolePolicy(
@@ -685,7 +685,7 @@ export class EstimateNestStack extends cdk.Stack {
     let distributionProps: cloudfront.DistributionProps = {
       defaultRootObject: 'index.html',
       defaultBehavior: {
-        origin: new cloudfrontOrigins.S3Origin(frontendBucket),
+        origin: cloudfrontOrigins.S3BucketOrigin.withOriginAccessControl(frontendBucket),
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         responseHeadersPolicy: securityHeadersPolicy,
@@ -781,7 +781,7 @@ export class EstimateNestStack extends cdk.Stack {
           domainNames: deploymentColor === 'blue' ? [wwwDomainName] : [],
           certificate,
           defaultBehavior: {
-            origin: new cloudfrontOrigins.S3Origin(frontendBucket),
+            origin: cloudfrontOrigins.S3BucketOrigin.withOriginAccessControl(frontendBucket),
             allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
             viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             responseHeadersPolicy: securityHeadersPolicy,
@@ -885,7 +885,7 @@ export class EstimateNestStack extends cdk.Stack {
     // DynamoDB throttling alarms
     const tables = [roomsTable, roomCodesTable, participantsTable, roundsTable, votesTable];
     tables.forEach((table, index) => {
-      const throttledRequests = table.metricThrottledRequests({
+      const throttledRequests = table.metricThrottledRequestsForOperation('All', {
         statistic: 'Sum',
         period: cdk.Duration.minutes(5),
       });
