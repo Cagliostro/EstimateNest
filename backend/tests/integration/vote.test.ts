@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { handler } from '../../src/handlers/vote.js';
 import { APIGatewayProxyEvent } from 'aws-lambda';
+import { broadcastToRoom } from '../../src/utils/broadcast';
 
 // Create mock DynamoDB client at module level using vi.hoisted to ensure it's available
 const { mockDynamoDB, mockCacheManager } = vi.hoisted(() => {
@@ -28,6 +29,7 @@ vi.mock('@aws-sdk/lib-dynamodb', () => ({
   QueryCommand: vi.fn(),
   TransactWriteCommand: vi.fn(),
   UpdateCommand: vi.fn(),
+  DeleteCommand: vi.fn(),
 }));
 
 // Mock the broadcast utilities
@@ -220,5 +222,573 @@ describe('vote handler', () => {
     expect(body.payload.code).toBe('DUPLICATE_VOTE');
     // Verify cache invalidation was called when new round created
     expect(mockCacheManager.invalidateActiveRound).toHaveBeenCalledWith(roomId);
+  });
+
+  it('should return 404 when participant not found', async () => {
+    // Mock rate limit check (allow)
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 });
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock participant query returning empty items
+    mockDynamoDB.send.mockResolvedValueOnce({ Items: [] });
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(404);
+    const body = JSON.parse(response.body);
+    expect(body.type).toBe('error');
+    expect(body.payload.message).toBe('Participant not found');
+    expect(body.payload.code).toBe('PARTICIPANT_NOT_FOUND');
+  });
+
+  it('should reject vote when rate limit exceeded', async () => {
+    // Mock rate limit check returning count >= limit (20)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Count: 20,
+    });
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(429);
+    const body = JSON.parse(response.body);
+    expect(body.type).toBe('error');
+    expect(body.payload.message).toBe('Rate limit exceeded');
+    expect(body.payload.code).toBe('RATE_LIMIT');
+  });
+
+  it('should return 400 for invalid JSON', async () => {
+    const invalidEvent = {
+      ...mockEvent,
+      body: '{ invalid json',
+    } as APIGatewayProxyEvent;
+
+    const response = await handler(invalidEvent);
+
+    expect(response.statusCode).toBe(400);
+    const body = JSON.parse(response.body);
+    expect(body.error).toBe('Invalid JSON message');
+  });
+
+  it('should return 400 for unsupported message type', async () => {
+    const unsupportedEvent = {
+      ...mockEvent,
+      body: JSON.stringify({ type: 'unsupported', payload: {} }),
+    } as APIGatewayProxyEvent;
+
+    const response = await handler(unsupportedEvent);
+
+    expect(response.statusCode).toBe(400);
+    const body = JSON.parse(response.body);
+    expect(body.error).toBe('Invalid message format');
+    expect(body.details).toBeDefined();
+    // Should mention invalid input
+    expect(body.details[0]).toMatch(/Invalid input/);
+  });
+
+  it('should return 400 for missing message type', async () => {
+    const missingTypeEvent = {
+      ...mockEvent,
+      body: JSON.stringify({ payload: {} }),
+    } as APIGatewayProxyEvent;
+
+    const response = await handler(missingTypeEvent);
+
+    expect(response.statusCode).toBe(400);
+    const body = JSON.parse(response.body);
+    expect(body.error).toBe('Invalid message format');
+    expect(body.details).toBeDefined();
+    // Should mention missing type or invalid union
+    expect(body.details[0]).toMatch(/type/);
+  });
+
+  it('should handle reveal message successfully', async () => {
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+    const roundId = 'round-123';
+    const connectionId = 'test-connection-id';
+
+    // Mock rate limit check (allow)
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 }); // rate limit query
+    mockDynamoDB.send.mockResolvedValueOnce({}); // rate limit put
+
+    // Mock participant query by connectionId
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [
+        {
+          participantId,
+          id: participantId,
+          roomId,
+          isModerator: true,
+          connectionId,
+          name: 'Test Moderator',
+          avatarSeed: 'seed',
+          joinedAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+        },
+      ],
+    });
+
+    // Mock round get
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        roomId,
+        roundId,
+        title: 'Test Round',
+        description: '',
+        startedAt: new Date().toISOString(),
+        revealedAt: null,
+        isRevealed: false,
+        scheduledRevealAt: null,
+      },
+    });
+
+    // Mock room cache
+    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
+      id: roomId,
+      sk: 'META',
+      allowAllParticipantsToReveal: false,
+      autoRevealEnabled: true,
+      autoRevealCountdownSeconds: 3,
+    });
+
+    // Mock round update
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock delete ACTIVE coordination item
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock votes query
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [
+        {
+          id: 'vote1',
+          roundId,
+          participantId,
+          value: 5,
+          votedAt: new Date().toISOString(),
+        },
+      ],
+    });
+
+    // Create reveal event
+    const revealEvent = {
+      ...mockEvent,
+      body: JSON.stringify({ type: 'reveal', payload: { roundId } }),
+    } as APIGatewayProxyEvent;
+
+    const response = await handler(revealEvent);
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.type).toBe('ack');
+    expect(body.payload.message).toBe('Votes revealed');
+    // Verify cache invalidation was called
+    expect(mockCacheManager.invalidateActiveRound).toHaveBeenCalledWith(roomId);
+    // Verify broadcast was called
+    expect(broadcastToRoom).toHaveBeenCalledTimes(1);
+    expect(broadcastToRoom).toHaveBeenCalledWith(
+      expect.objectContaining({ requestContext: expect.anything() }),
+      roomId,
+      expect.objectContaining({
+        type: 'roundUpdate',
+        payload: { round: expect.anything(), votes: expect.anything() },
+      })
+    );
+  });
+
+  it('should return 404 when round not found for reveal', async () => {
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+    const roundId = 'round-123';
+    const connectionId = 'test-connection-id';
+
+    // Mock rate limit check (allow)
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 });
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock participant query by connectionId
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [
+        {
+          participantId,
+          id: participantId,
+          roomId,
+          isModerator: true,
+          connectionId,
+          name: 'Test Moderator',
+          avatarSeed: 'seed',
+          joinedAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+        },
+      ],
+    });
+
+    // Mock round get returning empty (no item)
+    mockDynamoDB.send.mockResolvedValueOnce({ Item: null });
+
+    const revealEvent = {
+      ...mockEvent,
+      body: JSON.stringify({ type: 'reveal', payload: { roundId } }),
+    } as APIGatewayProxyEvent;
+
+    const response = await handler(revealEvent);
+
+    expect(response.statusCode).toBe(404);
+    const body = JSON.parse(response.body);
+    expect(body.type).toBe('error');
+    expect(body.payload.message).toBe('Round not found');
+    expect(body.payload.code).toBe('ROUND_NOT_FOUND');
+  });
+
+  it('should return 400 when round already revealed', async () => {
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+    const roundId = 'round-123';
+    const connectionId = 'test-connection-id';
+
+    // Mock rate limit check (allow)
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 });
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock participant query by connectionId
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [
+        {
+          participantId,
+          id: participantId,
+          roomId,
+          isModerator: true,
+          connectionId,
+          name: 'Test Moderator',
+          avatarSeed: 'seed',
+          joinedAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+        },
+      ],
+    });
+
+    // Mock round get with isRevealed true
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        roomId,
+        roundId,
+        title: 'Test Round',
+        description: '',
+        startedAt: new Date().toISOString(),
+        revealedAt: new Date().toISOString(),
+        isRevealed: true,
+        scheduledRevealAt: null,
+      },
+    });
+
+    // Mock room cache
+    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
+      id: roomId,
+      sk: 'META',
+      allowAllParticipantsToReveal: false,
+      autoRevealEnabled: true,
+      autoRevealCountdownSeconds: 3,
+    });
+
+    const revealEvent = {
+      ...mockEvent,
+      body: JSON.stringify({ type: 'reveal', payload: { roundId } }),
+    } as APIGatewayProxyEvent;
+
+    const response = await handler(revealEvent);
+
+    expect(response.statusCode).toBe(400);
+    const body = JSON.parse(response.body);
+    expect(body.type).toBe('error');
+    expect(body.payload.message).toBe('Round is already revealed');
+    expect(body.payload.code).toBe('ROUND_ALREADY_REVEALED');
+  });
+
+  it('should handle join message successfully', async () => {
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+    const connectionId = 'test-connection-id';
+
+    // Mock rate limit check (allow)
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 }); // rate limit query
+    mockDynamoDB.send.mockResolvedValueOnce({}); // rate limit put
+
+    // Mock participant query by connectionId
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [
+        {
+          participantId,
+          id: participantId,
+          roomId,
+          isModerator: false,
+          connectionId,
+          name: 'Test User',
+          avatarSeed: 'seed',
+          joinedAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+        },
+      ],
+    });
+
+    // Mock participants query by roomId
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [
+        {
+          participantId,
+          id: participantId,
+          roomId,
+          isModerator: false,
+          connectionId,
+          name: 'Test User',
+          avatarSeed: 'seed',
+          joinedAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+        },
+      ],
+    });
+
+    // Create join event (payload can be empty)
+    const joinEvent = {
+      ...mockEvent,
+      body: JSON.stringify({ type: 'join', payload: {} }),
+    } as APIGatewayProxyEvent;
+
+    const response = await handler(joinEvent);
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.type).toBe('ack');
+    expect(body.payload.message).toBe('Joined');
+    // Verify broadcast was called with participantList
+    expect(broadcastToRoom).toHaveBeenCalledTimes(1);
+    expect(broadcastToRoom).toHaveBeenCalledWith(
+      expect.objectContaining({ requestContext: expect.anything() }),
+      roomId,
+      expect.objectContaining({
+        type: 'participantList',
+        payload: { participants: expect.any(Array) },
+      })
+    );
+  });
+
+  it('should handle updateParticipant message successfully', async () => {
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+    const connectionId = 'test-connection-id';
+    const newName = 'Updated Name';
+
+    // Mock rate limit check (allow)
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 });
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock participant query by connectionId
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [
+        {
+          participantId,
+          roomId,
+          connectionId,
+          name: 'Old Name',
+          avatarSeed: 'old-seed',
+          isModerator: false,
+          joinedAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+        },
+      ],
+    });
+
+    // Mock update participant
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock query all participants in room
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [
+        {
+          participantId,
+          roomId,
+          connectionId,
+          name: newName,
+          avatarSeed: 'updated-seed',
+          isModerator: false,
+          joinedAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+        },
+      ],
+    });
+
+    const updateEvent = {
+      ...mockEvent,
+      body: JSON.stringify({
+        type: 'updateParticipant',
+        payload: { name: newName },
+      }),
+    } as APIGatewayProxyEvent;
+
+    const response = await handler(updateEvent);
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.type).toBe('ack');
+    expect(body.payload.message).toBe('Participant updated');
+    // Verify broadcast was called with participantList
+    expect(broadcastToRoom).toHaveBeenCalledTimes(1);
+    expect(broadcastToRoom).toHaveBeenCalledWith(
+      expect.anything(),
+      roomId,
+      expect.objectContaining({
+        type: 'participantList',
+        payload: { participants: expect.any(Array) },
+      })
+    );
+  });
+
+  it('should handle newRound message successfully', async () => {
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+    const connectionId = 'test-connection-id';
+    const title = 'New Round Title';
+    const description = 'New round description';
+
+    // Mock rate limit check (allow)
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 });
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock participant query by connectionId
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [
+        {
+          participantId,
+          roomId,
+          connectionId,
+          name: 'Test User',
+          isModerator: false,
+        },
+      ],
+    });
+
+    // Mock query for existing unrevealed rounds (none)
+    mockDynamoDB.send.mockResolvedValueOnce({ Items: [] });
+
+    // Mock PutCommand for new round
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock PutCommand for ACTIVE coordination item
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock cache invalidation
+    mockCacheManager.invalidateActiveRound.mockResolvedValueOnce(undefined);
+
+    // Mock query for votes (empty)
+    mockDynamoDB.send.mockResolvedValueOnce({ Items: [] });
+
+    const newRoundEvent = {
+      ...mockEvent,
+      body: JSON.stringify({
+        type: 'newRound',
+        payload: { title, description },
+      }),
+    } as APIGatewayProxyEvent;
+
+    const response = await handler(newRoundEvent);
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.type).toBe('ack');
+    expect(body.payload.message).toBe('New round created or updated');
+    // Verify broadcast was called with roundUpdate
+    expect(broadcastToRoom).toHaveBeenCalledTimes(1);
+    expect(broadcastToRoom).toHaveBeenCalledWith(
+      expect.anything(),
+      roomId,
+      expect.objectContaining({
+        type: 'roundUpdate',
+        payload: { round: expect.any(Object), votes: expect.any(Array) },
+      })
+    );
+    // Verify cache invalidation was called
+    expect(mockCacheManager.invalidateActiveRound).toHaveBeenCalledWith(roomId);
+  });
+
+  it('should handle updateRound message successfully', async () => {
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+    const connectionId = 'test-connection-id';
+    const roundId = 'round-123';
+    const title = 'Updated Title';
+    const description = 'Updated description';
+
+    // Mock rate limit check (allow)
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 });
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock participant query by connectionId
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [
+        {
+          participantId,
+          roomId,
+          connectionId,
+          name: 'Test User',
+          isModerator: false,
+        },
+      ],
+    });
+
+    // Mock GetCommand for round (verify belongs to room)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        roomId,
+        roundId,
+        title: 'Old Title',
+        description: 'Old description',
+        startedAt: new Date().toISOString(),
+        revealedAt: null,
+        isRevealed: false,
+      },
+    });
+
+    // Mock UpdateCommand for round
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock GetCommand for updated round
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        roomId,
+        roundId,
+        title,
+        description,
+        startedAt: new Date().toISOString(),
+        revealedAt: null,
+        isRevealed: false,
+      },
+    });
+
+    // Mock query for votes (empty)
+    mockDynamoDB.send.mockResolvedValueOnce({ Items: [] });
+
+    const updateRoundEvent = {
+      ...mockEvent,
+      body: JSON.stringify({
+        type: 'updateRound',
+        payload: { roundId, title, description },
+      }),
+    } as APIGatewayProxyEvent;
+
+    const response = await handler(updateRoundEvent);
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.type).toBe('ack');
+    expect(body.payload.message).toBe('Round updated');
+    // Verify broadcast was called with roundUpdate
+    expect(broadcastToRoom).toHaveBeenCalledTimes(1);
+    expect(broadcastToRoom).toHaveBeenCalledWith(
+      expect.anything(),
+      roomId,
+      expect.objectContaining({
+        type: 'roundUpdate',
+        payload: { round: expect.any(Object), votes: expect.any(Array) },
+      })
+    );
   });
 });

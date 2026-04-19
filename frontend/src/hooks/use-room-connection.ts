@@ -25,91 +25,97 @@ export function useRoomConnection() {
   const [pollingDelay, setPollingDelay] = useState<number | null>(null);
   const pollingRoomCodeRef = useRef<string | null>(null);
   const pollingParticipantIdRef = useRef<string | null>(null);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingErrorCountRef = useRef(0);
 
   // Countdown will be handled by useInterval
 
   /**
    * Handle incoming WebSocket messages
    */
-  const handleWebSocketMessage = useCallback(
-    (message: WebSocketMessage) => {
-      switch (message.type) {
-        case 'participantList': {
-          console.log(`[EstimateNest] [${hookId}] participantList received:`, {
-            participants: message.payload.participants,
-            count: message.payload.participants.length,
-          });
-          useRoomStore.getState().setParticipants(message.payload.participants);
+  const handleWebSocketMessage = useCallback((message: WebSocketMessage) => {
+    const currentHookId = hookIdRef.current;
+    switch (message.type) {
+      case 'participantList': {
+        console.log(`[EstimateNest] [${currentHookId}] participantList received:`, {
+          participants: message.payload.participants,
+          count: message.payload.participants.length,
+        });
+        useRoomStore.getState().setParticipants(message.payload.participants);
 
-          // Update participant store if current participant is in the list
-          const { participantId: currentParticipantId } = useParticipantStore.getState();
-          if (currentParticipantId) {
-            const updatedParticipant = message.payload.participants.find(
-              (p) => p.id === currentParticipantId
+        // Update participant store if current participant is in the list
+        const { participantId: currentParticipantId } = useParticipantStore.getState();
+        if (currentParticipantId) {
+          const updatedParticipant = message.payload.participants.find(
+            (p) => p.id === currentParticipantId
+          );
+          if (updatedParticipant) {
+            const { name, avatarSeed, isModerator } = updatedParticipant;
+            console.log(
+              `[EstimateNest] [${currentHookId}] Updating participant store with new name:`,
+              name
             );
-            if (updatedParticipant) {
-              const { name, avatarSeed, isModerator } = updatedParticipant;
-              console.log(
-                `[EstimateNest] [${hookId}] Updating participant store with new name:`,
-                name
-              );
-              useParticipantStore
-                .getState()
-                .setParticipant(currentParticipantId, name, avatarSeed, isModerator);
-            }
+            useParticipantStore
+              .getState()
+              .setParticipant(currentParticipantId, name, avatarSeed, isModerator);
           }
-          break;
         }
-
-        case 'roundUpdate':
-          console.log(`[EstimateNest] [${hookId}] roundUpdate received:`, {
-            roundId: message.payload.round.id,
-            votesCount: message.payload.votes.length,
-            isRevealed: message.payload.round.isRevealed,
-            participantIds: message.payload.votes.map((v) => v.participantId),
-          });
-          useRoomStore.getState().setCurrentRound(message.payload.round);
-          useRoomStore.getState().setVotes(message.payload.votes);
-          if (message.payload.round.isRevealed) {
-            console.log(`[EstimateNest] [${hookId}] Calling revealVotes`);
-            useRoomStore.getState().revealVotes();
-            useRoomStore.getState().stopCountdown();
-          }
-          break;
-
-        case 'leave':
-          useRoomStore.getState().removeParticipant(message.payload.participantId);
-          break;
-
-        case 'participantUpdated':
-          console.log(`[EstimateNest] [${hookId}] participantUpdated received:`, message.payload);
-          // Optionally show a success message to user
-          break;
-
-        case 'autoRevealCountdown':
-          console.log(`[EstimateNest] [${hookId}] autoRevealCountdown received:`, message.payload);
-          useRoomStore.getState().startCountdown(message.payload.countdownSeconds);
-          break;
-
-        case 'error':
-          console.error(`[EstimateNest] [${hookId}] WebSocket error:`, message.payload);
-          useConnectionStore.getState().setError(message.payload.message);
-          break;
-
-        default: {
-          // Silently ignore 'ack' and undefined message types
-          {
-            const msg = message as { type?: string };
-            if (msg.type !== 'ack' && msg.type !== undefined) {
-              console.log(`[EstimateNest] [${hookId}] Unhandled message type:`, msg.type);
-            }
-          }
-          break;
-        }
+        break;
       }
-    },
-    [hookId]
-  );
+
+      case 'roundUpdate':
+        console.log(`[EstimateNest] [${currentHookId}] roundUpdate received:`, {
+          roundId: message.payload.round.id,
+          votesCount: message.payload.votes.length,
+          isRevealed: message.payload.round.isRevealed,
+          participantIds: message.payload.votes.map((v) => v.participantId),
+        });
+        useRoomStore.getState().setCurrentRound(message.payload.round);
+        useRoomStore.getState().setVotes(message.payload.votes);
+        if (message.payload.round.isRevealed) {
+          console.log(`[EstimateNest] [${currentHookId}] Calling revealVotes`);
+          useRoomStore.getState().revealVotes();
+          useRoomStore.getState().stopCountdown();
+        }
+        break;
+
+      case 'leave':
+        useRoomStore.getState().removeParticipant(message.payload.participantId);
+        break;
+
+      case 'participantUpdated':
+        console.log(
+          `[EstimateNest] [${currentHookId}] participantUpdated received:`,
+          message.payload
+        );
+        // Optionally show a success message to user
+        break;
+
+      case 'autoRevealCountdown':
+        console.log(
+          `[EstimateNest] [${currentHookId}] autoRevealCountdown received:`,
+          message.payload
+        );
+        useRoomStore.getState().startCountdown(message.payload.countdownSeconds);
+        break;
+
+      case 'error':
+        console.error(`[EstimateNest] [${currentHookId}] WebSocket error:`, message.payload);
+        useConnectionStore.getState().setError(message.payload.message);
+        break;
+
+      default: {
+        // Silently ignore 'ack' and undefined message types
+        {
+          const msg = message as { type?: string };
+          if (msg.type !== 'ack' && msg.type !== undefined) {
+            console.log(`[EstimateNest] [${currentHookId}] Unhandled message type:`, msg.type);
+          }
+        }
+        break;
+      }
+    }
+  }, []);
 
   /**
    * Start polling for room state updates
@@ -117,6 +123,7 @@ export function useRoomConnection() {
   const startPolling = useCallback((roomCode: string, participantId: string) => {
     pollingRoomCodeRef.current = roomCode;
     pollingParticipantIdRef.current = participantId;
+    pollingErrorCountRef.current = 0;
     setPollingDelay(5000);
   }, []);
 
@@ -148,9 +155,19 @@ export function useRoomConnection() {
       if (response.votes) {
         useRoomStore.getState().setVotes(response.votes);
       }
+      // Reset error count on successful poll
+      if (pollingErrorCountRef.current > 0) {
+        pollingErrorCountRef.current = 0;
+        // Reset to base polling interval (5 seconds)
+        setPollingDelay(5000);
+      }
     } catch (error) {
       console.warn('Polling failed:', error);
-      // Don't stop polling on transient errors
+      // Exponential backoff with base 5 seconds, max 30 seconds
+      const newErrorCount = pollingErrorCountRef.current + 1;
+      pollingErrorCountRef.current = newErrorCount;
+      const backoffDelay = Math.min(5000 * Math.pow(2, newErrorCount - 1), 30000);
+      setPollingDelay(backoffDelay);
     }
   }, []);
 
@@ -181,14 +198,15 @@ export function useRoomConnection() {
    */
   const joinRoom = useCallback(
     async (roomCode: string, name: string) => {
+      const currentHookId = hookIdRef.current;
       try {
-        console.log(`[EstimateNest] [${hookId}] Joining room:`, roomCode, 'as', name);
+        console.log(`[EstimateNest] [${currentHookId}] Joining room:`, roomCode, 'as', name);
         useConnectionStore.getState().setConnecting();
 
         // 1. Join via REST API
         const joinResponse = await apiClient.joinRoom(roomCode, name);
         console.log(
-          `[EstimateNest] [${hookId}] Joined room:`,
+          `[EstimateNest] [${currentHookId}] Joined room:`,
           joinResponse.roomId,
           'participant:',
           joinResponse.participantId
@@ -233,7 +251,7 @@ export function useRoomConnection() {
 
         return joinResponse;
       } catch (error) {
-        console.error(`[EstimateNest] [${hookId}] Failed to join room:`, error);
+        console.error(`[EstimateNest] [${currentHookId}] Failed to join room:`, error);
         useConnectionStore
           .getState()
           .setError(error instanceof Error ? error.message : 'Failed to join room');
@@ -241,7 +259,7 @@ export function useRoomConnection() {
         throw error;
       }
     },
-    [startPolling, hookId, service]
+    [startPolling, service]
   );
 
   /**
@@ -264,12 +282,15 @@ export function useRoomConnection() {
    */
   const sendVote = useCallback(
     (value: number | string) => {
+      const currentHookId = hookIdRef.current;
       if (isSendingVoteRef.current) {
-        console.log(`[EstimateNest] [${hookId}] Vote already being sent, skipping duplicate`);
+        console.log(
+          `[EstimateNest] [${currentHookId}] Vote already being sent, skipping duplicate`
+        );
         return;
       }
 
-      console.log(`[EstimateNest] [${hookId}] sendVote called, value:`, value);
+      console.log(`[EstimateNest] [${currentHookId}] sendVote called, value:`, value);
       if (!service.isConnected()) {
         throw new Error('Not connected');
       }
@@ -282,19 +303,25 @@ export function useRoomConnection() {
         throw error;
       }
 
+      // Clear any existing timeout
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
       // Reset after a short delay to allow response but prevent rapid duplicates
-      setTimeout(() => {
+      timeoutRef.current = setTimeout(() => {
         isSendingVoteRef.current = false;
+        timeoutRef.current = null;
       }, 1000);
     },
-    [hookId, service]
+    [service]
   );
 
   /**
    * Reveal votes (moderator only)
    */
   const revealVotes = useCallback(() => {
-    console.log(`[EstimateNest] [${hookId}] revealVotes called`);
+    const currentHookId = hookIdRef.current;
+    console.log(`[EstimateNest] [${currentHookId}] revealVotes called`);
     if (!service.isConnected()) {
       throw new Error('Not connected');
     }
@@ -306,20 +333,21 @@ export function useRoomConnection() {
     }
 
     service.revealVotes(currentRound.id);
-  }, [hookId, service]);
+  }, [service]);
 
   /**
    * Update participant name
    */
   const updateParticipant = useCallback(
     (name: string) => {
-      console.log(`[EstimateNest] [${hookId}] updateParticipant called, name:`, name);
+      const currentHookId = hookIdRef.current;
+      console.log(`[EstimateNest] [${currentHookId}] updateParticipant called, name:`, name);
       if (!service.isConnected()) {
         throw new Error('Not connected');
       }
       service.updateParticipant(name);
     },
-    [hookId, service]
+    [service]
   );
 
   /**
@@ -327,13 +355,14 @@ export function useRoomConnection() {
    */
   const createNewRound = useCallback(
     (title?: string, description?: string) => {
-      console.log(`[EstimateNest] [${hookId}] createNewRound called, title:`, title);
+      const currentHookId = hookIdRef.current;
+      console.log(`[EstimateNest] [${currentHookId}] createNewRound called, title:`, title);
       if (!service.isConnected()) {
         throw new Error('Not connected');
       }
       service.createNewRound(title, description);
     },
-    [hookId, service]
+    [service]
   );
 
   /**
@@ -341,13 +370,14 @@ export function useRoomConnection() {
    */
   const updateRound = useCallback(
     (roundId: string, title?: string, description?: string) => {
-      console.log(`[EstimateNest] [${hookId}] updateRound called, roundId:`, roundId);
+      const currentHookId = hookIdRef.current;
+      console.log(`[EstimateNest] [${currentHookId}] updateRound called, roundId:`, roundId);
       if (!service.isConnected()) {
         throw new Error('Not connected');
       }
       service.updateRound(roundId, title, description);
     },
-    [hookId, service]
+    [service]
   );
 
   // Track if handlers are already registered to prevent duplicates during re-renders
@@ -355,36 +385,40 @@ export function useRoomConnection() {
 
   // Register message handler on mount and unregister on unmount
   useEffect(() => {
+    const currentHookId = hookIdRef.current;
     if (handlersRegisteredRef.current) {
-      console.log(`[EstimateNest] [${hookId}] Handlers already registered, skipping`);
+      console.log(`[EstimateNest] [${currentHookId}] Handlers already registered, skipping`);
       return;
     }
 
-    console.log(`[EstimateNest] [${hookId}] Registering message handler`);
+    console.log(`[EstimateNest] [${currentHookId}] Registering message handler`);
     service.addMessageHandler(handleWebSocketMessage);
     handlersRegisteredRef.current = true;
 
     return () => {
-      console.log(`[EstimateNest] [${hookId}] Unregistering message handler`);
+      console.log(`[EstimateNest] [${currentHookId}] Unregistering message handler`);
       service.removeMessageHandler(handleWebSocketMessage);
       handlersRegisteredRef.current = false;
       // Clear polling interval on unmount
       stopPolling();
     };
-  }, [handleWebSocketMessage, hookId, service, stopPolling]);
+  }, [handleWebSocketMessage, service, stopPolling]);
 
   // Track if state change callback is already registered
   const stateCallbackRegisteredRef = useRef(false);
 
   // Sync connection state with store
   useEffect(() => {
+    const currentHookId = hookIdRef.current;
     if (stateCallbackRegisteredRef.current) {
-      console.log(`[EstimateNest] [${hookId}] State change callback already registered, skipping`);
+      console.log(
+        `[EstimateNest] [${currentHookId}] State change callback already registered, skipping`
+      );
       return;
     }
 
     const handleStateChange = (state: string) => {
-      console.log(`[EstimateNest] [${hookId}] State change callback:`, state);
+      console.log(`[EstimateNest] [${currentHookId}] State change callback:`, state);
       if (state === 'connected') {
         useConnectionStore.getState().setConnected();
       } else if (state === 'disconnected' || state === 'error') {
@@ -394,7 +428,7 @@ export function useRoomConnection() {
       }
     };
 
-    console.log(`[EstimateNest] [${hookId}] Registering state change callback`);
+    console.log(`[EstimateNest] [${currentHookId}] Registering state change callback`);
     service.addStateChangeCallback(handleStateChange);
     stateCallbackRegisteredRef.current = true;
 
@@ -403,11 +437,20 @@ export function useRoomConnection() {
     handleStateChange(currentState);
 
     return () => {
-      console.log(`[EstimateNest] [${hookId}] Removing state change callback`);
+      console.log(`[EstimateNest] [${currentHookId}] Removing state change callback`);
       service.removeStateChangeCallback(handleStateChange);
       stateCallbackRegisteredRef.current = false;
     };
-  }, [hookId, service]);
+  }, [service]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
 
   // Countdown function ref to access latest revealVotes
   const triggerReveal = useCallback(() => {

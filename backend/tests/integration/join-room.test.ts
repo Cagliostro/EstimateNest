@@ -115,6 +115,21 @@ describe('join-room handler', () => {
       },
     });
 
+    // Mock GetCommand for participant lookup
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        id: '12345678-1234-1234-8234-123456789abc',
+        participantId: '12345678-1234-1234-8234-123456789abc',
+        roomId: 'room-123',
+        name: 'Existing User',
+        avatarSeed: 'existing-user',
+        isModerator: true,
+        connectionId: 'REST',
+        joinedAt: '2024-01-01T00:00:00Z',
+        lastSeenAt: '2024-01-01T00:00:00Z',
+      },
+    });
+
     // Mock participants cache (one existing participant)
     mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
       {

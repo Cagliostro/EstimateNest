@@ -32,13 +32,27 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       validatedBody = validateUpdateRoomRequest(rawBody);
     } catch (error) {
       console.error('Request validation failed:', error);
+      const origin = event.headers.origin || event.headers.Origin;
+      const headers = {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': origin || '*',
+      };
 
-      if (error instanceof ZodError) {
+      if (error instanceof ZodError || (error as Error).name === 'ZodError') {
+        const zodError = error as {
+          issues?: Array<{ path: string[]; message: string }>;
+          errors?: Array<{ path: string[]; message: string }>;
+        };
+        const issues = zodError.issues || zodError.errors;
+        const details = issues
+          ? issues.map((e) => `${e.path.join('.')}: ${e.message}`)
+          : ['Validation failed'];
         return {
           statusCode: 400,
+          headers,
           body: JSON.stringify({
             error: 'Invalid request parameters',
-            details: error.errors.map((e) => `${e.path.join('.')}: ${e.message}`),
+            details,
           }),
         };
       }
@@ -175,13 +189,21 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       'Access-Control-Allow-Origin': origin || '*',
     };
 
-    if (error instanceof ZodError) {
+    if (error instanceof ZodError || (error as Error).name === 'ZodError') {
+      const zodError = error as {
+        issues?: Array<{ path: string[]; message: string }>;
+        errors?: Array<{ path: string[]; message: string }>;
+      };
+      const issues = zodError.issues || zodError.errors;
+      const details = issues
+        ? issues.map((e) => `${e.path.join('.')}: ${e.message}`)
+        : ['Validation failed'];
       return {
         statusCode: 400,
         headers,
         body: JSON.stringify({
           error: 'Invalid request parameters',
-          details: error.errors.map((e) => `${e.path.join('.')}: ${e.message}`),
+          details,
         }),
       };
     }

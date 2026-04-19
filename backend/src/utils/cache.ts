@@ -78,23 +78,23 @@ export class CacheManager {
       return cached.round;
     }
 
-    // Fetch from DynamoDB
+    // Fetch from DynamoDB using GSI sorted by startedAt descending
     const activeRoundsResult = await this.docClient.send(
       new QueryCommand({
         TableName: this.roundsTableName,
+        IndexName: 'RoomIdStartedAtIndex',
         KeyConditionExpression: 'roomId = :roomId',
         FilterExpression: 'isRevealed = :false',
         ExpressionAttributeValues: {
           ':roomId': roomId,
           ':false': false,
         },
-        ConsistentRead: true,
+        ScanIndexForward: false, // descending (most recent first)
+        Limit: 1,
       })
     );
 
     const items = activeRoundsResult.Items || [];
-    // Sort by startedAt descending to get the most recent round
-    items.sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
     let round: Round | null = null;
 
     if (items.length > 0) {

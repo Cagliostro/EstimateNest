@@ -114,9 +114,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       };
     }
 
-    // Fetch all participants in the room (for moderator determination) - cached
-    const existingParticipants = await cacheManager.getParticipantsWithCache(roomId);
-
     // Determine participant ID (provided for polling, or new)
     const providedParticipantId = validatedData.participantId;
     const providedName = validatedData.name || 'Anonymous';
@@ -126,61 +123,85 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     let isNewParticipant = false;
     let isModerator = false;
 
+    // Fetch participant via GetCommand if ID provided (optimization)
+    let fetchedParticipant: Participant | null = null;
+    if (providedParticipantId) {
+      try {
+        const participantResult = await docClient.send(
+          new GetCommand({
+            TableName: PARTICIPANTS_TABLE,
+            Key: { roomId, participantId: providedParticipantId },
+          })
+        );
+        if (participantResult.Item) {
+          fetchedParticipant = participantResult.Item as Participant;
+        }
+      } catch (error) {
+        // If Get fails (e.g., item not found), treat as missing
+        console.debug('Participant not found via GetCommand:', error);
+      }
+    }
+
+    // Fetch all participants in the room (for moderator determination and response) - cached
+    const existingParticipants = await cacheManager.getParticipantsWithCache(roomId);
+
     // Start with existing participants as our base list
     const participants = [...existingParticipants];
 
-    if (providedParticipantId) {
-      // Try to find existing participant in the already fetched list
-      const existingParticipant = existingParticipants.find((p) => p.id === providedParticipantId);
-      if (existingParticipant) {
-        // Participant exists - use stored details
-        participantId = providedParticipantId;
-        name = existingParticipant.name;
-        avatarSeed = existingParticipant.avatarSeed;
-        isModerator = existingParticipant.isModerator || false;
-        // Update lastSeenAt in DynamoDB
-        await docClient.send(
-          new UpdateCommand({
-            TableName: PARTICIPANTS_TABLE,
-            Key: { roomId, participantId: providedParticipantId },
-            UpdateExpression: 'SET lastSeenAt = :now',
-            ExpressionAttributeValues: {
-              ':now': new Date().toISOString(),
-            },
-          })
-        );
-        // Update participant in our local list
-        const participantIndex = participants.findIndex((p) => p.id === participantId);
-        if (participantIndex >= 0) {
-          participants[participantIndex] = {
-            ...participants[participantIndex],
-            lastSeenAt: new Date().toISOString(),
-          };
-        }
-      } else {
-        // Participant not found - treat as new participant
-        isNewParticipant = true;
-        participantId = uuidv4();
-        name = providedName;
-        avatarSeed = createAvatarSeed(name);
-        isModerator = existingParticipants.length === 0;
-        await createParticipantRecord(roomId, participantId, name, avatarSeed, isModerator);
-        // Invalidate participant cache since new participant added
-        cacheManager.invalidateParticipants(roomId);
-        // Add new participant to our list
-        participants.push({
-          id: participantId,
-          roomId,
-          connectionId: 'REST',
-          name,
-          avatarSeed,
-          joinedAt: new Date().toISOString(),
+    if (providedParticipantId && fetchedParticipant) {
+      // Participant exists - use stored details from GetCommand
+      participantId = providedParticipantId;
+      name = fetchedParticipant.name;
+      avatarSeed = fetchedParticipant.avatarSeed;
+      isModerator = fetchedParticipant.isModerator || false;
+      // Update lastSeenAt in DynamoDB
+      await docClient.send(
+        new UpdateCommand({
+          TableName: PARTICIPANTS_TABLE,
+          Key: { roomId, participantId: providedParticipantId },
+          UpdateExpression: 'SET lastSeenAt = :now',
+          ExpressionAttributeValues: {
+            ':now': new Date().toISOString(),
+          },
+        })
+      );
+      // Update participant in our local list if present
+      const participantIndex = participants.findIndex((p) => p.id === participantId);
+      if (participantIndex >= 0) {
+        participants[participantIndex] = {
+          ...participants[participantIndex],
           lastSeenAt: new Date().toISOString(),
-          isModerator,
+        };
+      } else {
+        // Participant not in cached list (should not happen) - add it
+        participants.push({
+          ...fetchedParticipant,
+          lastSeenAt: new Date().toISOString(),
         });
       }
+    } else if (providedParticipantId) {
+      // Participant ID provided but not found - treat as new participant
+      isNewParticipant = true;
+      participantId = uuidv4();
+      name = providedName;
+      avatarSeed = createAvatarSeed(name);
+      isModerator = existingParticipants.length === 0;
+      await createParticipantRecord(roomId, participantId, name, avatarSeed, isModerator);
+      // Invalidate participant cache since new participant added
+      cacheManager.invalidateParticipants(roomId);
+      // Add new participant to our list
+      participants.push({
+        id: participantId,
+        roomId,
+        connectionId: 'REST',
+        name,
+        avatarSeed,
+        joinedAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+        isModerator,
+      });
     } else {
-      // New participant joining
+      // New participant joining without ID
       isNewParticipant = true;
       participantId = uuidv4();
       name = providedName;
@@ -206,29 +227,42 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     let round: Round | null = null;
     let votes: Vote[] = [];
 
-    // Get all rounds for the room (typically < 10 rounds per room)
-    const allRoundsResult = await docClient.send(
+    // Query for active round (not revealed) using GSI sorted by startedAt descending
+    let roundItem = null;
+    const activeRoundsResult = await docClient.send(
       new QueryCommand({
         TableName: ROUNDS_TABLE,
+        IndexName: 'RoomIdStartedAtIndex',
         KeyConditionExpression: 'roomId = :roomId',
+        FilterExpression: 'isRevealed = :false',
         ExpressionAttributeValues: {
           ':roomId': roomId,
+          ':false': false,
         },
+        ScanIndexForward: false, // descending (most recent first)
+        Limit: 1,
       })
     );
 
-    const allRounds = allRoundsResult.Items || [];
-
-    // Find active round (not revealed)
-    let roundItem = allRounds.find((item) => !item.isRevealed);
-
-    // If no active round, get the most recent round (by startedAt)
-    if (!roundItem && allRounds.length > 0) {
-      roundItem = allRounds.reduce((latest, current) => {
-        const latestDate = new Date(latest.startedAt || 0).getTime();
-        const currentDate = new Date(current.startedAt || 0).getTime();
-        return currentDate > latestDate ? current : latest;
-      });
+    if (activeRoundsResult.Items && activeRoundsResult.Items.length > 0) {
+      roundItem = activeRoundsResult.Items[0];
+    } else {
+      // No active round, get most recent round (any status)
+      const latestRoundsResult = await docClient.send(
+        new QueryCommand({
+          TableName: ROUNDS_TABLE,
+          IndexName: 'RoomIdStartedAtIndex',
+          KeyConditionExpression: 'roomId = :roomId',
+          ExpressionAttributeValues: {
+            ':roomId': roomId,
+          },
+          ScanIndexForward: false, // descending (most recent first)
+          Limit: 1,
+        })
+      );
+      if (latestRoundsResult.Items && latestRoundsResult.Items.length > 0) {
+        roundItem = latestRoundsResult.Items[0];
+      }
     }
 
     if (roundItem) {

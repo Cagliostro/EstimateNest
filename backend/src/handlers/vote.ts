@@ -1140,12 +1140,19 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
   // Validate message structure
   const validationResult = safeParseWebSocketMessage(message);
   if (!validationResult.success) {
-    console.error('Message validation failed:', validationResult.error.errors);
+    const zodError = validationResult.error as {
+      issues?: Array<{ path: string[]; message: string }>;
+      errors?: Array<{ path: string[]; message: string }>;
+    };
+    const issues = zodError.issues || zodError.errors;
+    console.error('Message validation failed:', issues);
     return {
       statusCode: 400,
       body: JSON.stringify({
         error: 'Invalid message format',
-        details: validationResult.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`),
+        details: issues
+          ? issues.map((e) => `${e.path.join('.')}: ${e.message}`)
+          : ['Validation failed'],
       }),
     };
   }

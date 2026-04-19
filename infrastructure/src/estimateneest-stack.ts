@@ -90,6 +90,13 @@ export class EstimateNestStack extends cdk.Stack {
       timeToLiveAttribute: 'expiresAt',
     });
 
+    roundsTable.addGlobalSecondaryIndex({
+      indexName: 'RoomIdStartedAtIndex',
+      partitionKey: { name: 'roomId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'startedAt', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const votesTable = new dynamodb.Table(this, 'VotesTable', {
       partitionKey: { name: 'roundId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'participantId', type: dynamodb.AttributeType.STRING },
