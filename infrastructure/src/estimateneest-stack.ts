@@ -819,7 +819,7 @@ export class EstimateNestStack extends cdk.Stack {
     // ====================
 
     const alertTopic = new sns.Topic(this, 'AlertTopic', {
-      displayName: `EstimateNest-${props.envName}-Alerts`,
+      displayName: `EstimateNest-${props.envName}-${deploymentColor}-Alerts`,
     });
 
     // ====================
@@ -985,7 +985,7 @@ export class EstimateNestStack extends cdk.Stack {
     // ====================
 
     const dashboard = new cloudwatch.Dashboard(this, 'MonitoringDashboard', {
-      dashboardName: `EstimateNest-${props.envName}-Monitoring`,
+      dashboardName: `EstimateNest-${props.envName}-${deploymentColor}-Monitoring`,
     });
 
     // Lambda error rate widget
