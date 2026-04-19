@@ -157,7 +157,7 @@ describe('useRoomConnection', () => {
       removeStateChangeCallback: vi.fn(),
       getState: vi.fn(() => 'disconnected'),
       isConnected: vi.fn(),
-    } as any);
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
 
     mockApiClient.createRoom.mockResolvedValue({
       roomId: 'test-room-id',
@@ -165,7 +165,7 @@ describe('useRoomConnection', () => {
       participantId: 'test-participant-id',
       name: 'Test User',
       avatarSeed: 'test-seed',
-    } as any);
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
 
     mockApiClient.joinRoom.mockResolvedValue({
       roomId: 'test-room-id',
@@ -177,7 +177,7 @@ describe('useRoomConnection', () => {
       round: null,
       votes: [],
       shortCode: 'TEST',
-    } as any);
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
   });
 
   it('should return all expected functions', () => {
@@ -273,7 +273,7 @@ describe('useRoomConnection', () => {
 
   it('should send vote when connected', () => {
     const mockServiceInstance = mockWebSocketService.getInstance();
-    (mockServiceInstance as any).isConnected.mockReturnValue(true);
+    (mockServiceInstance as any).isConnected.mockReturnValue(true); // eslint-disable-line @typescript-eslint/no-explicit-any
 
     const { result } = renderHook(() => useRoomConnection());
 
@@ -286,7 +286,7 @@ describe('useRoomConnection', () => {
 
   it('should throw error when sending vote while disconnected', () => {
     const mockServiceInstance = mockWebSocketService.getInstance();
-    (mockServiceInstance as any).isConnected.mockReturnValue(false);
+    (mockServiceInstance as any).isConnected.mockReturnValue(false); // eslint-disable-line @typescript-eslint/no-explicit-any
 
     const { result } = renderHook(() => useRoomConnection());
 
@@ -295,7 +295,7 @@ describe('useRoomConnection', () => {
 
   it('should prevent duplicate votes within 1 second', async () => {
     const mockServiceInstance = mockWebSocketService.getInstance();
-    (mockServiceInstance as any).isConnected.mockReturnValue(true);
+    (mockServiceInstance as any).isConnected.mockReturnValue(true); // eslint-disable-line @typescript-eslint/no-explicit-any
 
     const { result } = renderHook(() => useRoomConnection());
 
