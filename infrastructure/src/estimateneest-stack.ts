@@ -636,9 +636,9 @@ export class EstimateNestStack extends cdk.Stack {
     });
 
     // Create API Key for REST API with deterministic value for each environment
-    const apiKeyValue = `estimatenest-${props.envName}-${this.account}-${this.region}`;
+    const apiKeyValue = `estimatenest-${props.envName}${colorSuffix}-${this.account}-${this.region}`;
     const restApiKey = new apigateway.CfnApiKey(this, 'RestApiKey', {
-      name: `estimatenest-rest-${props.envName}-key`,
+      name: `estimatenest-rest-${props.envName}${colorSuffix}-key`,
       enabled: true,
       value: apiKeyValue,
     });
