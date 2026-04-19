@@ -55,8 +55,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     // Fetch all participants in the room (cached, invalidated just above)
     const participants = await cacheManager.getParticipantsWithCache(roomId);
 
-    // Broadcast updated participant list to everyone in the room
-    await broadcastToRoom(
+    // Broadcast updated participant list to everyone in the room (fire-and-forget)
+    broadcastToRoom(
       event,
       roomId,
       {
@@ -64,10 +64,12 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         payload: { participants },
       },
       connectionId
-    );
+    ).catch((broadcastError) => {
+      console.warn('Broadcast participantList failed:', broadcastError);
+    });
 
-    // Also send a leave notification for clients that track individual leaves
-    await broadcastToRoom(
+    // Also send a leave notification for clients that track individual leaves (fire-and-forget)
+    broadcastToRoom(
       event,
       roomId,
       {
@@ -75,7 +77,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         payload: { participantId },
       },
       connectionId
-    );
+    ).catch((broadcastError) => {
+      console.warn('Broadcast leave failed:', broadcastError);
+    });
 
     return {
       statusCode: 200,

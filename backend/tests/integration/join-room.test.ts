@@ -180,4 +180,26 @@ describe('join-room handler', () => {
     const body = JSON.parse(response.body);
     expect(body.error).toBe('Room has expired');
   });
+
+  it('should return 400 for invalid request (missing code)', async () => {
+    // No code in path parameters
+    mockEvent.pathParameters = {};
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(400);
+    const body = JSON.parse(response.body);
+    expect(body.error).toBe('Invalid request parameters');
+  });
+
+  it('should return 500 for DynamoDB error', async () => {
+    // Mock room code lookup to throw error
+    mockDynamoDB.send.mockRejectedValueOnce(new Error('DynamoDB error'));
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(500);
+    const body = JSON.parse(response.body);
+    expect(body.error).toBe('Internal server error');
+  });
 });
