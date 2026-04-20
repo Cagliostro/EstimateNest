@@ -283,6 +283,7 @@ async function handleVote(
   if (!roundId) {
     throw new Error('roundId is undefined');
   }
+  console.log('Round object for voting:', JSON.stringify(round));
   // Create vote
   console.log('Creating vote with roundId:', roundId, 'participantId:', participantId);
   const voteId = uuidv4();
