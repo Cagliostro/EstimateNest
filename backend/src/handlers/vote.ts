@@ -334,8 +334,9 @@ async function handleVote(
   );
   console.log('Vote transaction successful for participant:', participantId);
 
-  // Invalidate participant cache to ensure fresh data for auto-reveal check
+  // Invalidate caches to ensure fresh data for auto-reveal check
   cacheManager.invalidateParticipants(roomId);
+  cacheManager.invalidateActiveRound(roomId);
   // Fetch participants first to know how many active participants exist (cached)
   const participants = await cacheManager.getParticipantsWithCache(roomId);
   const activeParticipants = participants.filter(
@@ -560,13 +561,29 @@ async function handleVote(
   const { domainName, stage } = event.requestContext;
   console.log('Endpoint info:', { domainName, stage });
 
-  // Broadcast round update to all participants
-  await broadcastToRoom(event, roomId, {
-    type: 'roundUpdate',
-    payload: { round, votes },
-  });
+  // Send acknowledgment to voter
+  try {
+    await sendToConnection(event, connectionId, {
+      type: 'ack',
+      payload: { message: 'Vote recorded', roundId },
+    });
+    console.log('Acknowledgment sent to voter:', connectionId);
+  } catch (ackError) {
+    console.warn('Failed to send acknowledgment to voter:', ackError);
+    // Continue anyway
+  }
 
-  console.log('Broadcast completed');
+  // Broadcast round update to all participants
+  try {
+    await broadcastToRoom(event, roomId, {
+      type: 'roundUpdate',
+      payload: { round, votes },
+    });
+    console.log('Broadcast completed');
+  } catch (broadcastError) {
+    console.error('Failed to broadcast round update:', broadcastError);
+    // Still return success since vote was recorded
+  }
 
   return { message: 'Vote recorded' };
 }
