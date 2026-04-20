@@ -108,11 +108,14 @@ async function getRoomWithCache(roomId: string): Promise<Record<string, unknown>
  * Uses an 'ACTIVE' item in ROUNDS_TABLE to coordinate round creation.
  */
 async function getOrCreateActiveRound(roomId: string): Promise<{ roundId: string; round: Round }> {
+  console.log('getOrCreateActiveRound called for room:', roomId);
   // Try cache first
   const cachedRound = await cacheManager.getActiveRoundWithCache(roomId);
   if (cachedRound) {
+    console.log('Found cached round:', cachedRound.id);
     return { roundId: cachedRound.id, round: cachedRound };
   }
+  console.log('No cached round, creating new one');
 
   const newRoundId = uuidv4();
   const now = new Date().toISOString();
@@ -157,6 +160,7 @@ async function getOrCreateActiveRound(roomId: string): Promise<{ roundId: string
 
     // Invalidate cache
     cacheManager.invalidateActiveRound(roomId);
+    console.log('Successfully created new round:', newRoundId, 'for room:', roomId);
     return { roundId: newRoundId, round: newRound };
   } catch (error) {
     if ((error as Error).name === 'ConditionalCheckFailedException') {
@@ -200,6 +204,7 @@ async function getOrCreateActiveRound(roomId: string): Promise<{ roundId: string
         return getOrCreateActiveRound(roomId);
       }
 
+      console.log('Found existing round created by another participant:', existingRoundId);
       return { roundId: existingRoundId, round };
     }
     throw error;
@@ -275,6 +280,12 @@ async function handleVote(
   } else {
     console.log('No roundId provided, finding or creating active round');
     const activeRoundResult = await getOrCreateActiveRound(roomId);
+    console.log('getOrCreateActiveRound result:', {
+      roundId: activeRoundResult.roundId,
+      round: activeRoundResult.round,
+      hasRound: !!activeRoundResult.round,
+      roundKeys: activeRoundResult.round ? Object.keys(activeRoundResult.round) : [],
+    });
     round = activeRoundResult.round;
     roundId = activeRoundResult.roundId;
   }
@@ -282,6 +293,10 @@ async function handleVote(
   // Ensure roundId is defined
   if (!roundId) {
     throw new Error('roundId is undefined');
+  }
+  // Ensure round is defined
+  if (!round) {
+    throw new Error('round is undefined after getOrCreateActiveRound');
   }
   console.log('Round object for voting:', JSON.stringify(round));
   // Create vote
@@ -333,7 +348,7 @@ async function handleVote(
       ],
     })
   );
-  console.log('Vote transaction successful for participant:', participantId);
+  console.log('Vote transaction successful for participant:', participantId, 'roundId:', roundId);
 
   // Invalidate caches to ensure fresh data for auto-reveal check
   cacheManager.invalidateParticipants(roomId);
