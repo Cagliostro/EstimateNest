@@ -282,7 +282,7 @@ describe('useRoomConnection', () => {
       result.current.sendVote(5);
     });
 
-    expect(mockServiceInstance.sendVote).toHaveBeenCalledWith(5);
+    expect(mockServiceInstance.sendVote).toHaveBeenCalledWith(5, '');
   });
 
   it('should throw error when sending vote while disconnected', () => {
@@ -309,7 +309,7 @@ describe('useRoomConnection', () => {
     });
 
     expect(mockServiceInstance.sendVote).toHaveBeenCalledTimes(1);
-    expect(mockServiceInstance.sendVote).toHaveBeenCalledWith(5);
+    expect(mockServiceInstance.sendVote).toHaveBeenCalledWith(5, '');
 
     // Wait for 1 second timeout
     await new Promise((resolve) => setTimeout(resolve, 1100));
@@ -319,6 +319,6 @@ describe('useRoomConnection', () => {
     });
 
     expect(mockServiceInstance.sendVote).toHaveBeenCalledTimes(2);
-    expect(mockServiceInstance.sendVote).toHaveBeenCalledWith(8);
+    expect(mockServiceInstance.sendVote).toHaveBeenCalledWith(8, '');
   });
 });

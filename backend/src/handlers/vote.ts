@@ -23,7 +23,7 @@ import {
   safeParseWebSocketMessage,
 } from '@estimatenest/shared';
 import { broadcastToRoom, sendToConnection } from '../utils/broadcast';
-import getCacheManager from '../utils/cache';
+import { getCacheManager } from '../utils/cache';
 
 // Helper to create properly typed WebSocket responses
 function createResponse(type: string, payload: Record<string, unknown>): string {
@@ -334,6 +334,8 @@ async function handleVote(
   );
   console.log('Vote transaction successful for participant:', participantId);
 
+  // Invalidate participant cache to ensure fresh data for auto-reveal check
+  cacheManager.invalidateParticipants(roomId);
   // Fetch participants first to know how many active participants exist (cached)
   const participants = await cacheManager.getParticipantsWithCache(roomId);
   const activeParticipants = participants.filter(
@@ -497,9 +499,22 @@ async function handleVote(
     'votes',
     votes.map((v) => ({ participantId: v.participantId, value: v.value }))
   );
-  const allVoted = votes.length === participants.length && participants.length > 0;
+  const allVoted = votes.length === activeParticipants.length && activeParticipants.length > 0;
   console.log(
     `All voted check: votes=${votes.length}, participants=${participants.length}, activeParticipants=${activeParticipants.length}, allVoted=${allVoted}, round.isRevealed=${round.isRevealed}`
+  );
+  // Detailed debug
+  console.log(
+    'Active participant IDs:',
+    activeParticipants.map((p) => p.id)
+  );
+  console.log(
+    'Vote participant IDs:',
+    votes.map((v) => v.participantId)
+  );
+  console.log(
+    'Missing voters:',
+    activeParticipants.filter((p) => !votes.find((v) => v.participantId === p.id)).map((p) => p.id)
   );
 
   // Fetch room to check auto-reveal settings (cached)

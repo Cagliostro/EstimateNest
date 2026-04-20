@@ -40,7 +40,7 @@ vi.mock('../../src/utils/broadcast', () => ({
 
 // Mock the cache module
 vi.mock('../../src/utils/cache', () => ({
-  default: vi.fn(() => mockCacheManager),
+  getCacheManager: vi.fn(() => mockCacheManager),
 }));
 
 describe('vote handler', () => {

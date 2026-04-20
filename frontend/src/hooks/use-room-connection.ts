@@ -297,7 +297,11 @@ export function useRoomConnection() {
 
       isSendingVoteRef.current = true;
       try {
-        service.sendVote(value);
+        // Get current round ID from store
+        const { currentRound } = useRoomStore.getState();
+        const roundId = currentRound?.id || '';
+        console.log(`[EstimateNest] [${currentHookId}] Sending vote for round:`, roundId);
+        service.sendVote(value, roundId);
       } catch (error) {
         isSendingVoteRef.current = false;
         throw error;

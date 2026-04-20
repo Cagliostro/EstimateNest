@@ -1,0 +1,36 @@
+{
+  "resource": "/rooms/{code}",
+  "path": "/rooms/TEST123",
+  "httpMethod": "GET",
+  "headers": {
+    "Accept": "*/*",
+    "Content-Type": "application/json",
+    "Host": "api.estimatenest.net",
+    "User-Agent": "curl/7.88.1",
+    "X-Amzn-Trace-Id": "Root=1-67a1b2c3-d4e5f6a7b8c9d0e1f2g3h4i5",
+    "X-Forwarded-For": "127.0.0.1",
+    "X-Forwarded-Port": "443",
+    "X-Forwarded-Proto": "https",
+    "x-api-key": "estimatenest-prod-blue-851725560801-eu-central-1"
+  },
+  "queryStringParameters": {
+    "name": "testuser"
+  },
+  "pathParameters": {
+    "code": "TEST123"
+  },
+  "requestContext": {
+    "accountId": "851725560801",
+    "apiId": "greixydrgl",
+    "protocol": "HTTP/1.1",
+    "httpMethod": "GET",
+    "path": "/prod/rooms/TEST123",
+    "stage": "prod",
+    "requestId": "test-request-id",
+    "requestTime": "19/Apr/2026:21:45:00 +0000",
+    "resourceId": "test-resource-id",
+    "resourcePath": "/rooms/{code}"
+  },
+  "body": null,
+  "isBase64Encoded": false
+}

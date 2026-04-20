@@ -5,7 +5,7 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda
 import { broadcastToRoom } from '../utils/broadcast';
 import { validateWebSocketConnectionParams } from '@estimatenest/shared';
 import { ZodError } from 'zod';
-import getCacheManager from '../utils/cache';
+import { getCacheManager } from '../utils/cache';
 
 const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
 const docClient = DynamoDBDocumentClient.from(client);

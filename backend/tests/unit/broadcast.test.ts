@@ -42,7 +42,7 @@ vi.mock('@aws-sdk/lib-dynamodb', () => ({
 }));
 
 vi.mock('../../src/utils/cache', () => ({
-  default: vi.fn(() => mockCacheManager),
+  getCacheManager: vi.fn(() => mockCacheManager),
 }));
 
 // Import after mocks are set up

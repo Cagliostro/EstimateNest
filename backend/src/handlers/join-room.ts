@@ -17,7 +17,7 @@ import {
   validateJoinRoomRequest,
 } from '@estimatenest/shared';
 import { ZodError } from 'zod';
-import getCacheManager from '../utils/cache';
+import { getCacheManager } from '../utils/cache';
 
 const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
 const docClient = DynamoDBDocumentClient.from(client);

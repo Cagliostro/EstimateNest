@@ -341,6 +341,14 @@ EstimateNest has solid architectural foundations with clean separation of concer
 **Blue Stack Update**: ✅ Redeployed successfully after removing invalid WAF association; CloudFrontDomainName output added; weight set to 0 (inactive). **Updated to latest version** (Week 3 changes deployed).  
 **Production Readiness**: ✅ Green stack deployed successfully with weight 100, serving production traffic. Blue stack updated to latest version as standby (weight 0). All Phase 4 deliverables completed.
 
+## Recent Fixes (April 19, 2026)
+
+**Deprecation Warnings Resolved**: ✅ ESLint v9 migration across all workspaces, AWS CDK API deprecations fixed (arnForExecuteApiV2, S3BucketOrigin, metricThrottledRequestsForOperation), npm package updates (rimraf, glob, inflight, whatwg-encoding), Git default branch configuration updated.
+
+**CORS Issue Fixed**: ✅ Added CORS headers to API Gateway responses (DEFAULT_4XX, DEFAULT_5XX, ACCESS_DENIED, MISSING_AUTHENTICATION_TOKEN) to prevent 403 errors without CORS headers. Lambda bundling fixed by updating tsup configuration (CJS format, splitting: false) and removing default export from cache module.
+
+**Production API Functionality Restored**: ✅ Blue and green stacks updated with corrected Lambda bundles; join room endpoint now returns proper 400/404 responses instead of 502 errors.
+
 ## Implementation Plan for Remaining P1 Items
 
 ### Week 1: DynamoDB Query Optimization

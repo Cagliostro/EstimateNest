@@ -203,4 +203,4 @@ export function getCacheManager(): CacheManager {
 }
 
 // Default export for convenience
-export default getCacheManager();
+// export default getCacheManager();

@@ -7,7 +7,7 @@ import {
 } from '@aws-sdk/client-apigatewaymanagementapi';
 import { APIGatewayProxyEvent } from 'aws-lambda';
 import { WebSocketMessage } from '@estimatenest/shared';
-import getCacheManager from './cache';
+import { getCacheManager } from './cache';
 
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
