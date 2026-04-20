@@ -104,6 +104,19 @@ export function useRoomConnection() {
         useConnectionStore.getState().setError(message.payload.message);
         break;
 
+      case 'ack':
+        console.log(`[EstimateNest] [${currentHookId}] Acknowledgment received:`, message.payload);
+        // Reset vote sending flag if we were sending a vote
+        if (isSendingVoteRef.current) {
+          console.log(`[EstimateNest] [${currentHookId}] Resetting vote sending flag`);
+          isSendingVoteRef.current = false;
+          if (timeoutRef.current) {
+            clearTimeout(timeoutRef.current);
+            timeoutRef.current = null;
+          }
+        }
+        break;
+
       default: {
         // Silently ignore 'ack' and undefined message types
         {
