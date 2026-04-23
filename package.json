@@ -18,7 +18,7 @@
     "test": "npm run test --workspaces",
     "lint": "npm run lint --workspaces",
     "format": "prettier --write .",
-    "test:e2e": "npm run test --workspace=e2e",
+    "test:e2e": "npx playwright test --config=e2e/playwright.config.ts --project=chromium",
     "deploy:dev": "npm run deploy --workspace=infrastructure -- --context env=dev",
     "deploy:prod": "npm run deploy --workspace=infrastructure -- --context env=prod",
     "destroy:dev": "npm run destroy --workspace=infrastructure -- --context env=dev",
