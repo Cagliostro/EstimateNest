@@ -42,6 +42,7 @@ export const roundSchema = z.object({
   startedAt: z.string().datetime(),
   revealedAt: z.string().datetime().optional(),
   isRevealed: z.boolean(),
+  scheduledRevealAt: z.string().datetime().optional(),
 });
 
 export const voteSchema = z.object({

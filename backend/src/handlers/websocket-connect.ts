@@ -3,7 +3,7 @@ import AWSXRay from 'aws-xray-sdk';
 import { DynamoDBDocumentClient, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda';
 import { broadcastToRoom } from '../utils/broadcast';
-import { validateWebSocketConnectionParams } from '@estimatenest/shared';
+import { validateWebSocketConnectionParams, Room } from '@estimatenest/shared';
 import { ZodError } from 'zod';
 import { getCacheManager } from '../utils/cache';
 
@@ -44,7 +44,21 @@ export const handler = async (
       event.requestContext.stage
     );
 
-    // Check connection limit (max 100 active connections per room)
+    // Get room to check maxParticipants limit
+    const roomData = await cacheManager.getRoomWithCache(roomId);
+    if (!roomData) {
+      return {
+        statusCode: 404,
+        body: JSON.stringify({
+          type: 'error',
+          payload: { error: 'Room not found' },
+        }),
+      };
+    }
+    const room = roomData as Room;
+    const maxParticipants = room.maxParticipants || 50;
+
+    // Check connection limit (respects room's maxParticipants setting)
     const activeParticipantsResult = await docClient.send(
       new QueryCommand({
         TableName: PARTICIPANTS_TABLE,
@@ -58,12 +72,14 @@ export const handler = async (
       })
     );
 
-    if (activeParticipantsResult.Count >= 100) {
+    if (activeParticipantsResult.Count >= maxParticipants) {
       return {
         statusCode: 429,
         body: JSON.stringify({
           type: 'error',
-          payload: { error: 'Connection limit exceeded (max 100 connections per room)' },
+          payload: {
+            error: `Connection limit exceeded (max ${maxParticipants} connections per room)`,
+          },
         }),
       };
     }

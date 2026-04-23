@@ -195,12 +195,21 @@ describe('vote handler - concurrent scenarios', () => {
       },
     ]);
 
-    // Room cache (first participant)
+    // Room cache for deck validation (first participant)
     mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
       id: roomId,
-      sk: 'META',
+      deck: {
+        id: 'fibonacci',
+        values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'],
+      },
+    });
+
+    // Room cache for auto-reveal settings (first participant)
+    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
+      id: roomId,
       autoRevealEnabled: true,
       autoRevealCountdownSeconds: 3,
+      allowAllParticipantsToReveal: false,
     });
 
     // Execute first vote
@@ -279,12 +288,21 @@ describe('vote handler - concurrent scenarios', () => {
       },
     ]);
 
-    // Room cache (second participant)
+    // Room cache for deck validation (second participant)
     mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
       id: roomId,
-      sk: 'META',
+      deck: {
+        id: 'fibonacci',
+        values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'],
+      },
+    });
+
+    // Room cache for auto-reveal settings (second participant)
+    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
+      id: roomId,
       autoRevealEnabled: true,
       autoRevealCountdownSeconds: 3,
+      allowAllParticipantsToReveal: false,
     });
 
     // Execute second vote

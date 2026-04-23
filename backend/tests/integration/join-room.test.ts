@@ -11,6 +11,8 @@ const { mockDynamoDB, mockCacheManager } = vi.hoisted(() => {
     mockCacheManager: {
       getParticipantsWithCache: vi.fn(),
       invalidateParticipants: vi.fn(),
+      getRoomWithCache: vi.fn(),
+      invalidateRoom: vi.fn(),
     },
   };
 });
@@ -28,7 +30,10 @@ vi.mock('@aws-sdk/lib-dynamodb', () => ({
 
 // Mock the cache module
 vi.mock('../../src/utils/cache', () => ({
-  getCacheManager: vi.fn(() => mockCacheManager),
+  getCacheManager: vi.fn(() => {
+    console.log('getCacheManager called, returning mock');
+    return mockCacheManager;
+  }),
 }));
 
 describe('join-room handler', () => {
@@ -46,9 +51,15 @@ describe('join-room handler', () => {
     // Reset cache mocks
     mockCacheManager.getParticipantsWithCache.mockReset();
     mockCacheManager.invalidateParticipants.mockReset();
+    mockCacheManager.getRoomWithCache.mockReset();
+    mockCacheManager.invalidateRoom.mockReset();
     // Default mock that throws if called unexpectedly
     mockCacheManager.getParticipantsWithCache.mockImplementation(() => {
       throw new Error('Unexpected call to getParticipantsWithCache - test should mock this call');
+    });
+    mockCacheManager.getRoomWithCache.mockImplementation(() => {
+      console.log('Unexpected call to getRoomWithCache');
+      throw new Error('Unexpected call to getRoomWithCache - test should mock this call');
     });
 
     // Set environment variables required by the handler
@@ -56,6 +67,7 @@ describe('join-room handler', () => {
     process.env.PARTICIPANTS_TABLE = 'test-participants-table';
     process.env.ROUNDS_TABLE = 'test-rounds-table';
     process.env.VOTES_TABLE = 'test-votes-table';
+    process.env.ROOMS_TABLE = 'test-rooms-table';
     process.env.WEBSOCKET_URL = 'wss://test.example.com';
 
     mockEvent = {
@@ -78,8 +90,32 @@ describe('join-room handler', () => {
     // Mock participants cache (empty room)
     mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([]);
 
+    // Mock room fetch
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        id: 'room-123',
+        shortCode: 'ABCDEF',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+        allowAllParticipantsToReveal: false,
+        deck: {
+          id: 'fibonacci',
+          name: 'Fibonacci',
+          values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'],
+        },
+        autoRevealEnabled: true,
+        autoRevealCountdownSeconds: 3,
+        maxParticipants: 50,
+      },
+    });
+
     // Mock participant creation (PutCommand)
     mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock ACTIVE coordination item query (no active round)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: null,
+    });
 
     // Mock rounds query (no rounds)
     mockDynamoDB.send.mockResolvedValueOnce({
@@ -92,6 +128,9 @@ describe('join-room handler', () => {
     });
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
+    if (response.statusCode !== 200) {
+      console.error('Unexpected response:', response);
+    }
 
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body);
@@ -112,6 +151,25 @@ describe('join-room handler', () => {
         shortCode: 'ABCDEF',
         roomId: 'room-123',
         expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      },
+    });
+
+    // Mock room fetch
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        id: 'room-123',
+        shortCode: 'ABCDEF',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+        allowAllParticipantsToReveal: false,
+        deck: {
+          id: 'fibonacci',
+          name: 'Fibonacci',
+          values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'],
+        },
+        autoRevealEnabled: true,
+        autoRevealCountdownSeconds: 3,
+        maxParticipants: 50,
       },
     });
 
@@ -147,6 +205,11 @@ describe('join-room handler', () => {
 
     // Mock participant update (lastSeenAt)
     mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock ACTIVE coordination item query (no active round)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: null,
+    });
 
     // Mock rounds query (no rounds)
     mockDynamoDB.send.mockResolvedValueOnce({

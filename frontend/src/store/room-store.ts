@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Participant, Round, Vote } from '@estimatenest/shared';
+import { Participant, Round, Vote, CardDeck } from '@estimatenest/shared';
 import { RoundHistoryItem } from '../lib/api-client';
 
 interface RoomState {
@@ -7,6 +7,10 @@ interface RoomState {
   roomId: string | null;
   shortCode: string | null;
   autoRevealEnabled: boolean;
+  autoRevealCountdownSeconds: number;
+  allowAllParticipantsToReveal: boolean;
+  deck: CardDeck | null;
+  maxParticipants: number;
 
   // Participants
   participants: Participant[];
@@ -27,6 +31,13 @@ interface RoomState {
   // Actions
   setRoom: (roomId: string, shortCode: string) => void;
   setAutoRevealEnabled: (enabled: boolean) => void;
+  setRoomSettings: (settings: {
+    autoRevealEnabled?: boolean;
+    autoRevealCountdownSeconds?: number;
+    allowAllParticipantsToReveal?: boolean;
+    deck?: CardDeck;
+    maxParticipants?: number;
+  }) => void;
   setParticipants: (participants: Participant[]) => void;
   addParticipant: (participant: Participant) => void;
   removeParticipant: (participantId: string) => void;
@@ -45,6 +56,10 @@ export const useRoomStore = create<RoomState>((set) => ({
   roomId: null,
   shortCode: null,
   autoRevealEnabled: true,
+  autoRevealCountdownSeconds: 3,
+  allowAllParticipantsToReveal: false,
+  deck: null,
+  maxParticipants: 50,
   participants: [],
   currentRound: null,
   votes: [],
@@ -55,6 +70,17 @@ export const useRoomStore = create<RoomState>((set) => ({
   setRoom: (roomId, shortCode) => set({ roomId, shortCode }),
 
   setAutoRevealEnabled: (enabled) => set({ autoRevealEnabled: enabled }),
+
+  setRoomSettings: (settings) =>
+    set((state) => ({
+      autoRevealEnabled: settings.autoRevealEnabled ?? state.autoRevealEnabled,
+      autoRevealCountdownSeconds:
+        settings.autoRevealCountdownSeconds ?? state.autoRevealCountdownSeconds,
+      allowAllParticipantsToReveal:
+        settings.allowAllParticipantsToReveal ?? state.allowAllParticipantsToReveal,
+      deck: settings.deck ?? state.deck,
+      maxParticipants: settings.maxParticipants ?? state.maxParticipants,
+    })),
 
   setParticipants: (participants) => {
     console.log(
@@ -103,6 +129,10 @@ export const useRoomStore = create<RoomState>((set) => ({
       roomId: null,
       shortCode: null,
       autoRevealEnabled: true,
+      autoRevealCountdownSeconds: 3,
+      allowAllParticipantsToReveal: false,
+      deck: null,
+      maxParticipants: 50,
       participants: [],
       currentRound: null,
       votes: [],

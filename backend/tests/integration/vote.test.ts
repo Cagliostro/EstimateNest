@@ -62,10 +62,8 @@ describe('vote handler', () => {
     mockCacheManager.getRoomWithCache.mockReset();
     mockCacheManager.invalidateActiveRound.mockReset();
     mockCacheManager.invalidateParticipants.mockReset();
-    // Default mock that throws if called unexpectedly
-    mockCacheManager.getParticipantsWithCache.mockImplementation(() => {
-      throw new Error('Unexpected call to getParticipantsWithCache - test should mock this call');
-    });
+    // Default mock that returns empty array (participants)
+    mockCacheManager.getParticipantsWithCache.mockImplementation(() => Promise.resolve([]));
     mockCacheManager.getActiveRoundWithCache.mockImplementation(() => {
       throw new Error('Unexpected call to getActiveRoundWithCache - test should mock this call');
     });
@@ -159,12 +157,31 @@ describe('vote handler', () => {
       },
     ]);
 
-    // Mock room cache (for auto-reveal settings)
+    // Mock room cache (for deck validation)
+    mockCacheManager.getRoomWithCache.mockImplementationOnce(async (roomId) => {
+      return {
+        id: roomId,
+        shortCode: 'ABCDEF',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+        allowAllParticipantsToReveal: false,
+        deck: {
+          id: 'fibonacci',
+          name: 'Fibonacci',
+          values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'],
+        },
+        autoRevealEnabled: true,
+        autoRevealCountdownSeconds: 3,
+        maxParticipants: 50,
+      };
+    });
+
+    // Mock room cache (for auto-reveal settings check)
     mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
       id: roomId,
-      sk: 'META',
       autoRevealEnabled: true,
       autoRevealCountdownSeconds: 3,
+      allowAllParticipantsToReveal: false,
     });
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
@@ -207,6 +224,24 @@ describe('vote handler', () => {
     // Mock round creation - two PutCommands: ACTIVE coordination item and round item
     mockDynamoDB.send.mockResolvedValueOnce({}); // Conditional Put for ACTIVE item
     mockDynamoDB.send.mockResolvedValueOnce({}); // Put for round item
+
+    // Mock room cache (for deck validation)
+    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
+      id: roomId,
+      deck: {
+        id: 'fibonacci',
+        name: 'Fibonacci',
+        values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'],
+      },
+    });
+
+    // Mock room cache (for auto-reveal settings check)
+    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
+      id: roomId,
+      autoRevealEnabled: true,
+      autoRevealCountdownSeconds: 3,
+      allowAllParticipantsToReveal: false,
+    });
 
     // Mock transaction write throwing ConditionalCheckFailedException
     const conditionalError = new Error('Conditional check failed');

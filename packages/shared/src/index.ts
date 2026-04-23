@@ -36,6 +36,7 @@ export interface Round {
   startedAt: string;
   revealedAt?: string;
   isRevealed: boolean;
+  scheduledRevealAt?: string;
 }
 
 export interface Vote {
@@ -74,6 +75,19 @@ export const DEFAULT_DECKS: CardDeck[] = [
     values: [0, 1, 2, 4, 8, 16, 32, 64, '?', '☕'],
   },
 ];
+
+/**
+ * Get a deck by its ID from the default decks.
+ * Returns the Fibonacci deck as default if not found.
+ */
+export function getDeckById(deckId: string): CardDeck {
+  const deck = DEFAULT_DECKS.find((d) => d.id === deckId);
+  if (!deck) {
+    console.warn(`Deck with ID "${deckId}" not found, defaulting to Fibonacci`);
+    return DEFAULT_DECKS[0]; // Fibonacci as default
+  }
+  return deck;
+}
 
 // ====================
 // WebSocket Messages

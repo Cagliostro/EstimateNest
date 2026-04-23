@@ -108,6 +108,7 @@ export class CacheManager {
         startedAt: item.startedAt,
         revealedAt: item.revealedAt,
         isRevealed: item.isRevealed,
+        scheduledRevealAt: item.scheduledRevealAt,
       };
     }
 

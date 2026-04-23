@@ -1,5 +1,5 @@
 import { config } from './config';
-import { Participant, Round, Vote } from '@estimatenest/shared';
+import { Participant, Round, Vote, CardDeck } from '@estimatenest/shared';
 
 export interface CreateRoomRequest {
   moderatorPassword?: string;
@@ -15,6 +15,14 @@ export interface CreateRoomResponse {
   expiresAt: string;
 }
 
+export interface RoomSettings {
+  deck: CardDeck;
+  allowAllParticipantsToReveal: boolean;
+  autoRevealEnabled?: boolean;
+  autoRevealCountdownSeconds?: number;
+  maxParticipants?: number;
+}
+
 export interface JoinRoomResponse {
   roomId: string;
   participantId: string;
@@ -25,6 +33,7 @@ export interface JoinRoomResponse {
   round?: Round | null;
   votes?: Vote[];
   isNewParticipant?: boolean;
+  room?: RoomSettings;
 }
 
 export interface RoundHistoryItem extends Round {

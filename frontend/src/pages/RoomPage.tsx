@@ -51,12 +51,13 @@ export default function RoomPage() {
   const [roundDescription, setRoundDescription] = useState('');
   const [isUpdatingAutoReveal, setIsUpdatingAutoReveal] = useState(false);
 
-  // Permission flags (TODO: add room.allowAllParticipantsToReveal)
-  const canReveal = isModerator;
+  // Permission flags
+  const allowAllParticipantsToReveal = useRoomStore((state) => state.allowAllParticipantsToReveal);
+  const canReveal = isModerator || allowAllParticipantsToReveal;
   const canStartNewRound = isModerator;
 
-  // Fibonacci deck (default)
-  const deck = DEFAULT_DECKS.find((d: { id: string }) => d.id === 'fibonacci') || DEFAULT_DECKS[0];
+  // Room deck (from room settings)
+  const deck = useRoomStore((state) => state.deck) || DEFAULT_DECKS[0];
 
   const copyRoomLink = () => {
     const roomLink = `${config.frontendUrl}/${shortCode || roomCode}`;

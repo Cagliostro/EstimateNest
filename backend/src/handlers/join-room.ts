@@ -14,6 +14,7 @@ import {
   Participant,
   Round,
   Vote,
+  Room,
   validateJoinRoomRequest,
 } from '@estimatenest/shared';
 import { ZodError } from 'zod';
@@ -23,6 +24,7 @@ const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
 const docClient = DynamoDBDocumentClient.from(client);
 const cacheManager = getCacheManager();
 const ROOM_CODES_TABLE = process.env.ROOM_CODES_TABLE!;
+const ROOMS_TABLE = process.env.ROOMS_TABLE!;
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 const ROUNDS_TABLE = process.env.ROUNDS_TABLE!;
 const VOTES_TABLE = process.env.VOTES_TABLE!;
@@ -113,6 +115,21 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         body: JSON.stringify({ error: 'Room has expired' }),
       };
     }
+
+    // Fetch room details
+    const roomResult = await docClient.send(
+      new GetCommand({
+        TableName: ROOMS_TABLE,
+        Key: { id: roomId, sk: 'META' },
+      })
+    );
+    if (!roomResult.Item) {
+      return {
+        statusCode: 404,
+        body: JSON.stringify({ error: 'Room not found' }),
+      };
+    }
+    const room = roomResult.Item as Room;
 
     // Determine participant ID (provided for polling, or new)
     const providedParticipantId = validatedData.participantId;
@@ -227,41 +244,65 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     let round: Round | null = null;
     let votes: Vote[] = [];
 
-    // Query for active round (not revealed) using GSI sorted by startedAt descending
+    // First, try to get the active round via the ACTIVE coordination item (consistent read)
     let roundItem = null;
-    const activeRoundsResult = await docClient.send(
-      new QueryCommand({
+    const activeCoordResult = await docClient.send(
+      new GetCommand({
         TableName: ROUNDS_TABLE,
-        IndexName: 'RoomIdStartedAtIndex',
-        KeyConditionExpression: 'roomId = :roomId',
-        FilterExpression: 'isRevealed = :false',
-        ExpressionAttributeValues: {
-          ':roomId': roomId,
-          ':false': false,
-        },
-        ScanIndexForward: false, // descending (most recent first)
-        Limit: 1,
+        Key: { roomId, roundId: 'ACTIVE' },
+        ConsistentRead: true,
       })
     );
+    if (activeCoordResult.Item && activeCoordResult.Item.activeRoundId) {
+      const activeRoundId = activeCoordResult.Item.activeRoundId;
+      const roundResult = await docClient.send(
+        new GetCommand({
+          TableName: ROUNDS_TABLE,
+          Key: { roomId, roundId: activeRoundId },
+        })
+      );
+      if (roundResult.Item && !roundResult.Item.isRevealed) {
+        roundItem = roundResult.Item;
+      }
+    }
 
-    if (activeRoundsResult.Items && activeRoundsResult.Items.length > 0) {
-      roundItem = activeRoundsResult.Items[0];
-    } else {
-      // No active round, get most recent round (any status)
-      const latestRoundsResult = await docClient.send(
+    // If no active round found via coordination item, fall back to GSI query
+    if (!roundItem) {
+      // Query for active round (not revealed) using GSI sorted by startedAt descending
+      const activeRoundsResult = await docClient.send(
         new QueryCommand({
           TableName: ROUNDS_TABLE,
           IndexName: 'RoomIdStartedAtIndex',
           KeyConditionExpression: 'roomId = :roomId',
+          FilterExpression: 'isRevealed = :false',
           ExpressionAttributeValues: {
             ':roomId': roomId,
+            ':false': false,
           },
           ScanIndexForward: false, // descending (most recent first)
           Limit: 1,
         })
       );
-      if (latestRoundsResult.Items && latestRoundsResult.Items.length > 0) {
-        roundItem = latestRoundsResult.Items[0];
+
+      if (activeRoundsResult.Items && activeRoundsResult.Items.length > 0) {
+        roundItem = activeRoundsResult.Items[0];
+      } else {
+        // No active round, get most recent round (any status)
+        const latestRoundsResult = await docClient.send(
+          new QueryCommand({
+            TableName: ROUNDS_TABLE,
+            IndexName: 'RoomIdStartedAtIndex',
+            KeyConditionExpression: 'roomId = :roomId',
+            ExpressionAttributeValues: {
+              ':roomId': roomId,
+            },
+            ScanIndexForward: false, // descending (most recent first)
+            Limit: 1,
+          })
+        );
+        if (latestRoundsResult.Items && latestRoundsResult.Items.length > 0) {
+          roundItem = latestRoundsResult.Items[0];
+        }
       }
     }
 
@@ -275,6 +316,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         startedAt: roundItem.startedAt,
         revealedAt: roundItem.revealedAt,
         isRevealed: roundItem.isRevealed,
+        scheduledRevealAt: roundItem.scheduledRevealAt || undefined,
       };
       const votesResult = await docClient.send(
         new QueryCommand({
@@ -319,6 +361,13 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         participants: participantsWithoutConnection,
         round,
         votes,
+        room: {
+          deck: room.deck,
+          allowAllParticipantsToReveal: room.allowAllParticipantsToReveal,
+          autoRevealEnabled: room.autoRevealEnabled,
+          autoRevealCountdownSeconds: room.autoRevealCountdownSeconds,
+          maxParticipants: room.maxParticipants,
+        },
       }),
     };
   } catch (error) {

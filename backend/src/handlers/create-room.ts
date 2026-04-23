@@ -8,6 +8,7 @@ import {
   getRoomTTL,
   Room,
   validateCreateRoomRequest,
+  getDeckById,
 } from '@estimatenest/shared';
 import { ZodError } from 'zod';
 
@@ -79,7 +80,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       maxParticipants,
       autoRevealEnabled,
       autoRevealCountdownSeconds,
-      deck: typeof deck === 'string' ? deck : deck, // TODO: resolve deck object
+      deck: getDeckById(deck),
     };
 
     // Write room record

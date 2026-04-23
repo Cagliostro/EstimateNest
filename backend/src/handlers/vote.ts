@@ -107,8 +107,12 @@ async function getRoomWithCache(roomId: string): Promise<Record<string, unknown>
  * Get or create an active round for a room atomically.
  * Uses an 'ACTIVE' item in ROUNDS_TABLE to coordinate round creation.
  */
-async function getOrCreateActiveRound(roomId: string): Promise<{ roundId: string; round: Round }> {
-  console.log('getOrCreateActiveRound called for room:', roomId);
+async function getOrCreateActiveRound(
+  roomId: string,
+  retryCount = 0
+): Promise<{ roundId: string; round: Round }> {
+  const MAX_RETRIES = 3;
+  console.log('getOrCreateActiveRound called for room:', roomId, 'retry:', retryCount);
   // Try cache first
   const cachedRound = await cacheManager.getActiveRoundWithCache(roomId);
   if (cachedRound) {
@@ -124,6 +128,7 @@ async function getOrCreateActiveRound(roomId: string): Promise<{ roundId: string
     roomId,
     startedAt: now,
     isRevealed: false,
+    scheduledRevealAt: undefined,
   };
 
   // Attempt to claim the active round slot
@@ -175,9 +180,14 @@ async function getOrCreateActiveRound(roomId: string): Promise<{ roundId: string
 
       const activeItem = activeItemResult.Item;
       if (!activeItem || !activeItem.activeRoundId) {
-        // Should not happen, retry once
+        // Should not happen, retry with increment
         console.warn('Active item missing activeRoundId, retrying', { roomId, activeItem });
-        return getOrCreateActiveRound(roomId);
+        if (retryCount >= MAX_RETRIES) {
+          throw new Error(
+            `Max retries (${MAX_RETRIES}) exceeded while trying to create active round`
+          );
+        }
+        return getOrCreateActiveRound(roomId, retryCount + 1);
       }
 
       const existingRoundId = activeItem.activeRoundId;
@@ -188,8 +198,8 @@ async function getOrCreateActiveRound(roomId: string): Promise<{ roundId: string
         })
       );
 
-      const round = roundResult.Item as Round | undefined;
-      if (!round) {
+      const item = roundResult.Item;
+      if (!item) {
         // Round item missing, clean up broken active item and retry
         console.error('Round item missing for activeRoundId, cleaning up', {
           roomId,
@@ -201,8 +211,23 @@ async function getOrCreateActiveRound(roomId: string): Promise<{ roundId: string
             Key: { roomId, roundId: 'ACTIVE' },
           })
         );
-        return getOrCreateActiveRound(roomId);
+        if (retryCount >= MAX_RETRIES) {
+          throw new Error(`Max retries (${MAX_RETRIES}) exceeded while cleaning up missing round`);
+        }
+        return getOrCreateActiveRound(roomId, retryCount + 1);
       }
+
+      // Map DynamoDB attributes to Round interface
+      const round: Round = {
+        id: item.roundId || item.id,
+        roomId: item.roomId,
+        title: item.title,
+        description: item.description,
+        startedAt: item.startedAt,
+        revealedAt: item.revealedAt,
+        isRevealed: item.isRevealed,
+        scheduledRevealAt: item.scheduledRevealAt || undefined,
+      };
 
       console.log('Found existing round created by another participant:', existingRoundId);
       return { roundId: existingRoundId, round };
@@ -215,6 +240,9 @@ async function handleVote(
   event: APIGatewayProxyEvent,
   message: WebSocketMessage & { type: 'vote' }
 ) {
+  console.log('=== VOTE HANDLER START ===');
+  console.log('Connection ID:', event.requestContext.connectionId);
+  console.log('Message payload:', JSON.stringify(message.payload));
   const { connectionId } = event.requestContext;
   const { roundId: requestedRoundId = '', value } = message.payload;
 
@@ -248,6 +276,16 @@ async function handleVote(
 
   const { roomId, participantId } = participant;
 
+  // Validate vote value against room's deck
+  const roomRecord = await getRoomWithCache(roomId);
+  if (!roomRecord) {
+    throw new Error('Room not found');
+  }
+  const room = roomRecord as Room;
+  if (!room.deck.values.includes(value)) {
+    throw new Error(`Invalid vote value. Allowed values: ${room.deck.values.join(', ')}`);
+  }
+
   // Determine active round
   let roundId = requestedRoundId;
   let round: Round;
@@ -273,6 +311,7 @@ async function handleVote(
       startedAt: item.startedAt,
       revealedAt: item.revealedAt,
       isRevealed: item.isRevealed,
+      scheduledRevealAt: item.scheduledRevealAt || undefined,
     };
     if (round.isRevealed) {
       throw new Error('Round is already revealed');
@@ -315,40 +354,53 @@ async function handleVote(
   };
 
   // Store vote and update round in transaction
-  await docClient.send(
-    new TransactWriteCommand({
-      TransactItems: [
-        {
-          Put: {
-            TableName: VOTES_TABLE,
-            Item: {
-              ...vote,
-              roomId,
-              idempotencyKey,
-            },
-            ConditionExpression: 'attribute_not_exists(idempotencyKey) OR idempotencyKey <> :key',
-            ExpressionAttributeValues: {
-              ':key': idempotencyKey,
-            },
-          },
-        },
-        {
-          Update: {
-            TableName: ROUNDS_TABLE,
-            Key: { roomId, roundId },
-            UpdateExpression: 'SET #updated = :now',
-            ExpressionAttributeNames: {
-              '#updated': 'updatedAt',
-            },
-            ExpressionAttributeValues: {
-              ':now': votedAt,
+  console.log('Attempting vote transaction...', { roomId, roundId, participantId, voteId });
+  try {
+    await docClient.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: VOTES_TABLE,
+              Item: {
+                ...vote,
+                roomId,
+                idempotencyKey,
+              },
+              ConditionExpression: 'attribute_not_exists(idempotencyKey) OR idempotencyKey <> :key',
+              ExpressionAttributeValues: {
+                ':key': idempotencyKey,
+              },
             },
           },
-        },
-      ],
-    })
-  );
-  console.log('Vote transaction successful for participant:', participantId, 'roundId:', roundId);
+          {
+            Update: {
+              TableName: ROUNDS_TABLE,
+              Key: { roomId, roundId },
+              UpdateExpression: 'SET #updated = :now',
+              ExpressionAttributeNames: {
+                '#updated': 'updatedAt',
+              },
+              ExpressionAttributeValues: {
+                ':now': votedAt,
+              },
+            },
+          },
+        ],
+      })
+    );
+    console.log('Vote transaction successful for participant:', participantId, 'roundId:', roundId);
+  } catch (transactionError) {
+    console.error('Vote transaction failed:', transactionError);
+    console.error('Transaction details:', {
+      roomId,
+      roundId,
+      participantId,
+      voteId,
+      idempotencyKey,
+    });
+    throw transactionError; // Re-throw to trigger error response
+  }
 
   // Invalidate caches to ensure fresh data for auto-reveal check
   cacheManager.invalidateParticipants(roomId);
@@ -535,42 +587,56 @@ async function handleVote(
   );
 
   // Fetch room to check auto-reveal settings (cached)
-  const room = (await getRoomWithCache(roomId)) as Room | undefined;
+  const roomSettings = (await getRoomWithCache(roomId)) as Room | undefined;
   console.log('Auto-reveal room settings:', {
-    autoRevealEnabled: room?.autoRevealEnabled,
-    countdownSeconds: room?.autoRevealCountdownSeconds,
-    allowAllParticipantsToReveal: room?.allowAllParticipantsToReveal,
-    maxParticipants: room?.maxParticipants,
+    autoRevealEnabled: roomSettings?.autoRevealEnabled,
+    countdownSeconds: roomSettings?.autoRevealCountdownSeconds,
+    allowAllParticipantsToReveal: roomSettings?.allowAllParticipantsToReveal,
+    maxParticipants: roomSettings?.maxParticipants,
   });
-  const autoRevealEnabled = room?.autoRevealEnabled !== false; // default: true
-  const countdownSeconds = room?.autoRevealCountdownSeconds ?? 3; // default: 3
+  const autoRevealEnabled = roomSettings?.autoRevealEnabled !== false; // default: true
+  const countdownSeconds = roomSettings?.autoRevealCountdownSeconds ?? 3; // default: 3
 
   // If everyone voted, auto-reveal is enabled, and round not yet revealed
   if (allVoted && autoRevealEnabled && !round.isRevealed) {
-    console.log('All participants voted, scheduling auto-reveal', {
+    console.log('All participants voted, checking if auto-reveal already scheduled', {
       roomId,
       roundId,
       countdownSeconds,
+      scheduledRevealAt: round.scheduledRevealAt,
     });
 
-    // Broadcast countdown start to all participants
-    await broadcastToRoom(event, roomId, {
-      type: 'autoRevealCountdown',
-      payload: { countdownSeconds },
-    });
+    // Only schedule auto-reveal if not already scheduled (prevents duplicate countdowns)
+    if (!round.scheduledRevealAt) {
+      console.log('Scheduling auto-reveal', {
+        roomId,
+        roundId,
+        countdownSeconds,
+      });
 
-    // Schedule the reveal by updating the round with scheduledRevealAt
-    const scheduledRevealAt = new Date(Date.now() + countdownSeconds * 1000).toISOString();
-    await docClient.send(
-      new UpdateCommand({
-        TableName: ROUNDS_TABLE,
-        Key: { roomId, roundId },
-        UpdateExpression: 'SET scheduledRevealAt = :scheduledRevealAt',
-        ExpressionAttributeValues: {
-          ':scheduledRevealAt': scheduledRevealAt,
-        },
-      })
-    );
+      // Broadcast countdown start to all participants
+      await broadcastToRoom(event, roomId, {
+        type: 'autoRevealCountdown',
+        payload: { countdownSeconds },
+      });
+
+      // Schedule the reveal by updating the round with scheduledRevealAt
+      const scheduledRevealAt = new Date(Date.now() + countdownSeconds * 1000).toISOString();
+      await docClient.send(
+        new UpdateCommand({
+          TableName: ROUNDS_TABLE,
+          Key: { roomId, roundId },
+          UpdateExpression: 'SET scheduledRevealAt = :scheduledRevealAt',
+          ExpressionAttributeValues: {
+            ':scheduledRevealAt': scheduledRevealAt,
+          },
+        })
+      );
+    } else {
+      console.log('Auto-reveal already scheduled, skipping duplicate countdown', {
+        scheduledRevealAt: round.scheduledRevealAt,
+      });
+    }
   }
 
   console.log('Broadcasting round update', { roomId, roundId, votesCount: votes.length });
@@ -628,6 +694,13 @@ async function handleReveal(
   if (!participant) {
     throw new Error('Participant not found');
   }
+  console.log('Reveal participant found:', {
+    participantId: participant.id,
+    name: participant.name,
+    connectionId: participant.connectionId,
+    isModerator: participant.isModerator,
+    roomId: participant.roomId,
+  });
 
   const { roomId } = participant;
 
@@ -659,13 +732,25 @@ async function handleReveal(
   });
 
   // Fetch room to check allowAllParticipantsToReveal setting (cached)
+  console.log('Fetching room for reveal, roomId:', roomId);
   const room = (await getRoomWithCache(roomId)) as Room | undefined;
+  console.log(
+    'Room fetched:',
+    room ? 'found' : 'not found',
+    room ? { id: room.id, autoRevealEnabled: room.autoRevealEnabled } : null
+  );
   if (!room) {
     throw new Error('Room not found');
   }
 
   // Check if participant is moderator or room allows all participants to reveal
   // OR if this is an auto-reveal (scheduled reveal time has passed)
+  console.log('Reveal permission check:', {
+    participantIsModerator: participant.isModerator,
+    roomAllowAllParticipantsToReveal: room.allowAllParticipantsToReveal,
+    isAutoReveal,
+    allowed: participant.isModerator || room.allowAllParticipantsToReveal || isAutoReveal,
+  });
   if (!participant.isModerator && !room.allowAllParticipantsToReveal && !isAutoReveal) {
     throw new Error('Only moderators can reveal votes');
   }
@@ -678,6 +763,7 @@ async function handleReveal(
     startedAt: item.startedAt,
     revealedAt: item.revealedAt,
     isRevealed: item.isRevealed,
+    scheduledRevealAt: item.scheduledRevealAt || undefined,
   };
 
   if (round.isRevealed) {
@@ -724,6 +810,29 @@ async function handleReveal(
   );
 
   const votes = (votesResult.Items as Vote[]) || [];
+
+  // Debug: log participants before broadcast
+  const participants = await cacheManager.getParticipantsWithCache(roomId);
+  console.log(
+    'Reveal broadcast participants:',
+    participants.map((p) => ({
+      id: p.id,
+      name: p.name,
+      connectionId: p.connectionId,
+      isModerator: p.isModerator,
+    }))
+  );
+  const moderator = participants.find((p) => p.isModerator);
+  console.log(
+    'Moderator participant:',
+    moderator
+      ? {
+          id: moderator.id,
+          connectionId: moderator.connectionId,
+          name: moderator.name,
+        }
+      : 'No moderator found'
+  );
 
   // Broadcast round update with revealed votes
   await broadcastToRoom(event, roomId, {
@@ -973,6 +1082,7 @@ async function handleNewRound(
         startedAt: existingItem.startedAt,
         revealedAt,
         isRevealed: true,
+        scheduledRevealAt: undefined,
       };
 
       await broadcastToRoom(event, roomId, {
@@ -996,6 +1106,7 @@ async function handleNewRound(
     description,
     startedAt: now,
     isRevealed: false,
+    scheduledRevealAt: undefined,
   };
 
   await docClient.send(
@@ -1137,6 +1248,7 @@ async function handleUpdateRound(
     startedAt: updatedItem.startedAt,
     revealedAt: updatedItem.revealedAt,
     isRevealed: updatedItem.isRevealed,
+    scheduledRevealAt: updatedItem.scheduledRevealAt || undefined,
   };
 
   const votesResult = await docClient.send(

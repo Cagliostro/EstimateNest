@@ -74,6 +74,12 @@ export async function broadcastToRoom(
 
   // Send message to each active WebSocket connection
   const promises = activeParticipants.map(async (participant) => {
+    if (message.type === 'roundUpdate') {
+      const round = (message.payload as { round?: { id: string; isRevealed: boolean } }).round;
+      console.log(
+        `Broadcasting roundUpdate to ${participant.connectionId}, roundId: ${round?.id}, isRevealed: ${round?.isRevealed}`
+      );
+    }
     console.log(
       `Attempting to send to connection ${participant.connectionId}, message type: ${message.type}`
     );

@@ -16,6 +16,8 @@ import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as sns from 'aws-cdk-lib/aws-sns';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -322,7 +324,7 @@ export class EstimateNestStack extends cdk.Stack {
       autoDeploy: true,
     });
 
-    // Add throttling settings via L1 construct
+    // Add throttling and idle timeout settings via L1 construct
     const cfnStage = webSocketStage.node.defaultChild as apigatewayv2.CfnStage;
     cfnStage.defaultRouteSettings = {
       throttlingBurstLimit: 20,
@@ -484,6 +486,50 @@ export class EstimateNestStack extends cdk.Stack {
       tracing: lambda.Tracing.ACTIVE,
     });
 
+    const scheduledAutoRevealHandler = new lambdaNodejs.NodejsFunction(
+      this,
+      'ScheduledAutoRevealHandler',
+      {
+        runtime: lambda.Runtime.NODEJS_20_X,
+        architecture: lambda.Architecture.ARM_64,
+        entry: '../backend/dist/handlers/scheduled-auto-reveal.js',
+        handler: 'handler',
+        projectRoot: path.join(__dirname, '..', '..'),
+        depsLockFilePath: path.join(__dirname, '..', '..', 'package-lock.json'),
+        timeout: cdk.Duration.seconds(60),
+        memorySize: 256,
+        environment: {
+          ROUNDS_TABLE: roundsTable.tableName,
+          VOTES_TABLE: votesTable.tableName,
+          PARTICIPANTS_TABLE: participantsTable.tableName,
+          WEBSOCKET_URL: webSocketCustomUrl || webSocketStage.url,
+        },
+        bundling: {
+          format: lambdaNodejs.OutputFormat.CJS,
+        },
+        tracing: lambda.Tracing.ACTIVE,
+      }
+    );
+
+    // EventBridge rule to trigger auto-reveal every minute
+    const autoRevealRule = new events.Rule(this, 'AutoRevealRule', {
+      schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
+      enabled: true,
+    });
+    autoRevealRule.addTarget(new eventsTargets.LambdaFunction(scheduledAutoRevealHandler));
+
+    // Grant permissions for scheduled auto-reveal
+    roundsTable.grantReadWriteData(scheduledAutoRevealHandler);
+    votesTable.grantReadData(scheduledAutoRevealHandler);
+    participantsTable.grantReadWriteData(scheduledAutoRevealHandler);
+    // Allow posting to WebSocket connections
+    scheduledAutoRevealHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['execute-api:ManageConnections'],
+        resources: [`arn:aws:execute-api:${this.region}:${this.account}:${webSocketApi.apiId}/*`],
+      })
+    );
+
     // Grant permissions - principle of least privilege
     // create-room.ts: Only writes to rooms and room codes tables
     roomsTable.grantWriteData(createRoomHandler);
@@ -498,6 +544,13 @@ export class EstimateNestStack extends cdk.Stack {
       })
     );
     roundsTable.grantReadData(joinRoomHandler);
+    // Explicit index permissions for RoomIdStartedAtIndex queries
+    joinRoomHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:Query'],
+        resources: [`${roundsTable.tableArn}/index/*`],
+      })
+    );
     votesTable.grantReadData(joinRoomHandler);
     // round-history.ts: Reads room codes, rounds, and votes
     roomCodesTable.grantReadData(roundHistoryHandler);
@@ -529,7 +582,7 @@ export class EstimateNestStack extends cdk.Stack {
         resources: [participantsTable.tableArn, `${participantsTable.tableArn}/index/*`],
       })
     );
-    // roundsTable: GetItem, Query, PutItem, UpdateItem, TransactWriteItems
+    // roundsTable: GetItem, Query, PutItem, UpdateItem, DeleteItem, TransactWriteItems
     voteHandler.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
@@ -537,9 +590,10 @@ export class EstimateNestStack extends cdk.Stack {
           'dynamodb:Query',
           'dynamodb:PutItem',
           'dynamodb:UpdateItem',
+          'dynamodb:DeleteItem',
           'dynamodb:TransactWriteItems',
         ],
-        resources: [roundsTable.tableArn],
+        resources: [roundsTable.tableArn, `${roundsTable.tableArn}/index/*`],
       })
     );
     // votesTable: Query, PutItem, TransactWriteItems

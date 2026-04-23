@@ -9,6 +9,7 @@ const { mockDynamoDB, mockCacheManager } = vi.hoisted(() => {
       send: vi.fn(),
     },
     mockCacheManager: {
+      getRoomWithCache: vi.fn(),
       getParticipantsWithCache: vi.fn(),
       invalidateParticipants: vi.fn(),
     },
@@ -47,9 +48,13 @@ describe('websocket-connect handler', () => {
     });
 
     // Reset cache mocks
+    mockCacheManager.getRoomWithCache.mockReset();
     mockCacheManager.getParticipantsWithCache.mockReset();
     mockCacheManager.invalidateParticipants.mockReset();
     // Default mock that throws if called unexpectedly
+    mockCacheManager.getRoomWithCache.mockImplementation(() => {
+      throw new Error('Unexpected call to getRoomWithCache - test should mock this call');
+    });
     mockCacheManager.getParticipantsWithCache.mockImplementation(() => {
       throw new Error('Unexpected call to getParticipantsWithCache - test should mock this call');
     });
@@ -71,6 +76,12 @@ describe('websocket-connect handler', () => {
   });
 
   it('should successfully connect WebSocket and update participant', async () => {
+    // Mock room fetch (getRoomWithCache) - with maxParticipants
+    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
+      id: '11111111-2222-4333-8444-555555555555',
+      maxParticipants: 100,
+    });
+
     // Mock connection limit check (QueryCommand for count) - under limit
     mockDynamoDB.send.mockResolvedValueOnce({
       Count: 50, // under 100 limit
@@ -108,6 +119,12 @@ describe('websocket-connect handler', () => {
   });
 
   it('should reject connection when room connection limit exceeded', async () => {
+    // Mock room fetch (getRoomWithCache) - with maxParticipants
+    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
+      id: '11111111-2222-4333-8444-555555555555',
+      maxParticipants: 100,
+    });
+
     // Mock connection limit check (QueryCommand for count) - over limit
     mockDynamoDB.send.mockResolvedValueOnce({
       Count: 120, // over 100 limit
@@ -167,6 +184,12 @@ describe('websocket-connect handler', () => {
   });
 
   it('should handle DynamoDB update error and return 500', async () => {
+    // Mock room fetch (getRoomWithCache)
+    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
+      id: '11111111-2222-4333-8444-555555555555',
+      maxParticipants: 100,
+    });
+
     // Mock connection limit check
     mockDynamoDB.send.mockResolvedValueOnce({
       Count: 50,

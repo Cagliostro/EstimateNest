@@ -245,7 +245,18 @@ export function useRoomConnection() {
         // 3. Set room info
         useRoomStore.getState().setRoom(joinResponse.roomId, roomCode.toUpperCase());
 
-        // 4. Update room state with initial data from join response
+        // 4. Set room settings if provided
+        if (joinResponse.room) {
+          useRoomStore.getState().setRoomSettings({
+            deck: joinResponse.room.deck,
+            allowAllParticipantsToReveal: joinResponse.room.allowAllParticipantsToReveal,
+            autoRevealEnabled: joinResponse.room.autoRevealEnabled,
+            autoRevealCountdownSeconds: joinResponse.room.autoRevealCountdownSeconds,
+            maxParticipants: joinResponse.room.maxParticipants,
+          });
+        }
+
+        // 6. Update room state with initial data from join response
         if (joinResponse.participants) {
           useRoomStore.getState().setParticipants(joinResponse.participants);
         }
@@ -256,10 +267,10 @@ export function useRoomConnection() {
           useRoomStore.getState().setVotes(joinResponse.votes);
         }
 
-        // 5. Connect WebSocket via service
+        // 7. Connect WebSocket via service
         service.connect(joinResponse.roomId, joinResponse.participantId);
 
-        // 6. Start polling for room state updates (fallback for WebSocket issues)
+        // 8. Start polling for room state updates (fallback for WebSocket issues)
         startPolling(roomCode, joinResponse.participantId);
 
         return joinResponse;
@@ -471,7 +482,7 @@ export function useRoomConnection() {
 
   // Countdown function ref to access latest revealVotes
   const triggerReveal = useCallback(() => {
-    const { currentRound } = useRoomStore.getState();
+    const { currentRound, allowAllParticipantsToReveal } = useRoomStore.getState();
     const { isModerator } = useParticipantStore.getState();
 
     if (!currentRound) {
@@ -479,7 +490,7 @@ export function useRoomConnection() {
       return;
     }
 
-    if (!isModerator) {
+    if (!isModerator && !allowAllParticipantsToReveal) {
       console.log(`[EstimateNest] Non-moderator skipping auto-reveal, waiting for moderator`);
       return;
     }

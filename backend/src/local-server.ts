@@ -4,6 +4,7 @@ import { WebSocketServer, WebSocket as WSWebSocket } from 'ws';
 import bodyParser from 'body-parser';
 import { v4 as uuidv4 } from 'uuid';
 import type { Room, Participant, Round, Vote, WebSocketMessage } from '@estimatenest/shared';
+import { generateShortCode, getDeckById } from '@estimatenest/shared';
 
 const app = express();
 const server = createServer(app);
@@ -25,16 +26,6 @@ const connections = new Map<string, WSWebSocket>(); // connectionId -> WebSocket
 const participantByConnection = new Map<string, string>(); // connectionId -> participantId
 const rounds = new Map<string, Round>();
 const votes = new Map<string, Vote>();
-
-// Generate short code for room
-function generateShortCode(length = 6): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let result = '';
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
-}
 
 // Create avatar seed
 function createAvatarSeed(name?: string): string {
@@ -61,21 +52,7 @@ app.post('/rooms', (req, res) => {
       createdAt: now,
       expiresAt,
       allowAllParticipantsToReveal: false,
-      deck: {
-        id: deck,
-        name:
-          deck === 'fibonacci'
-            ? 'Fibonacci'
-            : deck === 'tshirt'
-              ? 'T‑Shirt Sizes'
-              : 'Powers of Two',
-        values:
-          deck === 'fibonacci'
-            ? [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕']
-            : deck === 'tshirt'
-              ? ['XS', 'S', 'M', 'L', 'XL', 'XXL', '?', '☕']
-              : [0, 1, 2, 4, 8, 16, 32, 64, '?', '☕'],
-      },
+      deck: getDeckById(deck),
     };
 
     rooms.set(roomId, room);
@@ -87,6 +64,7 @@ app.post('/rooms', (req, res) => {
       roomId,
       startedAt: now,
       isRevealed: false,
+      scheduledRevealAt: undefined,
     };
     rounds.set(roundId, round);
 
@@ -331,6 +309,7 @@ async function handleWebSocketMessage(
             roomId,
             startedAt: new Date().toISOString(),
             isRevealed: false,
+            scheduledRevealAt: undefined,
           };
           rounds.set(activeRoundId, newRound);
         } else {
@@ -428,6 +407,7 @@ async function handleWebSocketMessage(
         description,
         startedAt: now,
         isRevealed: false,
+        scheduledRevealAt: undefined,
       };
       rounds.set(roundId, round);
       broadcastToRoom(roomId, {
