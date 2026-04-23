@@ -415,6 +415,7 @@ export class EstimateNestStack extends cdk.Stack {
 
       environment: {
         ROOM_CODES_TABLE: roomCodesTable.tableName,
+        ROOMS_TABLE: roomsTable.tableName,
         PARTICIPANTS_TABLE: participantsTable.tableName,
         WEBSOCKET_URL: webSocketCustomUrl || webSocketStage.url,
         ROUNDS_TABLE: roundsTable.tableName,
@@ -553,6 +554,7 @@ export class EstimateNestStack extends cdk.Stack {
         resources: [`${roundsTable.tableArn}/index/*`],
       })
     );
+    roomsTable.grantReadData(joinRoomHandler);
     votesTable.grantReadData(joinRoomHandler);
     // round-history.ts: Reads room codes, rounds, and votes
     roomCodesTable.grantReadData(roundHistoryHandler);
