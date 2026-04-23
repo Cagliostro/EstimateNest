@@ -325,17 +325,15 @@ jobs:
           # Output deployment color information for blue-green
           echo "Deployment Color: ${{ steps.color.outputs.color }}"
           if [[ "${{ steps.color.outputs.color }}" == "green" ]]; then
-            echo "⚠️  Blue-Green Deployment Note:"
-            echo "This deployment is to the 'green' environment with weight 0 (no traffic)."
+            echo "🟢 Blue-Green Deployment:"
+            echo "Deployed to green stack. Testing green API health..."
             echo "Test URLs:"
             echo "  - REST API: $REST_API_URL"
             echo "  - WebSocket: $WEBSOCKET_URL"
             echo "  - Health check: $REST_API_URL/health"
             echo ""
-            echo "To switch traffic after verification:"
-            echo "1. Test the green deployment using the URLs above"
-            echo "2. Run: ./infrastructure/scripts/switch-traffic.sh ${{ steps.env.outputs.env }} green"
-            echo "3. Monitor application performance"
+            echo "After health check + frontend build + upload pass,"
+            echo "traffic will be automatically switched from blue to green."
           fi
 
       - name: Health check
@@ -390,3 +388,8 @@ jobs:
           aws cloudfront create-invalidation \
             --distribution-id ${{ steps.outputs.outputs.distribution_id }} \
             --paths "/*"
+
+      - name: Switch traffic to green (prod only)
+        if: steps.env.outputs.env == 'prod' && steps.color.outputs.color == 'green'
+        run: |
+          bash infrastructure/scripts/switch-traffic.sh prod green
