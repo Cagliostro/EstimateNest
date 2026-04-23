@@ -175,6 +175,7 @@ export class EstimateNestStack extends cdk.Stack {
       environment: {
         ROOMS_TABLE: roomsTable.tableName,
         ROOM_CODES_TABLE: roomCodesTable.tableName,
+        PARTICIPANTS_TABLE: participantsTable.tableName,
         DOMAIN_NAME: props.domainName || 'example.com',
       },
       bundling: {
@@ -531,9 +532,10 @@ export class EstimateNestStack extends cdk.Stack {
     );
 
     // Grant permissions - principle of least privilege
-    // create-room.ts: Only writes to rooms and room codes tables
+    // create-room.ts: Writes to rooms, room codes, and participants tables
     roomsTable.grantWriteData(createRoomHandler);
     roomCodesTable.grantWriteData(createRoomHandler);
+    participantsTable.grantWriteData(createRoomHandler);
     // join-room.ts: Reads room codes, reads/writes participants, reads rounds and votes
     roomCodesTable.grantReadData(joinRoomHandler);
     // Granular permissions for participants table: GetItem, Query, PutItem, UpdateItem
