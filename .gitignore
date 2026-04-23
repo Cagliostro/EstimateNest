@@ -45,6 +45,7 @@ backend/.env
 
 # Infrastructure specific
 infrastructure/cdk.out
+infrastructure/json
 infrastructure/.env
 
 # E2E test artifacts

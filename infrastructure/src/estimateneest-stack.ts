@@ -797,29 +797,21 @@ export class EstimateNestStack extends cdk.Stack {
       ],
     };
 
-    // If certificate ARN is provided, add domain and certificate
-    let certificate: acm.ICertificate | undefined;
+    // Domain aliases and certificate are managed by the switch-traffic script
+    // to avoid CNAME conflicts between blue and green CloudFront distributions.
+    // The distribution uses CloudFront's default certificate until aliases and
+    // the custom cert are assigned by switch-traffic.sh during a traffic switch.
     let hostedZone: route53.IHostedZone | undefined;
-    if (props.certificateArn && props.hostedZoneId) {
-      certificate = acm.Certificate.fromCertificateArn(this, 'Certificate', props.certificateArn);
+    if (props.hostedZoneId) {
       hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {
         hostedZoneId: props.hostedZoneId,
         zoneName: props.hostedZoneName,
       });
-
-      // Only add domain aliases for blue deployment to avoid CloudFront CNAME conflicts
-      // Green deployment will still receive traffic via weighted Route 53 records pointing to its CloudFront domain
-      const domainNames = deploymentColor === 'blue' ? [props.domainName] : [];
-      distributionProps = {
-        ...distributionProps,
-        domainNames,
-        certificate,
-      };
     }
 
     const distribution = new cloudfront.Distribution(this, 'Distribution', distributionProps);
 
-    if (certificate && hostedZone) {
+    if (hostedZone) {
       // Weighted Route 53 record for blue-green deployments
       // Each deployment color adds its own weighted record entry
       const weight = deploymentColor === 'blue' ? 100 : 0;
@@ -870,8 +862,6 @@ export class EstimateNestStack extends cdk.Stack {
 
         const wwwDistribution = new cloudfront.Distribution(this, 'WwwDistribution', {
           defaultRootObject: '',
-          domainNames: deploymentColor === 'blue' ? [wwwDomainName] : [],
-          certificate,
           defaultBehavior: {
             origin: cloudfrontOrigins.S3BucketOrigin.withOriginAccessControl(frontendBucket),
             allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
@@ -909,9 +899,12 @@ export class EstimateNestStack extends cdk.Stack {
           setIdentifier: `www-cloudfront-${deploymentColor}`,
         });
 
-        // Output for www CloudFront domain (for blue-green traffic switching)
+        // Output for www CloudFront distribution (for blue-green traffic switching)
         new cdk.CfnOutput(this, 'WwwCloudFrontDomainName', {
           value: wwwDistribution.distributionDomainName,
+        });
+        new cdk.CfnOutput(this, 'WwwCloudFrontDistributionId', {
+          value: wwwDistribution.distributionId,
         });
       }
     }
@@ -1264,9 +1257,9 @@ export class EstimateNestStack extends cdk.Stack {
       webAclArn: regionalWebAcl.attrArn,
     });
 
-    // Global Web ACL for CloudFront (if using custom domain)
+    // Global Web ACL for CloudFront
     // Note: WAFv2 with CLOUDFRONT scope must be deployed in us-east-1 region
-    if (certificate && hostedZone && this.region === 'us-east-1') {
+    if (hostedZone && this.region === 'us-east-1') {
       const globalWebAcl = new wafv2.CfnWebACL(this, 'GlobalWebACL', {
         defaultAction: { allow: {} },
         scope: 'CLOUDFRONT',
@@ -1376,10 +1369,9 @@ export class EstimateNestStack extends cdk.Stack {
     // ====================
 
     // Determine frontend URL: custom domain if configured, otherwise CloudFront domain
-    const frontendUrl =
-      certificate && hostedZone
-        ? `https://${props.domainName}`
-        : `https://${distribution.distributionDomainName}`;
+    const frontendUrl = hostedZone
+      ? `https://${props.domainName}`
+      : `https://${distribution.distributionDomainName}`;
 
     new cdk.CfnOutput(this, 'FrontendUrl', {
       value: frontendUrl,
