@@ -118,8 +118,8 @@ update_cloudfront_aliases() {
 
   echo "  Applying update..."
   local aws_output
-  aws_output=$(aws cloudfront update-distribution --id "$dist_id" --if-match "$etag" --distribution-config "file://$temp_file" --region "$CLOUDFRONT_REGION" 2>&1)
-  local exit_code=$?
+  local exit_code=0
+  aws_output=$(aws cloudfront update-distribution --id "$dist_id" --if-match "$etag" --distribution-config "file://$temp_file" --region "$CLOUDFRONT_REGION" 2>&1) || exit_code=$?
   if [[ "$exit_code" -eq 0 ]]; then
     echo "  Success"
     rm -f "$temp_file"
