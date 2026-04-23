@@ -106,7 +106,9 @@ update_cloudfront_aliases() {
     # Reset to default CloudFront certificate
     dist_config=$(echo "$dist_config" | jq '
       .ViewerCertificate = {
-        "CloudFrontDefaultCertificate": true
+        "CloudFrontDefaultCertificate": true,
+        "SSLSupportMethod": "sni-only",
+        "MinimumProtocolVersion": "TLSv1.2_2021"
       }
     ')
   fi
