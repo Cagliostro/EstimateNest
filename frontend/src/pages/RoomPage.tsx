@@ -565,6 +565,7 @@ export default function RoomPage() {
                     {deck.values.map((value: number | string) => (
                       <button
                         key={value}
+                        data-value={value}
                         onClick={() => handleVote(value)}
                         disabled={hasVoted || connectionState !== 'connected'}
                         className={`bg-primary-100 dark:bg-primary-900 hover:bg-primary-200 dark:hover:bg-primary-800 text-primary-800 dark:text-primary-200 font-bold py-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${

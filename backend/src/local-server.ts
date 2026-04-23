@@ -40,7 +40,7 @@ function createAvatarSeed(name?: string): string {
 // Create room
 app.post('/rooms', (req, res) => {
   try {
-    const { deck = 'fibonacci' } = req.body;
+    const { deck = 'fibonacci', allowAllParticipantsToReveal } = req.body;
     const roomId = uuidv4();
     const shortCode = generateShortCode();
     const now = new Date().toISOString();
@@ -51,7 +51,7 @@ app.post('/rooms', (req, res) => {
       shortCode,
       createdAt: now,
       expiresAt,
-      allowAllParticipantsToReveal: false,
+      allowAllParticipantsToReveal: allowAllParticipantsToReveal ?? false,
       deck: getDeckById(deck),
     };
 
@@ -71,7 +71,7 @@ app.post('/rooms', (req, res) => {
     res.status(201).json({
       roomId,
       shortCode,
-      joinUrl: `http://localhost:5173/room/${shortCode}`,
+      joinUrl: `http://localhost:5173/${shortCode}`,
       expiresAt,
     });
   } catch (error) {
@@ -183,6 +183,16 @@ app.get('/rooms/:code', (req, res) => {
       participants: participantsWithoutConnection,
       round,
       votes: roundVotes,
+      room: {
+        id: room.id,
+        shortCode: room.shortCode,
+        deck: room.deck,
+        allowAllParticipantsToReveal: room.allowAllParticipantsToReveal,
+        maxParticipants: room.maxParticipants,
+        autoRevealEnabled: true,
+        autoRevealCountdownSeconds: 3,
+        hasPassword: false,
+      },
     });
   } catch (error) {
     console.error('Error joining room:', error);
@@ -374,6 +384,17 @@ async function handleWebSocketMessage(
         payload: { round, votes: roundVotes },
       });
 
+      break;
+    }
+
+    case 'join': {
+      // Join is already handled via connection URL params, just acknowledge
+      ws.send(
+        JSON.stringify({
+          type: 'ack',
+          payload: { message: 'Joined room' },
+        })
+      );
       break;
     }
 

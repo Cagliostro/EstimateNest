@@ -1,0 +1,20 @@
+{
+  "name": "@estimatenest/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "test:ui": "playwright test --ui",
+    "test:smoke": "playwright test --grep smoke"
+  },
+  "dependencies": {
+    "@estimatenest/shared": "file:../packages/shared"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0",
+    "@types/node": "^20.11.24",
+    "typescript": "^5.4.5"
+  }
+}

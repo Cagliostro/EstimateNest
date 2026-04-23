@@ -9,6 +9,7 @@
     "frontend",
     "backend",
     "infrastructure",
+    "e2e",
     "packages/shared"
   ],
   "scripts": {
@@ -17,6 +18,7 @@
     "test": "npm run test --workspaces",
     "lint": "npm run lint --workspaces",
     "format": "prettier --write .",
+    "test:e2e": "npm run test --workspace=e2e",
     "deploy:dev": "npm run deploy --workspace=infrastructure -- --context env=dev",
     "deploy:prod": "npm run deploy --workspace=infrastructure -- --context env=prod",
     "destroy:dev": "npm run destroy --workspace=infrastructure -- --context env=dev",

@@ -47,6 +47,9 @@ backend/.env
 infrastructure/cdk.out
 infrastructure/.env
 
+# E2E test artifacts
+e2e/test-results/
+
 # Design files (binary)
 EstimateNest UI Design.make
 tmp-design/
