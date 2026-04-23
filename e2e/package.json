@@ -7,7 +7,8 @@
     "test:headed": "playwright test --headed",
     "test:debug": "playwright test --debug",
     "test:ui": "playwright test --ui",
-    "test:smoke": "playwright test --grep smoke"
+    "test:smoke": "playwright test --grep smoke",
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@estimatenest/shared": "file:../packages/shared"
