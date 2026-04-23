@@ -47,6 +47,37 @@ get_stack_output() {
 }
 
 # -------------------------------
+# Helper: Get CloudFront distribution ID from stack outputs or resources
+# -------------------------------
+get_distribution_id() {
+  local stack_name=$1
+  local output_key=$2
+  local logical_id=$3
+
+  # First try CloudFormation outputs
+  local dist_id
+  dist_id=$(get_stack_output "$stack_name" "$output_key")
+  if [[ -n "$dist_id" ]]; then
+    echo "$dist_id"
+    return 0
+  fi
+
+  # Fall back to looking up the physical resource ID from stack resources
+  # (useful for old blue stack that lacks WwwCloudFrontDistributionId output)
+  local physical_id
+  physical_id=$(aws cloudformation describe-stack-resources \
+    --stack-name "$stack_name" \
+    --logical-resource-id "$logical_id" \
+    --query "StackResources[0].PhysicalResourceId" \
+    --output text 2>/dev/null || echo "")
+  if [[ -n "$physical_id" && "$physical_id" != "None" ]]; then
+    echo "$physical_id"
+  else
+    echo ""
+  fi
+}
+
+# -------------------------------
 # Helper: Update CloudFront distribution aliases and certificate
 # -------------------------------
 update_cloudfront_aliases() {
@@ -199,8 +230,8 @@ echo "=== Step 1: Swapping CloudFront distribution aliases ==="
 # Get distribution IDs from stack outputs
 BLUE_DIST_ID=$(get_stack_output "$BLUE_STACK" "CloudFrontDistributionId")
 GREEN_DIST_ID=$(get_stack_output "$GREEN_STACK" "CloudFrontDistributionId")
-BLUE_WWW_DIST_ID=$(get_stack_output "$BLUE_STACK" "WwwCloudFrontDistributionId")
-GREEN_WWW_DIST_ID=$(get_stack_output "$GREEN_STACK" "WwwCloudFrontDistributionId")
+BLUE_WWW_DIST_ID=$(get_distribution_id "$BLUE_STACK" "WwwCloudFrontDistributionId" "WwwDistributionCF7E043F")
+GREEN_WWW_DIST_ID=$(get_distribution_id "$GREEN_STACK" "WwwCloudFrontDistributionId" "WwwDistributionCF7E043F")
 
 echo "Blue  main distribution: $BLUE_DIST_ID"
 echo "Green main distribution: $GREEN_DIST_ID"
