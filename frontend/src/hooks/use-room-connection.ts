@@ -190,34 +190,42 @@ export function useRoomConnection() {
   /**
    * Create a new room
    */
-  const createRoom = useCallback(async (options?: { deck?: string }) => {
-    try {
-      const response = await apiClient.createRoom({
-        deck: options?.deck || 'fibonacci',
-      });
+  const createRoom = useCallback(
+    async (options?: { deck?: string; moderatorPassword?: string }) => {
+      try {
+        const response = await apiClient.createRoom({
+          deck: options?.deck || 'fibonacci',
+          moderatorPassword: options?.moderatorPassword,
+        });
 
-      // Room created, but participant still needs to join via joinRoom
-      return response;
-    } catch (error) {
-      useConnectionStore
-        .getState()
-        .setError(error instanceof Error ? error.message : 'Failed to create room');
-      throw error;
-    }
-  }, []);
+        return response;
+      } catch (error) {
+        useConnectionStore
+          .getState()
+          .setError(error instanceof Error ? error.message : 'Failed to create room');
+        throw error;
+      }
+    },
+    []
+  );
 
   /**
    * Join an existing room
    */
   const joinRoom = useCallback(
-    async (roomCode: string, name: string) => {
+    async (roomCode: string, name: string, moderatorPassword?: string, participantId?: string) => {
       const currentHookId = hookIdRef.current;
       try {
         console.log(`[EstimateNest] [${currentHookId}] Joining room:`, roomCode, 'as', name);
         useConnectionStore.getState().setConnecting();
 
         // 1. Join via REST API
-        const joinResponse = await apiClient.joinRoom(roomCode, name);
+        const joinResponse = await apiClient.joinRoom(
+          roomCode,
+          name,
+          participantId,
+          moderatorPassword
+        );
         console.log(
           `[EstimateNest] [${currentHookId}] Joined room:`,
           joinResponse.roomId,
@@ -253,6 +261,7 @@ export function useRoomConnection() {
             autoRevealEnabled: joinResponse.room.autoRevealEnabled,
             autoRevealCountdownSeconds: joinResponse.room.autoRevealCountdownSeconds,
             maxParticipants: joinResponse.room.maxParticipants,
+            hasPassword: joinResponse.room.hasPassword,
           });
         }
 

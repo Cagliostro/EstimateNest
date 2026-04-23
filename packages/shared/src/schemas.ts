@@ -192,17 +192,19 @@ export const roomIdSchema = z.string().uuid();
 export const participantIdSchema = z.string().uuid();
 
 export const createRoomRequestSchema = z.object({
-  deck: z.enum(['fibonacci', 'tshirt', 'powersOfTwo']).optional(),
+  deck: z.union([z.enum(['fibonacci', 'tshirt', 'powersOfTwo']), z.string().min(1)]).optional(),
   allowAllParticipantsToReveal: z.boolean().optional(),
   maxParticipants: z.number().int().positive().optional(),
   autoRevealEnabled: z.boolean().optional(),
   autoRevealCountdownSeconds: z.number().int().positive().optional(),
+  moderatorPassword: z.string().optional(),
 });
 
 export const joinRoomRequestSchema = z.object({
   code: shortCodeSchema,
   participantId: participantIdSchema.optional(),
   name: z.string().min(1).max(100).optional(),
+  moderatorPassword: z.string().optional(),
 });
 
 export const updateRoomRequestSchema = z.object({
@@ -210,6 +212,8 @@ export const updateRoomRequestSchema = z.object({
   maxParticipants: z.number().int().positive().optional(),
   autoRevealEnabled: z.boolean().optional(),
   autoRevealCountdownSeconds: z.number().int().positive().optional(),
+  moderatorPassword: z.string().nullable().optional(),
+  deck: z.union([z.enum(['fibonacci', 'tshirt', 'powersOfTwo']), z.string().min(1)]).optional(),
 });
 
 export const roomCodePathSchema = z.object({
@@ -249,6 +253,7 @@ export function validateJoinRoomRequest(data: {
   code?: string;
   participantId?: string;
   name?: string;
+  moderatorPassword?: string;
 }) {
   return joinRoomRequestSchema.parse(data);
 }

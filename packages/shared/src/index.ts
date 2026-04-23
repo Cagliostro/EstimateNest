@@ -89,6 +89,40 @@ export function getDeckById(deckId: string): CardDeck {
   return deck;
 }
 
+/**
+ * Parse a deck input string into a CardDeck object.
+ * Accepts a preset ID ('fibonacci', 'tshirt', 'powersOfTwo') or
+ * a comma-separated custom string (e.g., '1, 2, 3, 5, 8').
+ * Custom decks must have between 2 and 15 values.
+ */
+export function parseDeckInput(deckInput: string): CardDeck {
+  const trimmed = deckInput.trim();
+
+  if (['fibonacci', 'tshirt', 'powersOfTwo'].includes(trimmed)) {
+    return getDeckById(trimmed);
+  }
+
+  const rawValues = trimmed
+    .split(',')
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
+
+  if (rawValues.length < 2 || rawValues.length > 15) {
+    throw new Error(`Custom deck must have between 2 and 15 values, got ${rawValues.length}`);
+  }
+
+  const parsedValues = rawValues.map((v) => {
+    const num = Number(v);
+    return !isNaN(num) && v !== '' ? num : v;
+  });
+
+  return {
+    id: 'custom',
+    name: `Custom (${rawValues.join(', ')})`,
+    values: parsedValues,
+  };
+}
+
 // ====================
 // WebSocket Messages
 // ====================

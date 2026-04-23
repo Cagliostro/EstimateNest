@@ -42,6 +42,7 @@ describe('update-room handler', () => {
       body: JSON.stringify({
         autoRevealEnabled: false,
         autoRevealCountdownSeconds: 5,
+        participantId: 'participant-1',
       }),
       requestContext: {
         connectionId: 'conn-123',
@@ -63,16 +64,13 @@ describe('update-room handler', () => {
       },
     });
 
-    // Mock participant query (moderator)
+    // Mock participant lookup (moderator)
     mockDynamoDB.send.mockResolvedValueOnce({
-      Items: [
-        {
-          id: 'participant-1',
-          roomId: 'room-123',
-          connectionId: 'conn-123',
-          isModerator: true,
-        },
-      ],
+      Item: {
+        id: 'participant-1',
+        roomId: 'room-123',
+        isModerator: true,
+      },
     });
 
     // Mock room update
@@ -87,6 +85,11 @@ describe('update-room handler', () => {
         autoRevealCountdownSeconds: 5,
         allowAllParticipantsToReveal: true,
         maxParticipants: 50,
+        deck: {
+          id: 'fibonacci',
+          name: 'Fibonacci',
+          values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'],
+        },
       },
     });
 
@@ -98,6 +101,58 @@ describe('update-room handler', () => {
     expect(body.room.shortCode).toBe('ABCDEF');
     expect(body.room.autoRevealEnabled).toBe(false);
     expect(body.room.autoRevealCountdownSeconds).toBe(5);
+    expect(body.room.deck).toBeDefined();
+  });
+
+  it('should update room deck as moderator', async () => {
+    mockEvent.body = JSON.stringify({
+      deck: 'powersOfTwo',
+      participantId: 'participant-1',
+    });
+
+    // Mock room code lookup
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        shortCode: 'ABCDEF',
+        roomId: 'room-123',
+      },
+    });
+
+    // Mock participant lookup (moderator)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        id: 'participant-1',
+        roomId: 'room-123',
+        isModerator: true,
+      },
+    });
+
+    // Mock room update
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock fetch updated room
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        id: 'room-123',
+        shortCode: 'ABCDEF',
+        autoRevealEnabled: false,
+        autoRevealCountdownSeconds: 5,
+        allowAllParticipantsToReveal: true,
+        maxParticipants: 50,
+        deck: {
+          id: 'powersOfTwo',
+          name: 'Powers of Two',
+          values: [0, 1, 2, 4, 8, 16, 32, 64, '?', '☕'],
+        },
+      },
+    });
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.room.deck.id).toBe('powersOfTwo');
+    expect(body.room.deck.name).toBe('Powers of Two');
   });
 
   it('should return 403 for non-moderator participant', async () => {
@@ -109,16 +164,13 @@ describe('update-room handler', () => {
       },
     });
 
-    // Mock participant query (non-moderator)
+    // Mock participant lookup (non-moderator)
     mockDynamoDB.send.mockResolvedValueOnce({
-      Items: [
-        {
-          id: 'participant-1',
-          roomId: 'room-123',
-          connectionId: 'conn-123',
-          isModerator: false,
-        },
-      ],
+      Item: {
+        id: 'participant-1',
+        roomId: 'room-123',
+        isModerator: false,
+      },
     });
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
@@ -137,9 +189,9 @@ describe('update-room handler', () => {
       },
     });
 
-    // Mock participant query (empty)
+    // Mock participant lookup (not found)
     mockDynamoDB.send.mockResolvedValueOnce({
-      Items: [],
+      Item: null,
     });
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
@@ -190,6 +242,11 @@ describe('update-room handler', () => {
         shortCode: 'ABCDEF',
         autoRevealEnabled: false,
         autoRevealCountdownSeconds: 5,
+        deck: {
+          id: 'fibonacci',
+          name: 'Fibonacci',
+          values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'],
+        },
       },
     });
 
@@ -206,8 +263,8 @@ describe('update-room handler', () => {
   });
 
   it('should return 400 for empty update fields', async () => {
-    // Empty body
-    mockEvent.body = JSON.stringify({});
+    // Empty body (just participantId for auth)
+    mockEvent.body = JSON.stringify({ participantId: 'participant-1' });
 
     // Mock room code lookup
     mockDynamoDB.send.mockResolvedValueOnce({
@@ -217,16 +274,13 @@ describe('update-room handler', () => {
       },
     });
 
-    // Mock participant query (moderator)
+    // Mock participant lookup (moderator)
     mockDynamoDB.send.mockResolvedValueOnce({
-      Items: [
-        {
-          id: 'participant-1',
-          roomId: 'room-123',
-          connectionId: 'conn-123',
-          isModerator: true,
-        },
-      ],
+      Item: {
+        id: 'participant-1',
+        roomId: 'room-123',
+        isModerator: true,
+      },
     });
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
@@ -273,16 +327,13 @@ describe('update-room handler', () => {
       },
     });
 
-    // Mock participant query (moderator)
+    // Mock participant lookup (moderator)
     mockDynamoDB.send.mockResolvedValueOnce({
-      Items: [
-        {
-          id: 'participant-1',
-          roomId: 'room-123',
-          connectionId: 'conn-123',
-          isModerator: true,
-        },
-      ],
+      Item: {
+        id: 'participant-1',
+        roomId: 'room-123',
+        isModerator: true,
+      },
     });
 
     // Mock room update
@@ -297,11 +348,13 @@ describe('update-room handler', () => {
         autoRevealCountdownSeconds: 5,
         allowAllParticipantsToReveal: true,
         maxParticipants: 50,
+        deck: {
+          id: 'fibonacci',
+          name: 'Fibonacci',
+          values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'],
+        },
       },
     });
-
-    // Add extra mock in case there are more calls (e.g., error handling)
-    mockDynamoDB.send.mockResolvedValueOnce({});
 
     mockEvent.headers = {};
     const response = await handler(mockEvent as APIGatewayProxyEvent);

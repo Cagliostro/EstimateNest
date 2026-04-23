@@ -11,6 +11,7 @@ interface RoomState {
   allowAllParticipantsToReveal: boolean;
   deck: CardDeck | null;
   maxParticipants: number;
+  hasPassword: boolean;
 
   // Participants
   participants: Participant[];
@@ -37,6 +38,7 @@ interface RoomState {
     allowAllParticipantsToReveal?: boolean;
     deck?: CardDeck;
     maxParticipants?: number;
+    hasPassword?: boolean;
   }) => void;
   setParticipants: (participants: Participant[]) => void;
   addParticipant: (participant: Participant) => void;
@@ -60,6 +62,7 @@ export const useRoomStore = create<RoomState>((set) => ({
   allowAllParticipantsToReveal: false,
   deck: null,
   maxParticipants: 50,
+  hasPassword: false,
   participants: [],
   currentRound: null,
   votes: [],
@@ -80,6 +83,7 @@ export const useRoomStore = create<RoomState>((set) => ({
         settings.allowAllParticipantsToReveal ?? state.allowAllParticipantsToReveal,
       deck: settings.deck ?? state.deck,
       maxParticipants: settings.maxParticipants ?? state.maxParticipants,
+      hasPassword: settings.hasPassword ?? state.hasPassword,
     })),
 
   setParticipants: (participants) => {
@@ -133,6 +137,7 @@ export const useRoomStore = create<RoomState>((set) => ({
       allowAllParticipantsToReveal: false,
       deck: null,
       maxParticipants: 50,
+      hasPassword: false,
       participants: [],
       currentRound: null,
       votes: [],

@@ -230,7 +230,7 @@ describe('useRoomConnection', () => {
       });
     });
 
-    expect(mockApiClient.joinRoom).toHaveBeenCalledWith('TEST', 'Test User');
+    expect(mockApiClient.joinRoom).toHaveBeenCalledWith('TEST', 'Test User', undefined, undefined);
     expect(mockStores.connectionStoreState.setConnecting).toHaveBeenCalled();
     expect(mockStores.participantStoreState.setParticipant).toHaveBeenCalledWith(
       'test-participant-id',

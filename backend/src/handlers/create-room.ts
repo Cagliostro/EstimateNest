@@ -7,26 +7,31 @@ import {
   generateShortCode,
   getRoomTTL,
   Room,
+  Participant,
+  CardDeck,
   validateCreateRoomRequest,
-  getDeckById,
+  parseDeckInput,
+  createAvatarSeed,
 } from '@estimatenest/shared';
 import { ZodError } from 'zod';
+import { hashPassword } from '../utils/password';
 
 const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
 const docClient = DynamoDBDocumentClient.from(client);
 
 const ROOMS_TABLE = process.env.ROOMS_TABLE!;
 const ROOM_CODES_TABLE = process.env.ROOM_CODES_TABLE!;
+const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   console.log('Create room handler invoked', { path: event.path, httpMethod: event.httpMethod });
   console.log('Environment variables:', {
     ROOMS_TABLE: process.env.ROOMS_TABLE,
     ROOM_CODES_TABLE: process.env.ROOM_CODES_TABLE,
+    PARTICIPANTS_TABLE: process.env.PARTICIPANTS_TABLE,
     DOMAIN_NAME: process.env.DOMAIN_NAME,
   });
   try {
-    // Parse and validate request body
     const rawBody = event.body ? JSON.parse(event.body) : {};
     let validatedBody;
     try {
@@ -54,7 +59,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         };
       }
 
-      // Re-throw unexpected errors to be caught by outer handler
       throw error;
     }
 
@@ -64,12 +68,32 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       deck = 'fibonacci',
       autoRevealEnabled = true,
       autoRevealCountdownSeconds = 3,
+      moderatorPassword,
     } = validatedBody;
 
     const roomId = uuidv4();
     const shortCode = generateShortCode();
     const now = new Date().toISOString();
     const expiresAt = new Date(Date.now() + getRoomTTL() * 1000).toISOString();
+
+    const hasPassword = !!moderatorPassword;
+
+    let resolvedDeck: CardDeck;
+    try {
+      resolvedDeck = parseDeckInput(deck);
+    } catch (parseError) {
+      const origin = event.headers.origin || event.headers.Origin;
+      return {
+        statusCode: 400,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': origin || '*',
+        },
+        body: JSON.stringify({
+          error: parseError instanceof Error ? parseError.message : 'Invalid deck value',
+        }),
+      };
+    }
 
     const room: Room = {
       id: roomId,
@@ -80,10 +104,13 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       maxParticipants,
       autoRevealEnabled,
       autoRevealCountdownSeconds,
-      deck: getDeckById(deck),
+      deck: resolvedDeck,
     };
 
-    // Write room record
+    if (moderatorPassword) {
+      room.moderatorPassword = hashPassword(moderatorPassword);
+    }
+
     await docClient.send(
       new PutCommand({
         TableName: ROOMS_TABLE,
@@ -94,7 +121,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       })
     );
 
-    // Write code mapping
     await docClient.send(
       new PutCommand({
         TableName: ROOM_CODES_TABLE,
@@ -107,7 +133,31 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       })
     );
 
-    // CORS headers
+    const participantId = uuidv4();
+    const creatorName = 'Room Creator';
+    const avatarSeed = createAvatarSeed(creatorName);
+
+    const participant: Participant = {
+      id: participantId,
+      roomId,
+      connectionId: 'REST',
+      name: creatorName,
+      avatarSeed,
+      joinedAt: now,
+      lastSeenAt: now,
+      isModerator: true,
+    };
+
+    await docClient.send(
+      new PutCommand({
+        TableName: PARTICIPANTS_TABLE,
+        Item: {
+          ...participant,
+          participantId: participant.id,
+        },
+      })
+    );
+
     const origin = event.headers.origin || event.headers.Origin;
     const headers = {
       'Content-Type': 'application/json',
@@ -120,13 +170,14 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       body: JSON.stringify({
         roomId,
         shortCode,
+        participantId,
         joinUrl: `https://${process.env.DOMAIN_NAME || 'example.com'}/${shortCode}`,
         expiresAt,
+        hasPassword,
       }),
     };
   } catch (error) {
     console.error('Create room error:', error);
-    // CORS headers for error response too
     const origin = event.headers.origin || event.headers.Origin;
     const headers = {
       'Content-Type': 'application/json',

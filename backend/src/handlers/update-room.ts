@@ -1,14 +1,16 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import AWSXRay from 'aws-xray-sdk';
-import {
-  DynamoDBDocumentClient,
-  GetCommand,
-  UpdateCommand,
-  QueryCommand,
-} from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
-import { Room, validateUpdateRoomRequest, validateRoomCodePath } from '@estimatenest/shared';
+import {
+  Room,
+  CardDeck,
+  validateUpdateRoomRequest,
+  validateRoomCodePath,
+  parseDeckInput,
+} from '@estimatenest/shared';
 import { ZodError } from 'zod';
+import { hashPassword } from '../utils/password';
 
 const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
 const docClient = DynamoDBDocumentClient.from(client);
@@ -66,6 +68,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       autoRevealCountdownSeconds,
       allowAllParticipantsToReveal,
       maxParticipants,
+      moderatorPassword,
+      deck,
     } = validatedBody;
 
     // Look up room by short code
@@ -85,21 +89,22 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     const { roomId } = codeResult.Item;
 
-    // Verify participant is moderator
-    const { connectionId } = event.requestContext;
+    // Verify participant is moderator via participantId in request body
+    const requestParticipantId = rawBody.participantId;
+    if (!requestParticipantId) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: 'participantId is required' }),
+      };
+    }
     const participantResult = await docClient.send(
-      new QueryCommand({
+      new GetCommand({
         TableName: PARTICIPANTS_TABLE,
-        IndexName: 'ConnectionIdIndex',
-        KeyConditionExpression: 'connectionId = :cid',
-        ExpressionAttributeValues: {
-          ':cid': connectionId,
-        },
-        Limit: 1,
+        Key: { roomId, participantId: requestParticipantId },
       })
     );
 
-    const participant = participantResult.Items?.[0];
+    const participant = participantResult.Item;
     if (!participant || !participant.isModerator) {
       return {
         statusCode: 403,
@@ -108,38 +113,82 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     }
 
     // Build update expression dynamically based on provided fields
-    const updateExpressions: string[] = [];
+    const setExpressions: string[] = [];
+    const removeExpressions: string[] = [];
     const expressionAttributeNames: Record<string, string> = {};
     const expressionAttributeValues: Record<string, unknown> = {};
 
     if (autoRevealEnabled !== undefined) {
-      updateExpressions.push('#autoRevealEnabled = :autoRevealEnabled');
+      setExpressions.push('#autoRevealEnabled = :autoRevealEnabled');
       expressionAttributeNames['#autoRevealEnabled'] = 'autoRevealEnabled';
       expressionAttributeValues[':autoRevealEnabled'] = autoRevealEnabled;
     }
 
     if (autoRevealCountdownSeconds !== undefined) {
-      updateExpressions.push('#autoRevealCountdownSeconds = :autoRevealCountdownSeconds');
+      setExpressions.push('#autoRevealCountdownSeconds = :autoRevealCountdownSeconds');
       expressionAttributeNames['#autoRevealCountdownSeconds'] = 'autoRevealCountdownSeconds';
       expressionAttributeValues[':autoRevealCountdownSeconds'] = autoRevealCountdownSeconds;
     }
 
     if (allowAllParticipantsToReveal !== undefined) {
-      updateExpressions.push('#allowAllParticipantsToReveal = :allowAllParticipantsToReveal');
+      setExpressions.push('#allowAllParticipantsToReveal = :allowAllParticipantsToReveal');
       expressionAttributeNames['#allowAllParticipantsToReveal'] = 'allowAllParticipantsToReveal';
       expressionAttributeValues[':allowAllParticipantsToReveal'] = allowAllParticipantsToReveal;
     }
 
     if (maxParticipants !== undefined) {
-      updateExpressions.push('#maxParticipants = :maxParticipants');
+      setExpressions.push('#maxParticipants = :maxParticipants');
       expressionAttributeNames['#maxParticipants'] = 'maxParticipants';
       expressionAttributeValues[':maxParticipants'] = maxParticipants;
     }
-    if (updateExpressions.length === 0) {
+
+    if (moderatorPassword !== undefined) {
+      if (moderatorPassword === null || moderatorPassword === '') {
+        removeExpressions.push('#moderatorPassword');
+        expressionAttributeNames['#moderatorPassword'] = 'moderatorPassword';
+      } else {
+        setExpressions.push('#moderatorPassword = :moderatorPassword');
+        expressionAttributeNames['#moderatorPassword'] = 'moderatorPassword';
+        expressionAttributeValues[':moderatorPassword'] = hashPassword(moderatorPassword);
+      }
+    }
+
+    if (deck !== undefined) {
+      let resolvedDeck: CardDeck;
+      try {
+        resolvedDeck = parseDeckInput(deck);
+      } catch (parseError) {
+        const origin = event.headers.origin || event.headers.Origin;
+        return {
+          statusCode: 400,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': origin || '*',
+          },
+          body: JSON.stringify({
+            error: parseError instanceof Error ? parseError.message : 'Invalid deck value',
+          }),
+        };
+      }
+      setExpressions.push('#deck = :deck');
+      expressionAttributeNames['#deck'] = 'deck';
+      expressionAttributeValues[':deck'] = resolvedDeck;
+    }
+
+    if (setExpressions.length === 0 && removeExpressions.length === 0) {
       return {
         statusCode: 400,
         body: JSON.stringify({ error: 'No valid fields to update' }),
       };
+    }
+
+    // Build update expression with optional SET and REMOVE clauses
+    const parts: string[] = [];
+    if (setExpressions.length > 0) {
+      parts.push(`SET ${setExpressions.join(', ')}`);
+    }
+    if (removeExpressions.length > 0) {
+      parts.push(`REMOVE ${removeExpressions.join(', ')}`);
     }
 
     // Update room in DynamoDB
@@ -147,7 +196,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       new UpdateCommand({
         TableName: ROOMS_TABLE,
         Key: { id: roomId, sk: 'META' },
-        UpdateExpression: `SET ${updateExpressions.join(', ')}`,
+        UpdateExpression: parts.join(' '),
         ExpressionAttributeNames: expressionAttributeNames,
         ExpressionAttributeValues: expressionAttributeValues,
       })
@@ -178,6 +227,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           shortCode: updatedRoom.shortCode,
           autoRevealEnabled: updatedRoom.autoRevealEnabled,
           autoRevealCountdownSeconds: updatedRoom.autoRevealCountdownSeconds,
+          deck: updatedRoom.deck,
+          hasPassword: !!updatedRoom.moderatorPassword,
         },
       }),
     };

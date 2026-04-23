@@ -19,6 +19,7 @@ import {
 } from '@estimatenest/shared';
 import { ZodError } from 'zod';
 import { getCacheManager } from '../utils/cache';
+import { verifyPassword } from '../utils/password';
 
 const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
 const docClient = DynamoDBDocumentClient.from(client);
@@ -65,6 +66,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       code: event.pathParameters?.code,
       participantId: event.queryStringParameters?.participantId,
       name: event.queryStringParameters?.name,
+      moderatorPassword: event.queryStringParameters?.moderatorPassword,
     };
 
     let validatedData;
@@ -130,6 +132,35 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       };
     }
     const room = roomResult.Item as Room;
+
+    // Check password if room has one
+    let passwordValid = !room.moderatorPassword;
+    if (room.moderatorPassword && validatedData.participantId) {
+      const pwParticipantResult = await docClient.send(
+        new GetCommand({
+          TableName: PARTICIPANTS_TABLE,
+          Key: { roomId, participantId: validatedData.participantId },
+        })
+      );
+      passwordValid = !!pwParticipantResult.Item;
+    }
+    if (!passwordValid) {
+      if (!validatedData.moderatorPassword) {
+        return {
+          statusCode: 403,
+          body: JSON.stringify({
+            error: 'Password required to join this room',
+            code: 'PASSWORD_REQUIRED',
+          }),
+        };
+      }
+      if (!verifyPassword(validatedData.moderatorPassword, room.moderatorPassword!)) {
+        return {
+          statusCode: 403,
+          body: JSON.stringify({ error: 'Incorrect password', code: 'INCORRECT_PASSWORD' }),
+        };
+      }
+    }
 
     // Determine participant ID (provided for polling, or new)
     const providedParticipantId = validatedData.participantId;
@@ -202,7 +233,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       participantId = uuidv4();
       name = providedName;
       avatarSeed = createAvatarSeed(name);
-      isModerator = existingParticipants.length === 0;
+      isModerator = room.moderatorPassword ? false : existingParticipants.length === 0;
       await createParticipantRecord(roomId, participantId, name, avatarSeed, isModerator);
       // Invalidate participant cache since new participant added
       cacheManager.invalidateParticipants(roomId);
@@ -223,7 +254,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       participantId = uuidv4();
       name = providedName;
       avatarSeed = createAvatarSeed(name);
-      isModerator = existingParticipants.length === 0;
+      isModerator = room.moderatorPassword ? false : existingParticipants.length === 0;
       await createParticipantRecord(roomId, participantId, name, avatarSeed, isModerator);
       // Invalidate participant cache since new participant added
       cacheManager.invalidateParticipants(roomId);

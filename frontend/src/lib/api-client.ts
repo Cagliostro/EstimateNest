@@ -13,6 +13,8 @@ export interface CreateRoomResponse {
   shortCode: string;
   joinUrl: string;
   expiresAt: string;
+  participantId?: string;
+  hasPassword?: boolean;
 }
 
 export interface RoomSettings {
@@ -21,6 +23,7 @@ export interface RoomSettings {
   autoRevealEnabled?: boolean;
   autoRevealCountdownSeconds?: number;
   maxParticipants?: number;
+  hasPassword?: boolean;
 }
 
 export interface JoinRoomResponse {
@@ -39,6 +42,26 @@ export interface JoinRoomResponse {
 export interface RoundHistoryItem extends Round {
   voteCount: number;
   average?: number;
+}
+
+export interface UpdateRoomSettingsRequest {
+  allowAllParticipantsToReveal?: boolean;
+  maxParticipants?: number;
+  autoRevealEnabled?: boolean;
+  autoRevealCountdownSeconds?: number;
+  moderatorPassword?: string | null;
+  deck?: string;
+}
+
+export interface UpdateRoomSettingsResponse {
+  room: {
+    id: string;
+    shortCode: string;
+    autoRevealEnabled?: boolean;
+    autoRevealCountdownSeconds?: number;
+    deck?: CardDeck;
+    hasPassword: boolean;
+  };
 }
 
 export class ApiError extends Error {
@@ -93,13 +116,21 @@ export const apiClient = {
    * @param name Participant display name
    * @param participantId Optional participant ID for polling (skip creating new participant)
    */
-  async joinRoom(code: string, name?: string, participantId?: string): Promise<JoinRoomResponse> {
+  async joinRoom(
+    code: string,
+    name?: string,
+    participantId?: string,
+    moderatorPassword?: string
+  ): Promise<JoinRoomResponse> {
     const url = new URL(`${config.apiUrl}/rooms/${code}`);
     if (name) {
       url.searchParams.set('name', name);
     }
     if (participantId) {
       url.searchParams.set('participantId', participantId);
+    }
+    if (moderatorPassword) {
+      url.searchParams.set('moderatorPassword', moderatorPassword);
     }
 
     const headers: Record<string, string> = {};
@@ -113,13 +144,15 @@ export const apiClient = {
 
     if (!response.ok) {
       let errorMessage = `Failed to join room: ${response.status}`;
+      let errorData: { error?: string; code?: string } | undefined;
       try {
-        const errorData = await response.json();
-        errorMessage = errorData.error || errorMessage;
+        const parsed = await response.json();
+        errorData = parsed;
+        errorMessage = parsed.error || errorMessage;
       } catch {
         // Ignore JSON parse errors
       }
-      throw new ApiError(errorMessage, response.status);
+      throw new ApiError(errorMessage, response.status, errorData);
     }
 
     return response.json();
@@ -141,6 +174,41 @@ export const apiClient = {
 
     if (!response.ok) {
       let errorMessage = `Failed to fetch round history: ${response.status}`;
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.error || errorMessage;
+      } catch {
+        // Ignore JSON parse errors
+      }
+      throw new ApiError(errorMessage, response.status);
+    }
+
+    return response.json();
+  },
+
+  /**
+   * Update room settings (moderator only)
+   */
+  async updateRoomSettings(
+    code: string,
+    participantId: string,
+    settings: UpdateRoomSettingsRequest
+  ): Promise<UpdateRoomSettingsResponse> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (config.apiKey) {
+      headers['x-api-key'] = config.apiKey;
+    }
+
+    const response = await fetch(`${config.apiUrl}/rooms/${code}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ ...settings, participantId }),
+    });
+
+    if (!response.ok) {
+      let errorMessage = `Failed to update room settings: ${response.status}`;
       try {
         const errorData = await response.json();
         errorMessage = errorData.error || errorMessage;

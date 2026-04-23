@@ -65,6 +65,31 @@ describe('create-room handler', () => {
     expect(response.statusCode).toBe(201);
   });
 
+  it('should create room with custom deck string', async () => {
+    mockEvent.body = JSON.stringify({
+      deck: '1, 2, 3, 5, 8',
+    });
+
+    mockSend.mockResolvedValueOnce({});
+    mockSend.mockResolvedValueOnce({});
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(201);
+  });
+
+  it('should return 400 for custom deck with single value', async () => {
+    mockEvent.body = JSON.stringify({
+      deck: 'only',
+    });
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(400);
+    const body = JSON.parse(response.body);
+    expect(body.error).toContain('between 2 and 15');
+  });
+
   it('should return 400 for invalid request body', async () => {
     mockEvent.body = JSON.stringify({
       maxParticipants: 'not-a-number', // Invalid type

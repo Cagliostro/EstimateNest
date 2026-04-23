@@ -8,6 +8,7 @@ import { DEFAULT_DECKS } from '@estimatenest/shared';
 import { config } from '../lib/config';
 import { apiClient } from '../lib/api-client';
 import CountdownOverlay from '../components/CountdownOverlay';
+import Avatar from '../components/Avatar';
 
 export default function RoomPage() {
   const { roomCode } = useParams<{ roomCode: string }>();
@@ -26,7 +27,7 @@ export default function RoomPage() {
     setRoundHistory,
     setAutoRevealEnabled,
   } = useRoomStore();
-  const { participantId, name: participantName, isModerator } = useParticipantStore();
+  const { participantId, name: participantName, avatarSeed, isModerator } = useParticipantStore();
   useEffect(() => {
     console.log('[RoomPage] participantName changed:', participantName);
   }, [participantName]);
@@ -50,6 +51,22 @@ export default function RoomPage() {
   const [roundTitle, setRoundTitle] = useState('');
   const [roundDescription, setRoundDescription] = useState('');
   const [isUpdatingAutoReveal, setIsUpdatingAutoReveal] = useState(false);
+
+  const hasPassword = useRoomStore((state) => state.hasPassword);
+
+  // Password management state
+  const [showPasswordSettings, setShowPasswordSettings] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
+
+  // Deck management state
+  const [showDeckSettings, setShowDeckSettings] = useState(false);
+  const [deckSelectedDeck, setDeckSelectedDeck] = useState('fibonacci');
+  const [deckCustomInput, setDeckCustomInput] = useState('');
+  const [deckCustomError, setDeckCustomError] = useState('');
+  const [isUpdatingDeck, setIsUpdatingDeck] = useState(false);
+  const [deckUpdateError, setDeckUpdateError] = useState('');
 
   // Permission flags
   const allowAllParticipantsToReveal = useRoomStore((state) => state.allowAllParticipantsToReveal);
@@ -209,12 +226,9 @@ export default function RoomPage() {
     setIsUpdatingAutoReveal(true);
     try {
       const newAutoRevealEnabled = !autoRevealEnabled;
-      await fetch(`${config.apiUrl}/rooms/${shortCode}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ autoRevealEnabled: newAutoRevealEnabled }),
+      if (!participantId) return;
+      await apiClient.updateRoomSettings(shortCode, participantId, {
+        autoRevealEnabled: newAutoRevealEnabled,
       });
       setAutoRevealEnabled(newAutoRevealEnabled);
     } catch (error) {
@@ -222,6 +236,68 @@ export default function RoomPage() {
       alert('Failed to update auto-reveal setting. Please try again.');
     } finally {
       setIsUpdatingAutoReveal(false);
+    }
+  };
+
+  const handleDeckChange = async (newDeck: string, customInput?: string) => {
+    if (!shortCode || !participantId) return;
+
+    const deckValue = newDeck === 'custom' && customInput ? customInput.trim() : newDeck;
+    if (newDeck === 'custom' && (!customInput || !customInput.trim())) return;
+
+    setIsUpdatingDeck(true);
+    setDeckUpdateError('');
+    try {
+      const response = await apiClient.updateRoomSettings(shortCode, participantId, {
+        deck: deckValue,
+      });
+      if (response.room.deck) {
+        useRoomStore.getState().setRoomSettings({ deck: response.room.deck });
+      }
+      setShowDeckSettings(false);
+    } catch (error) {
+      console.error('Failed to update deck:', error);
+      setDeckUpdateError('Failed to update deck');
+    } finally {
+      setIsUpdatingDeck(false);
+    }
+  };
+
+  const handleDeactivatePassword = async () => {
+    if (!shortCode || !participantId) return;
+    setIsUpdatingPassword(true);
+    setPasswordError('');
+    try {
+      await apiClient.updateRoomSettings(shortCode, participantId, {
+        moderatorPassword: null,
+      });
+      useRoomStore.getState().setRoomSettings({ hasPassword: false });
+      setShowPasswordSettings(false);
+      setNewPassword('');
+    } catch (error) {
+      console.error('Failed to deactivate password:', error);
+      setPasswordError('Failed to deactivate password');
+    } finally {
+      setIsUpdatingPassword(false);
+    }
+  };
+
+  const handleActivatePassword = async () => {
+    if (!shortCode || !participantId || !newPassword.trim()) return;
+    setIsUpdatingPassword(true);
+    setPasswordError('');
+    try {
+      await apiClient.updateRoomSettings(shortCode, participantId, {
+        moderatorPassword: newPassword.trim(),
+      });
+      useRoomStore.getState().setRoomSettings({ hasPassword: true });
+      setShowPasswordSettings(false);
+      setNewPassword('');
+    } catch (error) {
+      console.error('Failed to activate password:', error);
+      setPasswordError('Failed to activate password');
+    } finally {
+      setIsUpdatingPassword(false);
     }
   };
 
@@ -266,6 +342,12 @@ export default function RoomPage() {
                       : connectionState === 'error'
                         ? 'Connection error'
                         : 'Disconnected'}
+                  <Avatar
+                    seed={avatarSeed || ''}
+                    name={participantName || ''}
+                    size="md"
+                    className="inline-block align-middle mr-2"
+                  />
                   {participantName && ` • ${participantName}`}
                 </p>
               </div>
@@ -450,10 +532,13 @@ export default function RoomPage() {
                       return (
                         <div
                           key={vote.id}
-                          className="bg-primary-100 dark:bg-primary-900 border-2 border-primary-300 dark:border-primary-700 text-primary-800 dark:text-primary-200 font-bold py-4 rounded-lg text-center"
+                          className="flex flex-col items-center gap-2 bg-primary-100 dark:bg-primary-900 border-2 border-primary-300 dark:border-primary-700 text-primary-800 dark:text-primary-200 font-bold py-4 rounded-lg text-center"
                         >
                           <div className="text-2xl">{vote.value}</div>
-                          <div className="text-xs mt-1 truncate">{voter?.name || 'Unknown'}</div>
+                          {voter && <Avatar seed={voter.avatarSeed} name={voter.name} size="sm" />}
+                          <div className="text-xs truncate max-w-full">
+                            {voter?.name || 'Unknown'}
+                          </div>
                         </div>
                       );
                     })}
@@ -509,11 +594,8 @@ export default function RoomPage() {
                   );
                   return (
                     <li key={participant.id} className="flex items-center">
-                      <div className="relative">
-                        <div className="w-8 h-8 rounded-full bg-primary-500 flex items-center justify-center text-white font-bold mr-3">
-                          {participant.name.charAt(0).toUpperCase()}
-                        </div>
-                        {/* Online status indicator */}
+                      <div className="relative mr-3">
+                        <Avatar seed={participant.avatarSeed} name={participant.name} size="sm" />
                         <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-white dark:border-gray-800"></div>
                       </div>
                       <div className="flex-1 flex items-center justify-between">
@@ -628,6 +710,217 @@ export default function RoomPage() {
                       <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary-300 dark:peer-focus:ring-primary-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary-600 disabled:opacity-50"></div>
                     </div>
                   </label>
+                </div>
+              )}
+
+              {/* Password management (moderator only) */}
+              {isModerator && (
+                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <button
+                    onClick={() => {
+                      setShowPasswordSettings(!showPasswordSettings);
+                      setPasswordError('');
+                      setNewPassword('');
+                    }}
+                    className="flex items-center justify-between w-full text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    <span className="flex items-center gap-2">
+                      <svg
+                        className="w-4 h-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                        />
+                      </svg>
+                      Room password: {hasPassword ? '●●●●●●●●' : 'Not set'}
+                    </span>
+                    <svg
+                      className={`w-4 h-4 transition-transform ${showPasswordSettings ? 'rotate-180' : ''}`}
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M19 9l-7 7-7-7"
+                      />
+                    </svg>
+                  </button>
+                  {showPasswordSettings && (
+                    <div className="mt-3 space-y-2">
+                      {passwordError && <p className="text-red-500 text-xs">{passwordError}</p>}
+                      {hasPassword ? (
+                        <button
+                          onClick={handleDeactivatePassword}
+                          disabled={isUpdatingPassword}
+                          className="w-full bg-red-100 dark:bg-red-900/30 hover:bg-red-200 dark:hover:bg-red-900/50 text-red-700 dark:text-red-300 font-medium py-2 px-4 rounded-lg text-sm transition-colors disabled:opacity-50"
+                        >
+                          {isUpdatingPassword ? 'Deactivating...' : 'Deactivate password'}
+                        </button>
+                      ) : (
+                        <div className="space-y-2">
+                          <input
+                            type="password"
+                            value={newPassword}
+                            onChange={(e) => setNewPassword(e.target.value)}
+                            placeholder="New room password"
+                            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                          />
+                          <button
+                            onClick={handleActivatePassword}
+                            disabled={isUpdatingPassword || !newPassword.trim()}
+                            className="w-full bg-primary-600 hover:bg-primary-700 disabled:bg-gray-400 text-white font-medium py-2 px-4 rounded-lg text-sm transition-colors"
+                          >
+                            {isUpdatingPassword ? 'Activating...' : 'Activate password'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Deck management (moderator only) */}
+              {isModerator && (
+                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <button
+                    onClick={() => {
+                      setShowDeckSettings(!showDeckSettings);
+                      setDeckUpdateError('');
+                      // Initialize radio to current deck
+                      if (!showDeckSettings && deck) {
+                        if (deck.id === 'custom') {
+                          setDeckSelectedDeck('custom');
+                          setDeckCustomInput(deck.values.join(', '));
+                        } else {
+                          setDeckSelectedDeck(deck.id);
+                          setDeckCustomInput('');
+                        }
+                      }
+                      setDeckCustomError('');
+                    }}
+                    className="flex items-center justify-between w-full text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    <span className="flex items-center gap-2">
+                      <svg
+                        className="w-4 h-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                        />
+                      </svg>
+                      Card deck: {deck?.name || 'Fibonacci'}
+                    </span>
+                    <svg
+                      className={`w-4 h-4 transition-transform ${showDeckSettings ? 'rotate-180' : ''}`}
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M19 9l-7 7-7-7"
+                      />
+                    </svg>
+                  </button>
+                  {showDeckSettings && (
+                    <div className="mt-3 space-y-2">
+                      {deckUpdateError && <p className="text-red-500 text-xs">{deckUpdateError}</p>}
+                      <div className="space-y-1">
+                        {[
+                          { id: 'fibonacci', label: 'Fibonacci' },
+                          { id: 'tshirt', label: 'T‑Shirt Sizes' },
+                          { id: 'powersOfTwo', label: 'Powers of Two' },
+                          { id: 'custom', label: 'Custom' },
+                        ].map((option) => (
+                          <label
+                            key={option.id}
+                            className="flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors"
+                          >
+                            <input
+                              type="radio"
+                              name="deckSettings"
+                              value={option.id}
+                              checked={deckSelectedDeck === option.id}
+                              onChange={() => {
+                                setDeckSelectedDeck(option.id);
+                                setDeckCustomError('');
+                              }}
+                              className="text-primary-600 focus:ring-primary-500"
+                            />
+                            <span className="text-sm text-gray-700 dark:text-gray-300">
+                              {option.label}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+
+                      {deckSelectedDeck === 'custom' && (
+                        <div>
+                          <input
+                            type="text"
+                            value={deckCustomInput}
+                            onChange={(e) => {
+                              setDeckCustomInput(e.target.value);
+                              const values = e.target.value
+                                .split(',')
+                                .map((v) => v.trim())
+                                .filter((v) => v.length > 0);
+                              if (values.length > 0 && (values.length < 2 || values.length > 15)) {
+                                setDeckCustomError(
+                                  `Custom deck must have between 2 and 15 values, got ${values.length}`
+                                );
+                              } else {
+                                setDeckCustomError('');
+                              }
+                            }}
+                            placeholder="e.g., 1, 2, 3, 5, 8"
+                            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                          />
+                          {deckCustomError && (
+                            <p className="text-xs text-red-500 mt-1">{deckCustomError}</p>
+                          )}
+                        </div>
+                      )}
+
+                      <button
+                        onClick={() =>
+                          handleDeckChange(
+                            deckSelectedDeck,
+                            deckSelectedDeck === 'custom' ? deckCustomInput : undefined
+                          )
+                        }
+                        disabled={
+                          isUpdatingDeck ||
+                          (deckSelectedDeck === 'custom' &&
+                            (!deckCustomInput.trim() || !!deckCustomError))
+                        }
+                        className="w-full bg-primary-600 hover:bg-primary-700 disabled:bg-gray-400 text-white font-medium py-2 px-4 rounded-lg text-sm transition-colors"
+                      >
+                        {isUpdatingDeck ? 'Applying...' : 'Apply Deck'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
