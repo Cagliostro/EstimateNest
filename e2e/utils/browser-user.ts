@@ -36,8 +36,8 @@ export class BrowserUser {
     });
 
     this.page.on('websocket', (ws) => {
-      ws.on('framesent', (frame) => this.logger.logWS('sent', frame.payload));
-      ws.on('framereceived', (frame) => this.logger.logWS('received', frame.payload));
+      ws.on('framesent', (frame) => this.logger.logWS('sent', String(frame.payload)));
+      ws.on('framereceived', (frame) => this.logger.logWS('received', String(frame.payload)));
     });
 
     this.page.on('response', (response) => {
@@ -104,8 +104,7 @@ export class BrowserUser {
 
     // Extract participantId from the UI state for logging
     this.participantId = await this.page.evaluate(() => {
-      const store = (window as unknown as Record<string, unknown>).__ZUSTAND_STORE__;
-      return null; // We'll use the WebSocket messages to find it
+      return undefined as string | undefined;
     });
 
     this.logger.logActionResult('joinRoom', { roomCode: code });

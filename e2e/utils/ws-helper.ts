@@ -13,7 +13,7 @@ export function waitForWsMessage(
     page.on('websocket', (ws) => {
       ws.on('framereceived', (frame) => {
         try {
-          const parsed = JSON.parse(frame.payload);
+          const parsed = JSON.parse(String(frame.payload));
           if (parsed.type === type) {
             clearTimeout(timer);
             resolve(parsed.payload ?? {});
@@ -39,7 +39,7 @@ export function waitForWsMessageMatch(
     page.on('websocket', (ws) => {
       ws.on('framereceived', (frame) => {
         try {
-          const parsed = JSON.parse(frame.payload);
+          const parsed = JSON.parse(String(frame.payload));
           const payload = parsed.payload ?? {};
           if (predicate(payload)) {
             clearTimeout(timer);
