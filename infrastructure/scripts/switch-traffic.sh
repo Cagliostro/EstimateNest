@@ -111,7 +111,7 @@ update_cloudfront_aliases() {
     # Add domains to aliases (idempotent — uses unique to prevent duplicates)
     for domain in "${domains[@]}"; do
       dist_config=$(echo "$dist_config" | jq '
-        .Aliases.Items = ((.Aliases.Items // []) + ["'"$domain"'"]) | unique |
+        .Aliases.Items = (((.Aliases.Items // []) + ["'"$domain"'"]) | unique) |
         .Aliases.Quantity = (.Aliases.Items | length)
       ')
     done
