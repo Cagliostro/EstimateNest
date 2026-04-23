@@ -99,7 +99,7 @@ update_cloudfront_aliases() {
       dist_config=$(echo "$dist_config" | jq '
         .Aliases.Items = ((.Aliases.Items // []) - ["'"$domain"'"]) |
         .Aliases.Quantity = (.Aliases.Items | length) |
-        if .Aliases.Quantity == 0 then del(.Aliases) else . end
+        if .Aliases.Quantity == 0 then .Aliases = { Quantity: 0, Items: [] } else . end
       ')
     done
 
@@ -117,14 +117,16 @@ update_cloudfront_aliases() {
   echo "$dist_config" > "$temp_file"
 
   echo "  Applying update..."
-  if aws cloudfront update-distribution --id "$dist_id" --if-match "$etag" --distribution-config "file://$temp_file" --region "$CLOUDFRONT_REGION" > /dev/null 2>&1; then
+  local aws_output
+  aws_output=$(aws cloudfront update-distribution --id "$dist_id" --if-match "$etag" --distribution-config "file://$temp_file" --region "$CLOUDFRONT_REGION" 2>&1)
+  local exit_code=$?
+  if [[ "$exit_code" -eq 0 ]]; then
     echo "  Success"
     rm -f "$temp_file"
   else
-    local exit_code=$?
-    echo "  Failed (exit code: $exit_code). Check the dist config JSON in $temp_file"
-    echo "  Config preview:"
-    echo "$dist_config" | jq '{Aliases: .Aliases, ViewerCertificate: .ViewerCertificate}' 2>/dev/null || true
+    echo "  Failed (exit code: $exit_code)"
+    echo "  AWS output: $aws_output"
+    echo "  Config saved to: $temp_file"
     return 1
   fi
 
