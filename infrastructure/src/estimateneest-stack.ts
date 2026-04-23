@@ -199,6 +199,8 @@ export class EstimateNestStack extends cdk.Stack {
 
         environment: {
           PARTICIPANTS_TABLE: participantsTable.tableName,
+          ROOMS_TABLE: roomsTable.tableName,
+          ROUNDS_TABLE: roundsTable.tableName,
         },
         bundling: {
           format: lambdaNodejs.OutputFormat.CJS,
@@ -222,6 +224,8 @@ export class EstimateNestStack extends cdk.Stack {
 
         environment: {
           PARTICIPANTS_TABLE: participantsTable.tableName,
+          ROOMS_TABLE: roomsTable.tableName,
+          ROUNDS_TABLE: roundsTable.tableName,
         },
         bundling: {
           format: lambdaNodejs.OutputFormat.CJS,
@@ -504,7 +508,8 @@ export class EstimateNestStack extends cdk.Stack {
           ROUNDS_TABLE: roundsTable.tableName,
           VOTES_TABLE: votesTable.tableName,
           PARTICIPANTS_TABLE: participantsTable.tableName,
-          WEBSOCKET_URL: webSocketCustomUrl || webSocketStage.url,
+          ROOMS_TABLE: roomsTable.tableName,
+          WEBSOCKET_URL: webSocketStage.url,
         },
         bundling: {
           format: lambdaNodejs.OutputFormat.CJS,
@@ -524,6 +529,7 @@ export class EstimateNestStack extends cdk.Stack {
     roundsTable.grantReadWriteData(scheduledAutoRevealHandler);
     votesTable.grantReadData(scheduledAutoRevealHandler);
     participantsTable.grantReadWriteData(scheduledAutoRevealHandler);
+    roomsTable.grantReadData(scheduledAutoRevealHandler);
     // Allow posting to WebSocket connections
     scheduledAutoRevealHandler.addToRolePolicy(
       new iam.PolicyStatement({
@@ -560,9 +566,14 @@ export class EstimateNestStack extends cdk.Stack {
     roomCodesTable.grantReadData(roundHistoryHandler);
     roundsTable.grantReadData(roundHistoryHandler);
     votesTable.grantReadData(roundHistoryHandler);
-    // websocket-connect.ts and websocket-disconnect.ts: Read/write participants only
+    // websocket-connect.ts: Reads participants (read/write), rooms, and rounds
     participantsTable.grantReadWriteData(websocketConnectHandler);
+    roomsTable.grantReadData(websocketConnectHandler);
+    roundsTable.grantReadData(websocketConnectHandler);
+    // websocket-disconnect.ts: Reads participants (read/write), rooms, and rounds
     participantsTable.grantReadWriteData(websocketDisconnectHandler);
+    roomsTable.grantReadData(websocketDisconnectHandler);
+    roundsTable.grantReadData(websocketDisconnectHandler);
     // vote.ts (WebSocket): Read/write votes, rounds, participants; read rooms; rate limiting
     // Granular permissions per table
     // roomsTable: GetItem only
