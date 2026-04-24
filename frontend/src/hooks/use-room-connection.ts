@@ -191,11 +191,12 @@ export function useRoomConnection() {
    * Create a new room
    */
   const createRoom = useCallback(
-    async (options?: { deck?: string; moderatorPassword?: string }) => {
+    async (options?: { deck?: string; moderatorPassword?: string; name?: string }) => {
       try {
         const response = await apiClient.createRoom({
           deck: options?.deck || 'fibonacci',
           moderatorPassword: options?.moderatorPassword,
+          name: options?.name,
         });
 
         return response;

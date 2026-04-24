@@ -199,18 +199,25 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (providedParticipantId && fetchedParticipant) {
       // Participant exists - use stored details from GetCommand
       participantId = providedParticipantId;
-      name = fetchedParticipant.name;
-      avatarSeed = fetchedParticipant.avatarSeed;
       isModerator = fetchedParticipant.isModerator || false;
-      // Update lastSeenAt in DynamoDB
+      // Use provided name if supplied, otherwise keep stored name
+      const newName = validatedData.name?.trim();
+      const nameChanged = newName && newName !== fetchedParticipant.name;
+      name = nameChanged ? newName : fetchedParticipant.name;
+      avatarSeed = nameChanged ? createAvatarSeed(name) : fetchedParticipant.avatarSeed;
+      // Update lastSeenAt and possibly name in DynamoDB
+      const updateExpression = nameChanged
+        ? 'SET lastSeenAt = :now, #nm = :name, avatarSeed = :seed'
+        : 'SET lastSeenAt = :now';
       await docClient.send(
         new UpdateCommand({
           TableName: PARTICIPANTS_TABLE,
           Key: { roomId, participantId: providedParticipantId },
-          UpdateExpression: 'SET lastSeenAt = :now',
-          ExpressionAttributeValues: {
-            ':now': new Date().toISOString(),
-          },
+          UpdateExpression: updateExpression,
+          ExpressionAttributeNames: nameChanged ? { '#nm': 'name' } : undefined,
+          ExpressionAttributeValues: nameChanged
+            ? { ':now': new Date().toISOString(), ':name': name, ':seed': avatarSeed }
+            : { ':now': new Date().toISOString() },
         })
       );
       // Update participant in our local list if present
@@ -218,12 +225,16 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       if (participantIndex >= 0) {
         participants[participantIndex] = {
           ...participants[participantIndex],
+          name,
+          avatarSeed,
           lastSeenAt: new Date().toISOString(),
         };
       } else {
         // Participant not in cached list (should not happen) - add it
         participants.push({
           ...fetchedParticipant,
+          name,
+          avatarSeed,
           lastSeenAt: new Date().toISOString(),
         });
       }

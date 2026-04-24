@@ -6,6 +6,7 @@ export interface CreateRoomRequest {
   allowAllParticipantsToReveal?: boolean;
   maxParticipants?: number;
   deck?: string;
+  name?: string;
 }
 
 export interface CreateRoomResponse {

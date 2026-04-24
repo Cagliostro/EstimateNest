@@ -198,6 +198,7 @@ export const createRoomRequestSchema = z.object({
   autoRevealEnabled: z.boolean().optional(),
   autoRevealCountdownSeconds: z.number().int().positive().optional(),
   moderatorPassword: z.string().optional(),
+  name: z.string().min(1).max(100).optional(),
 });
 
 export const joinRoomRequestSchema = z.object({

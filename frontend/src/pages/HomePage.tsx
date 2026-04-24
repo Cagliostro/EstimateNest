@@ -43,6 +43,7 @@ export default function HomePage() {
       const result = await createRoom({
         deck: deckValue,
         moderatorPassword: moderatorPassword.trim() || undefined,
+        name: participantName.trim() || undefined,
       });
       setCreatedRoom(result);
 

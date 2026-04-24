@@ -69,6 +69,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       autoRevealEnabled = true,
       autoRevealCountdownSeconds = 3,
       moderatorPassword,
+      name,
     } = validatedBody;
 
     const roomId = uuidv4();
@@ -134,7 +135,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     );
 
     const participantId = uuidv4();
-    const creatorName = 'Room Creator';
+    const creatorName = name?.trim() || 'Anonymous';
     const avatarSeed = createAvatarSeed(creatorName);
 
     const participant: Participant = {
