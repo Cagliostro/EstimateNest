@@ -110,8 +110,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       };
     }
 
-    const { roomId, expiresAt } = codeResult.Item;
-    if (new Date(expiresAt) < new Date()) {
+    const { roomId, expiresAt: rawExpiresAt } = codeResult.Item;
+    const expiresAtMs =
+      typeof rawExpiresAt === 'number' ? rawExpiresAt * 1000 : new Date(rawExpiresAt).getTime();
+    if (expiresAtMs < Date.now()) {
       return {
         statusCode: 410,
         body: JSON.stringify({ error: 'Room has expired' }),
@@ -244,7 +246,27 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       participantId = uuidv4();
       name = providedName;
       avatarSeed = createAvatarSeed(name);
-      isModerator = room.moderatorPassword ? false : existingParticipants.length === 0;
+      isModerator = false;
+      if (!room.moderatorPassword) {
+        try {
+          await docClient.send(
+            new UpdateCommand({
+              TableName: ROOMS_TABLE,
+              Key: { id: roomId, sk: 'META' },
+              UpdateExpression: 'SET moderatorAssigned = :true',
+              ConditionExpression:
+                'attribute_not_exists(moderatorAssigned) OR moderatorAssigned = :false',
+              ExpressionAttributeValues: {
+                ':true': true,
+                ':false': false,
+              },
+            })
+          );
+          isModerator = true;
+        } catch (error) {
+          if ((error as Error).name !== 'ConditionalCheckFailedException') throw error;
+        }
+      }
       await createParticipantRecord(roomId, participantId, name, avatarSeed, isModerator);
       // Invalidate participant cache since new participant added
       cacheManager.invalidateParticipants(roomId);
@@ -265,7 +287,27 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       participantId = uuidv4();
       name = providedName;
       avatarSeed = createAvatarSeed(name);
-      isModerator = room.moderatorPassword ? false : existingParticipants.length === 0;
+      isModerator = false;
+      if (!room.moderatorPassword) {
+        try {
+          await docClient.send(
+            new UpdateCommand({
+              TableName: ROOMS_TABLE,
+              Key: { id: roomId, sk: 'META' },
+              UpdateExpression: 'SET moderatorAssigned = :true',
+              ConditionExpression:
+                'attribute_not_exists(moderatorAssigned) OR moderatorAssigned = :false',
+              ExpressionAttributeValues: {
+                ':true': true,
+                ':false': false,
+              },
+            })
+          );
+          isModerator = true;
+        } catch (error) {
+          if ((error as Error).name !== 'ConditionalCheckFailedException') throw error;
+        }
+      }
       await createParticipantRecord(roomId, participantId, name, avatarSeed, isModerator);
       // Invalidate participant cache since new participant added
       cacheManager.invalidateParticipants(roomId);

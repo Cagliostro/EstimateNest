@@ -8,13 +8,15 @@ export interface Room {
   id: string;
   shortCode: string; // e.g., "ABC123"
   createdAt: string; // ISO timestamp
-  expiresAt: string; // ISO timestamp (createdAt + 14 days)
+  expiresAt: number; // epoch seconds (createdAt + 14 days)
   moderatorPassword?: string; // hashed, optional
   allowAllParticipantsToReveal: boolean;
   maxParticipants?: number; // default 50
   deck: CardDeck; // default deck for the room (can be overridden by user)
   autoRevealEnabled?: boolean; // default: true
   autoRevealCountdownSeconds?: number; // default: 3
+  moderatorAssigned?: boolean;
+  connectionCount?: number;
 }
 
 export interface Participant {
@@ -150,12 +152,15 @@ export type WebSocketMessage =
  * Generate a short alphanumeric code (6 characters).
  * Collisions are handled by the database layer.
  */
+const BLOCKED_CODES = new Set(['LEGAL']);
+
 export function generateShortCode(length = 6): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // removed ambiguous chars
   let result = '';
   for (let i = 0; i < length; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
+  if (BLOCKED_CODES.has(result)) return generateShortCode(length);
   return result;
 }
 
@@ -180,8 +185,8 @@ export function getRoomTTL(): number {
 /**
  * Check if a room is expired.
  */
-export function isRoomExpired(expiresAt: string): boolean {
-  return new Date(expiresAt) < new Date();
+export function isRoomExpired(expiresAt: number): boolean {
+  return expiresAt * 1000 < Date.now();
 }
 
 // ====================

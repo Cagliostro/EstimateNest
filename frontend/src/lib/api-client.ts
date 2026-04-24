@@ -13,7 +13,7 @@ export interface CreateRoomResponse {
   roomId: string;
   shortCode: string;
   joinUrl: string;
-  expiresAt: string;
+  expiresAt: number;
   participantId?: string;
   hasPassword?: boolean;
 }

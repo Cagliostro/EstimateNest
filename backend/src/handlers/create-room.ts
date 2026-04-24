@@ -73,9 +73,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     } = validatedBody;
 
     const roomId = uuidv4();
-    const shortCode = generateShortCode();
     const now = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + getRoomTTL() * 1000).toISOString();
+    const expiresAt = Math.floor(Date.now() / 1000) + getRoomTTL();
 
     const hasPassword = !!moderatorPassword;
 
@@ -94,6 +93,39 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           error: parseError instanceof Error ? parseError.message : 'Invalid deck value',
         }),
       };
+    }
+
+    let shortCode = '';
+    let codeInserted = false;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      shortCode = generateShortCode();
+      try {
+        await docClient.send(
+          new PutCommand({
+            TableName: ROOM_CODES_TABLE,
+            Item: {
+              shortCode,
+              roomId,
+              createdAt: now,
+              expiresAt,
+            },
+            ConditionExpression: 'attribute_not_exists(shortCode)',
+          })
+        );
+        codeInserted = true;
+        break;
+      } catch (error) {
+        if ((error as Error).name === 'ConditionalCheckFailedException') {
+          if (attempt === 4) {
+            throw new Error('Failed to generate unique room code after 5 attempts');
+          }
+          continue;
+        }
+        throw error;
+      }
+    }
+    if (!codeInserted) {
+      throw new Error('Failed to generate unique room code');
     }
 
     const room: Room = {
@@ -118,18 +150,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         Item: {
           ...room,
           sk: 'META',
-        },
-      })
-    );
-
-    await docClient.send(
-      new PutCommand({
-        TableName: ROOM_CODES_TABLE,
-        Item: {
-          shortCode,
-          roomId,
-          createdAt: now,
-          expiresAt,
         },
       })
     );

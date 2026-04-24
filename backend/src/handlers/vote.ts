@@ -1020,6 +1020,10 @@ async function handleNewRound(
     throw new Error('Participant not found');
   }
 
+  if (!participant.isModerator) {
+    throw new Error('Only moderators can start a new round');
+  }
+
   const { roomId } = participant;
 
   // Check for existing unrevealed rounds (should be at most one, but handle all)

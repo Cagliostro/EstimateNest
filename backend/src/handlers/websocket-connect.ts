@@ -1,6 +1,6 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import AWSXRay from 'aws-xray-sdk';
-import { DynamoDBDocumentClient, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda';
 import { broadcastToRoom } from '../utils/broadcast';
 import { validateWebSocketConnectionParams, Room } from '@estimatenest/shared';
@@ -10,6 +10,7 @@ import { getCacheManager } from '../utils/cache';
 const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
 const docClient = DynamoDBDocumentClient.from(client);
 const cacheManager = getCacheManager();
+const ROOMS_TABLE = process.env.ROOMS_TABLE!;
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 
 export const handler = async (
@@ -58,30 +59,33 @@ export const handler = async (
     const room = roomData as Room;
     const maxParticipants = room.maxParticipants || 50;
 
-    // Check connection limit (respects room's maxParticipants setting)
-    const activeParticipantsResult = await docClient.send(
-      new QueryCommand({
-        TableName: PARTICIPANTS_TABLE,
-        KeyConditionExpression: 'roomId = :roomId',
-        FilterExpression: 'attribute_exists(connectionId) AND connectionId <> :rest',
-        ExpressionAttributeValues: {
-          ':roomId': roomId,
-          ':rest': 'REST',
-        },
-        Select: 'COUNT',
-      })
-    );
-
-    if (activeParticipantsResult.Count >= maxParticipants) {
-      return {
-        statusCode: 429,
-        body: JSON.stringify({
-          type: 'error',
-          payload: {
-            error: `Connection limit exceeded (max ${maxParticipants} connections per room)`,
+    // Atomic connection count check and increment on room item
+    try {
+      await docClient.send(
+        new UpdateCommand({
+          TableName: ROOMS_TABLE,
+          Key: { id: roomId, sk: 'META' },
+          UpdateExpression: 'ADD connectionCount :inc',
+          ConditionExpression: 'connectionCount < :max OR attribute_not_exists(connectionCount)',
+          ExpressionAttributeValues: {
+            ':inc': 1,
+            ':max': maxParticipants,
           },
-        }),
-      };
+        })
+      );
+    } catch (error) {
+      if ((error as Error).name === 'ConditionalCheckFailedException') {
+        return {
+          statusCode: 429,
+          body: JSON.stringify({
+            type: 'error',
+            payload: {
+              error: `Connection limit exceeded (max ${maxParticipants} connections per room)`,
+            },
+          }),
+        };
+      }
+      throw error;
     }
 
     // Update participant with WebSocket connection ID

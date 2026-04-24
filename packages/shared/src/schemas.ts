@@ -14,7 +14,7 @@ export const roomSchema = z.object({
   id: z.string(),
   shortCode: z.string(), // e.g., "ABC123"
   createdAt: z.string().datetime(), // ISO timestamp
-  expiresAt: z.string().datetime(), // ISO timestamp (createdAt + 14 days)
+  expiresAt: z.number(), // epoch seconds (createdAt + 14 days)
   moderatorPassword: z.string().optional(), // hashed, optional
   allowAllParticipantsToReveal: z.boolean(),
   maxParticipants: z.number().optional(), // default 50

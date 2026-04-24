@@ -8,6 +8,7 @@ import { getCacheManager } from '../utils/cache';
 const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
 const docClient = DynamoDBDocumentClient.from(client);
 const cacheManager = getCacheManager();
+const ROOMS_TABLE = process.env.ROOMS_TABLE!;
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
@@ -37,6 +38,16 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     }
 
     const { roomId, participantId } = participant;
+
+    // Atomically decrement connection count on room item
+    await docClient.send(
+      new UpdateCommand({
+        TableName: ROOMS_TABLE,
+        Key: { id: roomId, sk: 'META' },
+        UpdateExpression: 'ADD connectionCount :dec',
+        ExpressionAttributeValues: { ':dec': -1 },
+      })
+    );
 
     // Clear connectionId from participant record
     await docClient.send(

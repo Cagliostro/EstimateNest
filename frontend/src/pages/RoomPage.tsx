@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import { useRoomStore } from '../store/room-store';
 import { useParticipantStore } from '../store/participant-store';
 import { useConnectionStore } from '../store/connection-store';
@@ -79,7 +80,7 @@ export default function RoomPage() {
   const copyRoomLink = () => {
     const roomLink = `${config.frontendUrl}/${shortCode || roomCode}`;
     navigator.clipboard.writeText(roomLink).then(() => {
-      alert('Room link copied to clipboard!');
+      toast.success('Room link copied to clipboard!');
     });
   };
 
@@ -93,7 +94,7 @@ export default function RoomPage() {
       setNewName('');
     } catch (error) {
       console.error('Failed to update name:', error);
-      alert('Failed to update name. Please try again.');
+      toast.error('Failed to update name. Please try again.');
     }
   };
 
@@ -104,7 +105,7 @@ export default function RoomPage() {
       setIsEditingRound(false);
     } catch (error) {
       console.error('Failed to update round:', error);
-      alert('Failed to update round. Please try again.');
+      toast.error('Failed to update round. Please try again.');
     }
   };
 
@@ -170,6 +171,18 @@ export default function RoomPage() {
     };
   }, []);
 
+  // Detect room-to-room navigation and reset state
+  const prevRoomCodeRef = useRef(roomCode);
+  useEffect(() => {
+    if (prevRoomCodeRef.current && prevRoomCodeRef.current !== roomCode) {
+      useRoomStore.getState().clearRoom();
+      useParticipantStore.getState().clearParticipant();
+      useConnectionStore.getState().setDisconnected();
+      hasAttemptedAutoJoin.current = false;
+    }
+    prevRoomCodeRef.current = roomCode;
+  }, [roomCode]);
+
   const handleVote = (value: number | string) => {
     if (!participantId) return;
 
@@ -178,7 +191,7 @@ export default function RoomPage() {
       sendVote(value);
     } catch (error) {
       console.error('Failed to send vote:', error);
-      alert('Failed to submit vote. Please try again.');
+      toast.error('Failed to submit vote. Please try again.');
     }
   };
 
@@ -190,7 +203,7 @@ export default function RoomPage() {
       await revealVotes();
     } catch (error) {
       console.error('Failed to reveal votes:', error);
-      alert('Failed to reveal votes. You may not be the moderator.');
+      toast.error('Failed to reveal votes. You may not be the moderator.');
     } finally {
       setIsRevealing(false);
     }
@@ -216,7 +229,7 @@ export default function RoomPage() {
       createNewRound();
     } catch (error) {
       console.error('Failed to create new round:', error);
-      alert('Failed to create new round. Please try again.');
+      toast.error('Failed to create new round. Please try again.');
     }
   };
 
@@ -233,7 +246,7 @@ export default function RoomPage() {
       setAutoRevealEnabled(newAutoRevealEnabled);
     } catch (error) {
       console.error('Failed to update auto-reveal setting:', error);
-      alert('Failed to update auto-reveal setting. Please try again.');
+      toast.error('Failed to update auto-reveal setting. Please try again.');
     } finally {
       setIsUpdatingAutoReveal(false);
     }

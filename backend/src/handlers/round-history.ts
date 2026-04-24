@@ -40,8 +40,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       };
     }
 
-    const { roomId, expiresAt } = codeResult.Item;
-    if (new Date(expiresAt) < new Date()) {
+    const { roomId, expiresAt: rawExpiresAt } = codeResult.Item;
+    const expiresAtMs =
+      typeof rawExpiresAt === 'number' ? rawExpiresAt * 1000 : new Date(rawExpiresAt).getTime();
+    if (expiresAtMs < Date.now()) {
       return {
         statusCode: 410,
         body: JSON.stringify({ error: 'Room has expired' }),

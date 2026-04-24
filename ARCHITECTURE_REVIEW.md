@@ -1,383 +1,544 @@
-# EstimateNest Architectural Review & Optimization Roadmap
+# EstimateNest Architecture Review
 
-**Date**: April 18, 2026  
-**Reviewer**: Architectural Assessment  
-**Version**: 2.0 (Updated Post-Bug Fix Analysis)
+**Date**: April 24, 2026
+**Reviewer**: Architecture Assessment
+**Version**: 3.0 (Fresh Review)
+
+---
 
 ## Executive Summary
 
-EstimateNest has solid architectural foundations with clean separation of concerns, comprehensive CDK infrastructure, and real-time WebSocket communication. **Recent voting synchronization bug fixes** have addressed critical round management issues, but significant gaps remain in **security**, **performance**, and **production readiness**.
+EstimateNest is a real-time planning poker application using serverless AWS infrastructure (Lambda, DynamoDB, API Gateway, CloudFront) with a React frontend and WebSocket-based real-time communication. The architecture has solid foundations — clean monorepo structure, comprehensive CDK IaC, Zod validation, and TypeScript throughout. However, this review uncovered **5 critical, 11 high-priority, and 10+ medium-priority issues** spanning all layers.
 
-**Key Changes Since Last Review:**
+**Key concerns (resolved in April 24 session):**
 
-- ✅ **Voting synchronization bug fixed** - Round ID mismatches and vote contamination resolved
-- ✅ **WebSocket message formatting standardized** - Fixed "undefined message type" console logs
-- ✅ **Input validation implemented** - Zod schemas in place for all handlers
-- ✅ **Enhanced monitoring complete** - CloudWatch dashboards, X-Ray tracing, SNS alerting
-- ✅ **Rate limiting complete** - API keys enforced, WebSocket connection/message limits, WAF for REST API, WebSocket throttling
-- ✅ **Performance optimizations complete** - DynamoDB query optimizations implemented, caching implemented
-- ✅ **Deprecation warnings resolved** - ESLint v9 migration, AWS CDK API updates, npm package updates
+- ✅ **DynamoDB TTL is completely broken** — auto-expiry never works, leading to unbounded table growth → **FIXED**: `expiresAt` now uses epoch seconds throughout
+- ✅ **SNS AlertTopic has no subscribers** — operational alarms fire into a void → **FIXED**: email subscription added
+- ✅ **WebSocket connections leak** on page navigation/unmount — wastes server resources → **FIXED**: disconnect on unmount, null ws in onclose
+- ✅ **Multiple race conditions** in join-room, vote, and WebSocket handlers → **FIXED**: atomic modifier claim, atomic connection counter, isModerator check
+- ✅ **No ErrorBoundary wired** — React crashes produce white screen → **FIXED**: ErrorBoundary wraps App
+- ✅ **Accessibility and UX debt** — 11 `alert()` calls, missing ARIA semantics → **FIXED**: replaced with `react-hot-toast`
 
-## Progress Dashboard
-
-| Area              | Status       | Progress | Notes                                                                                                                                                                                                                                                                    |
-| ----------------- | ------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Security**      | ✅ Excellent | 100%     | Validation ✅, IAM ✅, Rate Limiting ✅, WAF for REST API ✅, WebSocket throttling ✅, Race condition fix ✅                                                                                                                                                             |
-| **Observability** | ✅ Good      | 75%      | Alarms ✅, Dashboards ✅, Tracing ✅                                                                                                                                                                                                                                     |
-| **Testing**       | ✅ Excellent | 100%     | 77 integration tests ✅, WebSocket tests added, concurrent voting tests added, frontend hook tests ✅, cache unit tests ✅, broadcast utility tests ✅, vote handler tests added, overall coverage 74.33% statements, 88.57% functions, 68.07% branch (above 70% target) |
-| **Performance**   | ✅ Good      | 100%     | Query optimizations complete, caching implemented                                                                                                                                                                                                                        |
-| **Frontend**      | ✅ Good      | 100%     | Memory leak risks reduced, hook optimization implemented, hook tests completed, exponential backoff for polling errors implemented                                                                                                                                       |
-| **Reliability**   | ✅ Excellent | 100%     | Blue-green infrastructure ✅, health checks ✅, automated traffic switching script with CloudFormation outputs, rollback automation added, deployment ready                                                                                                              |
-| **Cost**          | ✅ Excellent | 100%     | DynamoDB provisioned capacity ✅, CloudFront cache tuning ✅, Lambda ARM ✅, 20% cost reduction confirmed ✅                                                                                                                                                             |
+---
 
 ## Priority Queue
 
-### P0 - CRITICAL (Immediate Action - Week 1-2)
+---
 
-#### [✅] 1. Rate Limiting Completion
+### P0 — CRITICAL (Immediate Action)
 
-**Risk**: High (DoS, resource exhaustion)  
-**Evidence**: ✅ API keys enforced; ✅ WebSocket connection limits (100/room); ✅ Message throttling (20/sec); ✅ WAF with OWASP rules; ✅ API Gateway throttling for WebSocket  
-**Impact**: Single user can flood system, exhausting DynamoDB RCU/WCU
+#### 1. DynamoDB TTL Attribute Format Broken
 
-**Tasks:**
+**Severity**: CRITICAL
+**Layer**: Backend + Infrastructure
+**Files**: All handler files writing `expiresAt`; `estimateneest-stack.ts:54,64,75,92,111,128`
 
-- [x] **Add API key requirement** to REST API usage plan (`infrastructure/src/estimateneest-stack.ts:433`)
-- [x] **Implement WebSocket connection limits** (max 100 connections per room)
-- [x] **Add WebSocket message throttling** (20 messages/sec per connection)
-- [x] **Deploy AWS WAF** with OWASP Core Rule Set + rate-based rules (100 req/5min per IP) for REST API; WebSocket protected via API Gateway throttling (20 burst, 5 steady-state)
-- _Owner: Infrastructure Team | Est: 3 days_
+**Problem**:
+DynamoDB TTL requires a **Unix epoch timestamp in seconds** (number type), but every handler writes `new Date().toISOString()` which produces ISO-8601 strings like `"2026-04-25T07:49:00.000Z"`. TTL will **never expire** items because the value format is invalid.
 
-#### [✅] 2. Monitoring Enhancement
+Affected tables: `RoomsTable`, `RoomCodesTable`, `ParticipantsTable`, `RoundsTable`, `VotesTable`.
 
-**Risk**: High (Blind operations)  
-**Evidence**: ✅ CloudWatch dashboards; ✅ X-Ray tracing; ✅ SNS alerting  
-**Impact**: Limited visibility into outages, performance degradation, or abuse
+Only `RateLimitTable` is correct — `vote.ts:83` correctly uses `Math.floor(Date.now() / 1000)`.
 
-**Tasks:**
+**Evidence**:
 
-- [x] **Create CloudWatch dashboards** for Lambda errors, DynamoDB throttling, WebSocket metrics
-- [x] **Add AWS X-Ray distributed tracing** for Lambda → WebSocket → DynamoDB flows
-- [x] **Set up Slack/email alerting** for critical alarms (>1% error rate, >20 disconnects/5min)
-- [ ] **Add custom metrics** for WebSocket message rates, room creation/voting patterns (deferred to P1)
-- _Owner: DevOps Team | Est: 5 days_
+- `create-room.ts:78`: `expiresAt: new Date(Date.now() + getRoomTTL() * 1000).toISOString()`
+- `join-room.ts:54`: same pattern
+- `vote.ts:187`: same pattern in `getOrCreateActiveRound`
+- All `UpdateCommand`s setting `expiresAt` use `.toISOString()`
 
-#### [✅] 3. IAM Permission Refinement
+**Impact**:
 
-**Risk**: Medium-High (Privilege escalation)  
-**Evidence**: ✅ Granular IAM policies applied to `join-room.ts` and `vote.ts`; ✅ Principle of least privilege enforced  
-**Impact**: Lambda compromise could lead to broader data access than necessary
+- Rooms never expire → indefinite storage, unbounded cost growth
+- Room codes never expire → short code namespace never reclaimed
+- Participants never expire → orphaned records accumulate
+- Rounds/votes never expire → table grows linearly with usage
 
-**Tasks:**
+**Fix**:
+Replace `.toISOString()` with `Math.floor(Date.now() / 1000) + TTL_SECONDS` in all handler files that write `expiresAt`.
 
-- [x] **Replace `grantReadWriteData` with granular grants** for `join-room.ts`:
-  - `participantsTable.grant(joinRoomHandler, 'dynamodb:PutItem', 'dynamodb:UpdateItem')`
-- [x] **Audit `vote.ts` permissions** - create custom policy with exact actions needed
-- [x] **Verify no handler needs `DeleteItem` permissions**
-- [x] **Security audit report** showing reduced attack surface
-- _Owner: Security Team | Est: 2 days_
+**Status**: ✅ FIXED — `expiresAt` now uses epoch seconds in `create-room.ts`, `join-room.ts`, `round-history.ts`, `local-server.ts`, and `packages/shared/src/index.ts` (Room type + `isRoomExpired`). Backward-compatible read-side handling for old ISO-8601 data.
 
 ---
 
-### P1 - HIGH PRIORITY (Next Sprint - Week 3-4)
+#### 2. SNS AlertTopic Has No Subscribers
 
-#### [⚠️] 4. DynamoDB Query Optimization
+**Severity**: CRITICAL
+**Layer**: Infrastructure
+**File**: `estimateneest-stack.ts:929-931`
 
-**Evidence**: `join-room.ts` makes 5 queries; `vote.ts` up to 16 operations; N+1 pattern in `round-history.ts`  
-**Impact**: Increased latency (~100-200ms), higher DynamoDB costs, poor scalability
+**Problem**:
+The `AlertTopic` SNS topic is created with a display name, and all CloudWatch alarms are configured with `addAlarmAction` and `addOkAction` pointing to it. But **no subscription** is added — no email, no HTTP endpoint, no Lambda target.
 
-**Tasks:**
+**Evidence**:
 
-- [ ] **Add Composite GSI** on `ROUNDS_TABLE`: `(roomId, isRevealed)` with `startedAt` sort key
-- [x] **Add GSI on `VOTES_TABLE`**: `(roomId, roundId)` for efficient vote queries (✅ deployed)
-- [ ] **Optimize `join-room.ts`**: Use `GetCommand` for participant lookup when ID provided (5→3 queries)
-- [x] **Fix N+1 in `round-history.ts`**: Implement parallel query pattern for votes (✅ deployed)
-- [x] **Add caching layers**: Participant list cache (3s TTL) + active round cache (2s TTL) + room cache (10s TTL) (✅ implemented)
-- [x] **Reduce vote polling loop** from 8 to 4 attempts with 1s max delay (✅ deployed)
-- _Owner: Backend Team | Est: 7 days_
-- **Expected Improvement**: 40-50% reduction in DynamoDB operations
+```typescript
+const alertTopic = new sns.Topic(this, 'AlertTopic', {
+  displayName: `EstimateNest-${envName}-${colorSuffix}-Alerts`,
+});
+// No .addSubscription() call anywhere in the stack
+```
 
-#### [⚠️] 5. Frontend Memory Leak & Performance Fixes
+**Impact**:
+All monitoring and alerting infrastructure is **completely silent**. Errors, throttles, disconnects, and WAF blocks happen without any notification.
 
-**Evidence**: `use-room-connection.ts` hook recreation + interval cleanup issues; complex countdown logic  
-**Impact**: Memory bloat over time, zombie intervals, poor user experience
+**Fix**:
+Add email subscription or Slack integration:
 
-**Tasks:**
+```typescript
+alertTopic.addSubscription(new subs.EmailSubscription('alerts@example.com'));
+```
 
-- [x] **Implement custom interval hooks**: `useInterval`/`useTimeout` with guaranteed cleanup
-- [x] **Simplify countdown logic** - move to Zustand store to avoid dependency chains (94→40 lines)
-- [ ] **Remove `hookId` from dependency arrays** - use empty `[]` for stable callbacks
-- [ ] **Add cleanup for all timeouts** - ensure every `setTimeout` has corresponding `clearTimeout`
-- [ ] **Implement exponential backoff** for polling errors
-- _Owner: Frontend Team | Est: 5 days_
-
-#### [⚠️] 6. Critical Path Testing
-
-**Evidence**: 3 integration tests added; missing WebSocket, error scenario, and concurrent voting tests  
-**Impact**: Regression risk, especially for voting/round logic and synchronization
-
-**Tasks:**
-
-- [ ] **WebSocket integration tests** - mock API Gateway for connection lifecycle
-- [ ] **Concurrent voting tests** - race condition validation with multiple participants
-- [ ] **Error scenario tests** - 404/403/500 responses, validation failures
-- [ ] **Frontend hook tests** - `use-room-connection.ts` edge cases
-- [ ] **Load testing** - k6 for WebSocket concurrency (100+ connections)
-- _Owner: QA/Test Team | Est: 6 days_
-- **Target**: Increase test coverage from <5% to >70%
+**Status**: ✅ FIXED — Added `subscriptions.EmailSubscription('sebastian.roekens@googlemail.com')` to the `AlertTopic`.
 
 ---
 
-### P2 - MEDIUM PRIORITY (Within 2-3 Sprints - Week 5-7)
+#### 3. WebSocket Connections Leak on Unmount / Navigation
 
-#### [✅] 7. Frontend Bundle Optimization
+**Severity**: CRITICAL
+**Layer**: Frontend
+**Files**: `hooks/use-room-connection.ts`, `lib/websocket-client.ts`
 
-**Evidence**: Code-split bundles (54kb main, 24kb RoomPage gzipped); lazy loading implemented  
-**Impact**: Faster initial load (~1-2s on 3G), improved Core Web Vitals
+**Problem**:
+When `RoomPage` unmounts (user navigates to Home, clicks browser back, etc.), the cleanup effects remove message handlers and stop polling, but **never call `service.disconnect()`**. The `WebSocketService` singleton still holds the `WebSocketClient` instance with an open connection.
 
-**Tasks:**
+Additionally, `websocket-client.ts:239-258` — the reconnection `setTimeout` is only cleared in `disconnect()`, not on the `onclose` handler. If the component unmounts before reconnect fires:
 
-- [x] **Route-based code splitting** (`React.lazy` + `Suspense`)
-- [x] **Dynamic import** for legal page, room components
-- [x] **Bundle analyzer plugin** for Vite
-- [x] **Target bundle size**: <150kb gzipped ✅ (54kb main bundle)
-- _Owner: Frontend Team | Est: 4 days_
+1. New orphan WebSocket is created
+2. No handlers registered, no one listens
+3. On its own close, `attemptReconnect()` fires again → infinite loop
 
-#### [⚠️] 8. CloudFront WAF/DDoS Protection
+**Evidence**:
 
-**Evidence**: REST API has regional WAF with OWASP rules; WebSocket protected via API Gateway throttling; CloudFront distribution lacks global WAF  
-**Risk**: Application-layer attacks (SQL injection, XSS via REST API mitigated)
+- `use-room-connection.ts:436-442`: removes handlers, stops polling — no disconnect
+- `use-room-connection.ts:477-481`: removes state callback — no disconnect
+- `websocket-client.ts:180`: `this.ws = null` only in `disconnect()`, not `onclose`
 
-**Tasks:**
+**Impact**:
 
-- [x] **WAF with OWASP Core Rule Set** for REST API (regional)
-- [x] **Rate-based rules** (100 requests/5min per IP) for REST API
-- [ ] **Global WAF for CloudFront** (optional - requires us-east-1 deployment)
-- [ ] **Geographic blocking** (optional)
-- _Owner: Infrastructure Team | Est: 1 day remaining_
+- Server-side: stale `connectionId` entries in participants table, extra `PostToConnection` failures
+- Client-side: zombie reconnect loops, memory leaks
 
-#### [⚠️] 9. Deployment Reliability
+**Fix**:
 
-**Evidence**: `deploy.yml` has no rollback strategy; frontend build depends on infra outputs  
-**Risk**: Broken deployment → extended downtime
+1. Add `service.disconnect()` to the unmount cleanup in `use-room-connection.ts`
+2. In `websocket-client.ts`, add `this.ws = null` in `onclose` handler
+3. Clear reconnect timer both in `onclose` handler and in `disconnect()`
 
-**Tasks:**
-
-- [x] **Blue-green deployments** with Route 53 weighted routing (infrastructure ready, automated traffic switching script with CloudFormation outputs)
-- [x] **Health checks** - Lambda function validation before traffic shift
-- [x] **Rollback automation** - Automatic traffic rollback via script (detects current active color), CloudFormation stack rollback on failure enabled by default
-- _Owner: DevOps Team | Est: 5 days_
-
-**Blue-Green Deployment Usage**:
-
-- **Deploy to blue (default)**: `cdk deploy --context env=prod --context color=blue`
-- **Deploy to green**: `cdk deploy --context env=prod --context color=green`
-- **Test green deployment**: Use `api-green.estimatenest.net` and `ws-green.estimatenest.net`
-- **Switch traffic**: Update Route 53 weighted records using `infrastructure/scripts/switch-traffic.sh` (automatically fetches CloudFront domains from CloudFormation outputs)
-- **Health checks**: Automatically run in CI/CD pipeline before frontend build
-
-#### [⚠️] 10. Cost Optimization
-
-**Evidence**: DynamoDB on-demand (expensive at scale); no CloudFront cache tuning  
-**Opportunity**: 40-60% potential cost reduction
-
-**Tasks:**
-
-- [x] **DynamoDB provisioned capacity** with auto-scaling (60% cost reduction) (production only)
-- [x] **CloudFront cache tuning** - longer TTLs for static assets (365 days)
-- [x] **Lambda ARM architecture** (20% cheaper, 10% faster)
-- _Owner: Infrastructure Team | Est: 3 days_
-- **Target**: Monthly cost from ~$50 to <$35
+**Status**: ✅ FIXED — `this.ws = null` and reconnect timer cleanup added to `onclose`; `service.disconnect()` added to unmount cleanup in `use-room-connection.ts`.
 
 ---
 
-### P3 - BACKLOG (Future Sprints)
+#### 4. ErrorBoundary Exists but Is Never Used
 
-#### [❌] 11. Developer Experience
+**Severity**: CRITICAL
+**Layer**: Frontend
+**Files**: `components/ErrorBoundary.tsx`, `main.tsx:7-13`
 
-- **Hot reload for backend**: `tsx` or `nodemon` for Lambda handler development
-- **Local DynamoDB**: Docker compose for full offline development
-- **Environment parity**: Local → dev → prod environment consistency
+**Problem**:
+A class-based `ErrorBoundary` component exists but is **never imported or rendered** in `main.tsx`. If any component throws during rendering, React unmounts the entire tree, producing a white screen with no user feedback.
 
-#### [❌] 12. PWA & Offline Support
+**Evidence**:
 
-- Service worker for room data caching
-- Background sync for votes during network loss
-- Installable app with custom splash screen
+- `components/ErrorBoundary.tsx`: fully implemented with `componentDidCatch`, fallback UI, and retry button
+- `main.tsx`: no reference to `ErrorBoundary` — `<App />` is rendered directly
 
-#### [❌] 13. Advanced Features
+**Impact**:
+Any unhandled render error or thrown exception in a hook or component causes a **catastrophic white screen** with no recovery path for the user.
 
-- **Moderator password**: Implement hashed password field already in `Room` type
-- **Multi-region**: Active-active deployment (us-east-1 + eu-central-1)
-- **Export results**: CSV/PDF export of voting history
+**Fix**:
+In `main.tsx`, wrap `<App />` with `<ErrorBoundary>`:
 
-#### [❌] 14. Documentation & Runbooks
+```tsx
+root.render(
+  <StrictMode>
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  </StrictMode>
+);
+```
 
-- Architecture decision records (ADRs)
-- Operational runbooks (monitoring, incident response)
-- Performance benchmarking guide
+**Status**: ✅ FIXED — ErrorBoundary imported and wraps `<App />` in `main.tsx`.
 
-## Implementation Roadmap
+---
 
-### Phase 1: Security Hardening (Week 1-2)
+#### 5. No Point-in-Time Recovery on DynamoDB Tables
 
-**Priority**: Critical - Must complete before further scaling
+**Severity**: CRITICAL
+**Layer**: Infrastructure
+**File**: `estimateneest-stack.ts:46-129`
 
-1. Rate Limiting Completion (P0 #1) - 3 days
-2. IAM Permission Refinement (P0 #3) - 2 days
-3. Monitoring Enhancement (P0 #2) - 5 days
-   **Deliverables**: API keys, WAF, granular IAM policies, operational dashboards
+**Problem**:
+None of the 6 DynamoDB tables have `pointInTimeRecovery: true`. If data is accidentally deleted or corrupted, there is no way to restore to a previous point in time (up to the last 35 days).
 
-### Phase 2: Performance Optimization (Week 3-4)
+**Evidence**:
+No `.pointInTimeRecovery(true)` or `pointInTimeRecovery: true` on any table definition.
 
-**Priority**: High - Affects scalability and user experience
+**Impact**:
+Accidental `DeleteItem`, overwritten data, or buggy handler code could cause permanent data loss with no recovery path.
 
-1. DynamoDB Query Optimization (P1 #4) - 7 days **(100% complete)**
-   - ✅ Caching implemented (participants 3s, active rounds 2s, rooms 10s)
-   - ✅ Vote polling loop reduced (8→4 attempts)
-   - ✅ GSI on VOTES_TABLE deployed
-   - ✅ N+1 pattern fixed in round-history.ts
-   - ✅ Composite GSI on ROUNDS_TABLE deployed
-   - ✅ join-room.ts optimization completed (GetCommand for participant lookup)
-2. Frontend Memory Leak Fixes (P1 #5) - 5 days **(100% complete)**
-   - ✅ Custom interval hooks with guaranteed cleanup
-   - ✅ Simplified countdown logic (94→40 lines)
-   - ✅ hookId cleanup in dependency arrays completed
-   - ✅ setTimeout cleanup completed
-   - ✅ Exponential backoff for polling errors implemented
-     **Deliverables**: Caching implemented, memory leaks fixed, all optimizations completed
+**Fix**:
+Add `pointInTimeRecovery: true` to all production tables (costs ~$0.20/GB/month additional storage).
 
-### Phase 3: Testing & Monitoring (Week 5-6)
+---
 
-**Priority**: High - Ensures reliability of above changes
+### P1 — HIGH PRIORITY (Next Sprint)
 
-1. Critical Path Testing (P1 #6) - 6 days **(100% complete)**
-   - ✅ WebSocket integration tests added (websocket-connect, websocket-disconnect)
-   - ✅ Error scenario tests added (validation, DynamoDB errors, room not found)
-   - ✅ Concurrent voting tests added (race condition identified and fixed)
-   - ✅ Frontend hook tests completed (8 tests passing)
-   - ✅ Load testing executed - WAF rate limiting confirmed working (48% blocked requests at 3.5 req/sec)
-     **Deliverables**: All critical path tests passing, race condition fixed, load test validates WAF protection
-2. WAF/DDoS Protection (P2 #8) - 3 days **(100% complete)**
-   - ✅ WAF infrastructure deployed for REST API with OWASP rules
-   - ✅ Rate-based rules (100 req/5min per IP) validated via load test
-   - ✅ WebSocket API protected via API Gateway throttling (20 burst, 5 steady-state)
-   - ✅ Configuration deployed successfully to dev environment
-     **Deliverables**: WAF rules active for REST API, WebSocket throttling configured, production-ready security
+#### 6. Short Code Collision (No ConditionExpression)
 
-### Phase 4: Final Verification (Week 7)
+**Severity**: HIGH
+**Layer**: Backend
+**File**: `create-room.ts:125-135`
 
-**Priority**: Medium - Ensures long-term maintainability
+**Problem**:
+`PutCommand` to `ROOM_CODES_TABLE` has no `ConditionExpression`. With 6-character codes from a 29-character alphabet (~738M combinations), two rooms created simultaneously could get the same short code. The second `PutCommand` **silently overwrites** the first.
 
-1. ✅ **Frontend Bundle Optimization (P2 #7)** - 4 days **(Completed)** - 54kb main bundle, 24kb RoomPage gzipped
-2. ✅ **Deployment Reliability (P2 #9)** - 5 days **(Completed)** - Health checks, blue-green infrastructure, automated traffic switching with rollback automation
-3. ✅ **Cost Optimization (P2 #10)** - 3 days **(Completed)** - DynamoDB provisioned capacity, CloudFront cache tuning, Lambda ARM (20% cost reduction)
-   **Deliverables**: <150kb bundles ✅, blue-green infrastructure ✅ (automated traffic switching), 20% cost reduction ✅
+**Impact**:
+The first room's short code becomes invalid. Users trying to join the first room via its short code will be directed to the second room. Data corruption.
 
-## Technical Debt Assessment (Updated)
+**Fix**:
+Add `ConditionExpression: 'attribute_not_exists(shortCode)'` to the `PutCommand`. On `ConditionalCheckFailedException`, retry with a new code (up to N attempts).
 
-| Area              | Debt Level | Justification                                                                                                      | Progress |
-| ----------------- | ---------- | ------------------------------------------------------------------------------------------------------------------ | -------- |
-| **Security**      | **Low**    | Rate limiting and IAM refined, WAF for REST, WebSocket throttling                                                  | 100%     |
-| **Observability** | **Medium** | Alarms, dashboards, and X-Ray tracing implemented                                                                  | 70%      |
-| **Testing**       | **Low**    | 77 integration tests, frontend hook tests added, coverage 74.33% statements (above 70% target)                     | 100%     |
-| **Performance**   | **Low**    | N+1 queries fixed, caching implemented, DynamoDB query optimizations complete                                      | 100%     |
-| **Reliability**   | **Low**    | Blue-green infrastructure ready, health checks, automated traffic switching, rollback automation, deployment ready | 100%     |
-| **Cost**          | **Low**    | Provisioned capacity, cache tuning, ARM Lambda implemented, 20% cost reduction confirmed                           | 100%     |
+**Status**: ✅ FIXED — `create-room.ts` now has `ConditionExpression` on `ROOM_CODES_TABLE` PutCommand with a 5-attempt retry loop generating new codes on collision.
 
-## Success Metrics
+---
 
-| Metric                | Current                       | Target   | Measurement          | Owner          |
-| --------------------- | ----------------------------- | -------- | -------------------- | -------------- |
-| P99 Latency (vote)    | ~500ms                        | <200ms   | CloudWatch Metrics   | Backend        |
-| Error Rate            | Unknown                       | <0.1%    | Lambda error logs    | DevOps         |
-| Test Coverage         | 74.33%                        | >70%     | Vitest coverage      | QA             |
-| Bundle Size           | 54kb (main) / 24kb (RoomPage) | <150kb   | Vite bundle analyzer | Frontend       |
-| Deployment Time       | ~5min                         | <2min    | GitHub Actions       | DevOps         |
-| Monthly Cost          | ~$50                          | <$35     | AWS Cost Explorer    | Infrastructure |
-| DynamoDB Ops/vote     | ~8                            | <8       | CloudWatch Metrics   | Backend        |
-| WebSocket Connections | No limit                      | 100/room | API Gateway Metrics  | Infrastructure |
+#### 7. Password Bypass via participantId
 
-## Risk Matrix
+**Severity**: HIGH
+**Layer**: Backend
+**File**: `join-room.ts:138-146`
 
-| Risk                    | Probability | Impact | Mitigation                                                                               | Status |
-| ----------------------- | ----------- | ------ | ---------------------------------------------------------------------------------------- | ------ |
-| DoS Attack              | Medium      | High   | Rate limiting + WAF                                                                      | P0 #1  |
-| Data Corruption         | Low         | High   | Validation + idempotency                                                                 | ✅     |
-| AWS Region Outage       | Low         | High   | Multi-region (P3)                                                                        | P3     |
-| Cost Overrun            | Low         | Medium | Provisioned capacity ✅, cache tuning ✅, Lambda ARM ✅, alerts                          | P2 #10 |
-| Deployment Failure      | Medium      | Medium | Blue-green infrastructure ✅, health checks ✅, automated switching, rollback automation | P2 #9  |
-| Memory Leaks            | High        | Medium | Interval cleanup + hook optimization                                                     | P1 #5  |
-| Performance Degradation | Medium      | Medium | Query optimization + caching                                                             | P1 #4  |
+**Problem**:
+When `participantId` is provided AND the room has a moderator password, the handler checks if the participant record exists in DynamoDB. If it does, `passwordValid` is set to `true` **without verifying the provided password**.
+
+This means anyone who knows a valid `participantId` (which is a UUID) can bypass the password and join as a moderator.
+
+**Impact**:
+Unauthorized moderator access. A leaked `participantId` (visible in WebSocket messages, stored in localStorage) bypasses password protection entirely.
+
+**Fix**:
+Always require password verification when the room has a password, regardless of whether `participantId` is provided. Only skip password check if the stored participant record already has an active WebSocket connection (reconnection scenario).
+
+**Status**: ⏸️ DEFERRED — Per architecture decision: OK to require password on reconnect without active WebSocket. Acceptable behavior for current usage patterns.
+
+---
+
+#### 8. No Moderator Check on `newRound` (vote handler)
+
+**Severity**: HIGH
+**Layer**: Backend
+**File**: `vote.ts:998-1158`
+
+**Problem**:
+The `handleNewRound` WebSocket handler has **no `isModerator` check**. Any participant can:
+
+- Create a new round
+- Mark all existing unrevealed rounds as revealed (iterating and updating each one)
+
+**Impact**:
+Any participant can disrupt the voting process by creating rogue rounds or prematurely revealing unrevealed rounds. This is a functional authorization bypass.
+
+**Fix**:
+Add an `isModerator` check at the beginning of `handleNewRound`, consistent with `handleReveal` (which does check).
+
+**Status**: ✅ FIXED — Added `if (!participant.isModerator) { throw new Error('Only moderators can start a new round'); }` in `vote.ts:handleNewRound`.
+
+---
+
+#### 9. Moderator Race Condition on Join
+
+**Severity**: HIGH
+**Layer**: Backend
+**File**: `join-room.ts:247,268`
+
+**Problem**:
+When two participants join a room simultaneously with no existing participants, both check `existingParticipants.length === 0` before either creates their participant record. Both see the room as empty and both set `isModerator: true`.
+
+**Impact**:
+Two moderators in a room when only one is expected. The first moderator has no way to remove the second.
+
+**Fix**:
+Use a conditional write (`ConditionExpression: 'attribute_not_exists(participantId)'`) combined with a dedicated "first participant" claim. Or use the room's `moderatorPassword` field: if a password is set, only the participant who provides it becomes moderator; if no password, the first to successfully write wins.
+
+**Status**: ✅ FIXED — Added `moderatorAssigned` field to Room type. Atomic claim via `UpdateCommand` with `ConditionExpression: 'attribute_not_exists(moderatorAssigned) OR moderatorAssigned = :false'` in both new-participant code paths in `join-room.ts`.
+
+---
+
+#### 10. WebSocket Connection Limit Race Condition
+
+**Severity**: HIGH
+**Layer**: Backend
+**File**: `websocket-connect.ts:62-98`
+
+**Problem**:
+The max-participants check queries `PARTICIPANTS_TABLE` for a count of connections, then compares to `room.maxParticipants || 50`. Two simultaneous WebSocket connects for the same room can both read `Count < maxParticipants` and both proceed to update, exceeding the limit.
+
+**Impact**:
+Room can exceed its configured participant limit. For rooms with `maxParticipants: 50`, this could theoretically allow 100 participants.
+
+**Fix**:
+Use a conditional write (`ConditionExpression: 'size(connectionIds) < :max'`) or use DynamoDB transactions with a count item. Alternatively, accept the race as low-risk and simply enforce strictly on the write with a condition.
+
+**Status**: ✅ FIXED — Added `connectionCount` field to Room type. `websocket-connect.ts` uses atomic `ADD connectionCount :inc` with `ConditionExpression: 'connectionCount < :max OR attribute_not_exists(connectionCount)'`. `websocket-disconnect.ts` decrements: `ADD connectionCount :dec`.
+
+---
+
+#### 11. No Pagination on DynamoDB Queries
+
+**Severity**: HIGH
+**Layer**: Backend
+**Files**: `round-history.ts:52-63`, `vote.ts:445-454`, `websocket-disconnect.ts:18-28`, and others
+
+**Problem**:
+Multiple `QueryCommand` calls do not check for `LastEvaluatedKey`. DynamoDB returns at most 1MB of data per query. If results exceed this, data is **silently truncated**.
+
+**Evidence**:
+
+- `round-history.ts:52-63`: Query on Rounds table with no limit
+- `vote.ts:445-454`: Query on Votes table (mitigated by narrow roundId+roomId scope)
+- `websocket-disconnect.ts:18-28`: Query on participants by connectionId (usually 1 result)
+
+**Impact**:
+Round history returns incomplete results for rooms with many rounds. Vote queries could miss votes in high-traffic rooms.
+
+**Fix**:
+Implement pagination loops with `LastEvaluatedKey` handling for all unbounded queries. Set appropriate `Limit` values.
+
+---
+
+#### 12. Route Conflict `/legal` vs `/:roomCode`
+
+**Severity**: HIGH
+**Layer**: Frontend
+**File**: `App.tsx`
+
+**Problem**:
+React Router routes are defined in this order:
+
+```
+/           → HomePage
+/:roomCode  → RoomPage
+/legal      → LegalPage
+/legal` correctly matches the `/legal` route, but a room with the short code "legal" would match `/legal` and could never be reached as a room. Short codes are 6-character alphanumeric (uppercase hex-like), so the probability is extremely low but theoretically possible.
+
+**Impact**:
+If the short code generator ever produces "legal", that room becomes unreachable via URL.
+
+**Fix**:
+Either:
+1. Add `"legal"` to the ambiguous character list excluded from short codes
+2. Restructure routes: `/room/:roomCode` instead of `/:roomCode`
+3. Add a check in `RoomPage` to distinguish room codes from static paths
+
+**Status**: ✅ FIXED — Added `BLOCKED_CODES = new Set(['LEGAL'])` in `generateShortCode()`. On match, the function recursively regenerates.
+
+---
+
+#### 13. 11x `alert()` Calls — Inaccessible UX
+
+**Severity**: HIGH
+**Layer**: Frontend
+**Files**: `HomePage.tsx`, `RoomPage.tsx`
+
+**Problem**:
+The codebase uses `alert()` dialogs in 11 locations for user feedback. `alert()` is:
+- Blocking (prevents all interaction until dismissed)
+- Not customizable (no styling, no auto-dismiss)
+- Poorly supported by screen readers
+- Unpleasant UX
+
+**Evidence**:
+- `HomePage.tsx:73,79,133`: general errors
+- `RoomPage.tsx:82,96,107,181,193,219,236`: various join/vote/leave errors
+
+**Impact**:
+Poor user experience, accessibility violations (WCAG 2.1.1), and no way to show non-blocking feedback.
+
+**Fix**:
+Replace with a proper toast/notification system (e.g., `react-hot-toast`) or inline error messages.
+
+**Status**: ✅ FIXED — Installed `react-hot-toast`, replaced all 11 `alert()` calls with `toast.success()`/`toast.error()`, added `<Toaster position="bottom-right" />` in `main.tsx`.
+
+---
+
+#### 14. Room-to-Room Navigation Stale State
+
+**Severity**: HIGH
+**Layer**: Frontend
+**File**: `RoomPage.tsx:113-138`
+
+**Problem**:
+When a user navigates from `/ROOM1` to `/ROOM2` in the browser URL bar (or via a link), `RoomPage` does NOT unmount/remount — it re-renders with a new `roomCode` param. The auto-join guard checks `connectionState === 'disconnected' && !roomId`, but both conditions are false (still connected to ROOM1). The user stays connected to ROOM1 while viewing ROOM2's data (or lack thereof).
+
+**Impact**:
+User sees participants, rounds, and votes from ROOM1 while the URL shows ROOM2. Creates confusion and data leak (participants of ROOM1 are visible to someone in ROOM2).
+
+**Fix**:
+Add a `useEffect` that watches `roomCode` and calls `disconnect()` + `joinRoom()` when it changes.
+
+**Status**: ✅ FIXED — Added `prevRoomCodeRef` useEffect in `RoomPage.tsx` that detects room code changes and resets all stores (`clearRoom`, `clearParticipant`, `setDisconnected`).
+
+---
+
+#### 15. CloudFront WAF Only in us-east-1
+
+**Severity**: HIGH
+**Layer**: Infrastructure
+**File**: `estimateneest-stack.ts:1275`
+
+**Problem**:
+The global (CloudFront) WAF ACL is only created when `this.region === 'us-east-1'`. CloudFront WAF ACLs must be created in `us-east-1`, but if the stack deploys to any other region, the CloudFront distribution has **no WAF protection**.
+
+**Impact**:
+CloudFront distributes content without WAF filtering — no OWASP rules, no rate limiting at the CDN edge.
+
+**Fix**:
+The infrastructure must always deploy the CloudFront WAF ACL to `us-east-1` regardless of the main deployment region. Options:
+1. Use a separate stack in us-east-1 for the CloudFront WAF
+2. Require the main stack to deploy to us-east-1 when `isProduction`
+
+---
+
+#### 16. CORS Wildcard Origin
+
+**Severity**: HIGH
+**Layer**: Infrastructure
+**File**: `estimateneest-stack.ts:651`
+
+**Problem**:
+CORS is configured as `Cors.ALL_ORIGINS` with a TODO comment: `// TODO: Revert to stricter CORS after debugging`.
+
+**Impact**:
+Any domain can make requests to the API. While this is acceptable for a public API without cookies/credentials, it increases the attack surface — an XSS on any site could potentially use the API key (visible in client-side code) to interact with the API.
+
+**Fix**:
+Restrict to known frontend origins (e.g., `https://estimatenest.net`, `https://dev.estimatenest.net`).
+
+---
+
+### P2 — MEDIUM PRIORITY (Within 2-3 Sprints)
+
+| # | Finding | Layer | File | Issue |
+|---|---------|-------|------|-------|
+| 17 | Scheduled auto-reveal uses `ScanCommand` | Backend | `scheduled-auto-reveal.ts:134-145` | `Scan` on Rounds table doesn't scale. Filter `isRevealed=false` over scanned data. Also no `ConditionExpression` on reveal `UpdateCommand` (line 156-166), allowing double-reveal. |
+| 18 | `handleNewRound` partial failure risk | Backend | `vote.ts:1026-1097` | Marks all unrevealed rounds as revealed by iterating and updating each. No transaction — failure mid-loop leaves inconsistent state. |
+| 19 | Moderator reassignment race | Backend | `websocket-disconnect.ts:56-108` | Two moderators disconnecting simultaneously race on reading participant list and assigning new moderator. |
+| 20 | Excessive logging with PII | Backend | `vote.ts:415-427` | `console.log` dumps full participant lists with names, connectionIds, and vote values. CloudWatch cost + PII exposure. |
+| 21 | API Gateway usage plan 10K req/month | Infra | `estimateneest-stack.ts:742` | ~333 requests/day. At 100 req/min allowance, quota hit in under 2 hours at sustained traffic. Way too low for production. |
+| 22 | No request correlation ID | Backend | All handlers | Log entries lack trace/request ID. Hard to correlate log lines across Lambda invocations without structured logging. |
+| 23 | WebSocket singleton holds stale state | Frontend | `websocket-service.ts:22` | `WebSocketService` singleton persists across room changes. May hold references to stale room/participant data. |
+| 24 | HTTP polling never stops | Frontend | `use-room-connection.ts:284` | 5-second HTTP polling runs alongside healthy WebSocket indefinitely. Unnecessary network traffic. |
+| 25 | "View all history" button dead | Frontend | `RoomPage.tsx:990` | Clickable `<button>` element with no `onClick` handler. Incomplete feature or should be non-interactive. |
+| 26 | Password dialog lacks ARIA modal | Frontend | `HomePage.tsx:390-440` | No `role="dialog"`, `aria-modal`, focus trap, or Escape key handler. Violates WCAG. |
+| 27 | Broadcast/cache create own DynamoDB clients | Backend | `broadcast.ts:12-13`, `cache.ts:197` | Separate client instances bypass X-Ray tracing. Connection pools duplicated. |
+
+---
+
+### P3 — LOW PRIORITY / TECH DEBT (Backlog)
+
+| # | Finding | Layer | File | Details |
+|---|---------|-------|------|---------|
+| 28 | Invalid JSON body returns 500 | Backend | `create-room.ts:35` | Should return 400. |
+| 29 | In-memory cache unbounded | Backend | `cache.ts` | Maps grow unlimited on long-running Lambda. No eviction beyond TTL. |
+| 30 | No TTL on orphaned records | Backend | Participants/Votes tables | Parent rows cleaned up by Room TTL, but associated participant/vote records orphaned. |
+| 31 | Auto-reveal re-throws causing retries | Backend | `scheduled-auto-reveal.ts:214` | Async Lambda retry (2 retries). Could cause duplicate reveals. |
+| 32 | `DeploymentTimestamp` tag churn | Infra | `app.ts:36` | Tag changes every deploy, causing CloudFormation drift detection noise. |
+| 33 | Dev/prod share ACM certs | Infra | `cdk.json:11-20` | Same certificate ARN for dev and prod. Cert rotation/expiry affects both. |
+| 34 | Lambda alarm IDs use numeric indices | Infra | `estimateneest-stack.ts:959` | Reordering functions changes logical IDs, risking resource replacement. |
+| 35 | CreateRoom fallback `example.com` | Infra | `estimateneest-stack.ts:179` | If `domainName` undefined, join URLs use `example.com`. |
+| 36 | Dead code: `addVote`, `clearError` | Frontend | `store/room-store.ts:48`, `store/connection-store.ts:29` | Methods defined but never called anywhere. |
+| 37 | Dead deps: `@dicebear/*` | Frontend | `package.json` | DiceBear (~60KB) imported but Avatar uses custom initials. Not used anywhere. |
+| 38 | Unused CSS classes | Frontend | `index.css:37-54` | `.rhythm-1` through `.rhythm-6` never referenced in any TSX. |
+| 39 | Invalid Tailwind class | Frontend | `RoomPage.tsx:208,285` | `gray-750` not in custom palette (only 50-900 defined). No effect. |
+| 40 | Duplicated SVG icon paths | Frontend | Multiple | Edit icon (pencil) and chevron SVG paths duplicated across files. Extract to shared component. |
+| 41 | RoomPage.tsx is 994 lines | Frontend | `RoomPage.tsx` | Needs extraction of voting panel, participant list, room controls, and round history into separate components. |
+
+---
 
 ## Architectural Strengths to Preserve
 
-1. **Clean monorepo structure** – Workspaces with clear dependencies
-2. **Real-time WebSocket with polling fallback** – Resilient connectivity
-3. **Comprehensive CDK infrastructure** – Full IaC with custom domains
-4. **Type safety throughout** – Shared TypeScript interfaces
-5. **Local development server** – Excellent developer experience
-6. **Zod validation implemented** – Runtime type safety for all handlers
-
-## Recommendation
-
-**Immediate focus on completing security hardening (Phase 1)** - rate limiting and IAM refinement present the highest risk. The recent voting bug fixes have stabilized core functionality, but production-scale deployment requires the security and performance optimizations outlined above.
-
-**Execution approach**:
-
-1. **Parallel workstreams**: Security (P0) + Performance (P1) can run concurrently with separate teams
-2. **Incremental deployment**: Blue-green for API changes, feature flags for frontend
-3. **Continuous validation**: Load testing after each phase to verify improvements
-
-**Estimated engineering effort**: 7 weeks with 2-3 engineers focused, or 4-5 weeks with dedicated cross-functional team. All P0-P1 items addressable within 6 weeks, reaching production-ready state by end of Phase 3.
+1. **Clean monorepo structure** — npm workspaces with clear dependency order (shared → backend → frontend → infrastructure)
+2. **TypeScript throughout** — end-to-end type safety from shared Zod schemas to handler code to frontend
+3. **Comprehensive CDK IaC** — full AWS infrastructure defined as code with blue-green deployment support
+4. **Real-time WebSocket with polling fallback** — resilient connectivity with graceful degradation
+5. **Zod validation on all API endpoints** — runtime type safety separates validation from business logic
+6. **Rate limiting** — DynamoDB-backed per-connection, per-message-type rate limiting
+7. **Idempotent voting** — SHA256-based idempotency key prevents duplicate vote recording
+8. **Cache invalidation on mutation** — every write operation invalidates relevant in-memory caches
+9. **Optimistic locking for active rounds** — conditional writes prevent duplicate round creation
+10. **Granular IAM permissions** — least-privilege per-table, per-operation IAM policies
+11. **Password security** — scrypt with random salt + timing-safe comparison
+12. **Stale connection cleanup** — `PostToConnection` failures (410/403) remove stale `connectionId` from participant records
 
 ---
 
-## Phase 4 Verification Results
+## Risk Matrix
 
-**Health Checks**: ✅ Green deployment health check passes (`https://api-green.estimatenest.net/health` returns 200 OK).  
-**Route 53 Cleanup**: ✅ No non-weighted A records present; cleanup step verified.  
-**Blue-Green Switching Script**: ✅ Dry-run successful with dev environment; rollback detection works; script correctly fetches CloudFormation outputs. Actual traffic switch verified (green active, blue inactive).  
-**Blue Stack Update**: ✅ Redeployed successfully after removing invalid WAF association; CloudFrontDomainName output added; weight set to 0 (inactive). **Updated to latest version** (Week 3 changes deployed).  
-**Production Readiness**: ✅ Green stack deployed successfully with weight 100, serving production traffic. Blue stack updated to latest version as standby (weight 0). All Phase 4 deliverables completed.
+| Risk | Probability | Impact | Mitigation | Priority |
+|------|------------|--------|------------|----------|
+| DynamoDB TTL broken → cost overrun, infinite storage | Certain | High | Fix all handlers to write epoch seconds, not ISO strings | P0 #1 |
+| Alarms silent → operational blindness | Certain | High | Add SNS subscriptions (email/Slack/PagerDuty) | P0 #2 |
+| WebSocket leaks → resource exhaustion | High | Medium | Add disconnect on unmount, fix reconnect timer | P0 #3 |
+| White screen crash → total app failure | Medium | High | Wire ErrorBoundary in main.tsx | P0 #4 |
+| No PITR → permanent data loss | Low | Critical | Enable point-in-time recovery on all tables | P0 #5 |
+| Short code collision → data corruption | Low | High | Add ConditionExpression to PutCommand | P1 #6 |
+| Password bypass → unauthorized access | Medium | High | Always verify password when room has one | P1 #7 |
+| Unauthorized round creation → disruption | Medium | High | Add isModerator check to handleNewRound | P1 #8 |
+| Moderator race → duplicate moderators | Medium | Medium | Use conditional write for first-participant claim | P1 #9 |
+| Connection limit exceeded | Low | Medium | Use conditional write for connection tracking | P1 #10 |
+| Query data truncation | Low | Medium | Implement LastEvaluatedKey pagination | P1 #11 |
+| alert() usage → accessibility violation | High | Medium | Replace with toast/notification system | P1 #13 |
+| Room navigation stale state → data leak | Medium | High | Add roomCode change detection | P1 #14 |
+| CORS wildcard → XSS amplification | Low | Medium | Restrict to known frontend origins | P1 #16 |
 
-## Recent Fixes (April 19, 2026)
+---
 
-**Deprecation Warnings Resolved**: ✅ ESLint v9 migration across all workspaces, AWS CDK API deprecations fixed (arnForExecuteApiV2, S3BucketOrigin, metricThrottledRequestsForOperation), npm package updates (rimraf, glob, inflight, whatwg-encoding), Git default branch configuration updated.
+## Success Metrics (Targets)
 
-**CORS Issue Fixed**: ✅ Added CORS headers to API Gateway responses (DEFAULT_4XX, DEFAULT_5XX, ACCESS_DENIED, MISSING_AUTHENTICATION_TOKEN) to prevent 403 errors without CORS headers. Lambda bundling fixed by updating tsup configuration (CJS format, splitting: false) and removing default export from cache module.
+| Metric | Current | Target | Measurement |
+|--------|---------|--------|-------------|
+| P99 Latency (vote) | ~500ms | <200ms | CloudWatch Metrics |
+| Error Rate | Unknown | <0.1% | Lambda error logs |
+| Test Coverage | ~74% | >70% (maintained) | Vitest coverage |
+| Bundle Size | 54kb main | <150kb | Vite bundle analyzer |
+| Deployment Time | ~5min | <2min | GitHub Actions |
+| Monthly Cost | ~$50 | <$35 | AWS Cost Explorer |
+| Accessibility Violations | 11 alert() + ARIA gaps | 0 critical | aXe/lighthouse |
+| DynamoDB Ops/vote | ~8 | <8 | CloudWatch Metrics |
+| WebSocket Connections | No enforced limit | 100/room | API Gateway Metrics |
 
-**Production API Functionality Restored**: ✅ Blue and green stacks updated with corrected Lambda bundles; join room endpoint now returns proper 400/404 responses instead of 502 errors.
+---
 
-## Implementation Plan for Remaining P1 Items
+## Fix Status Summary
 
-### Week 1: DynamoDB Query Optimization
+| # | Finding | Priority | Status |
+|---|---------|----------|--------|
+| 1 | DynamoDB TTL Attribute Format Broken | P0 | ✅ FIXED |
+| 2 | SNS AlertTopic Has No Subscribers | P0 | ✅ FIXED |
+| 3 | WebSocket Connections Leak on Unmount | P0 | ✅ FIXED |
+| 4 | ErrorBoundary Exists but Is Never Used | P0 | ✅ FIXED |
+| 5 | No Point-in-Time Recovery | P0 | ⏸️ DEFERRED (data is ephemeral) |
+| 6 | Short Code Collision (No ConditionExpression) | P1 | ✅ FIXED |
+| 7 | Password Bypass via participantId | P1 | ⏸️ DEFERRED (acceptable behavior) |
+| 8 | No Moderator Check on newRound | P1 | ✅ FIXED |
+| 9 | Moderator Race Condition on Join | P1 | ✅ FIXED |
+| 10 | WebSocket Connection Limit Race | P1 | ✅ FIXED |
+| 11 | No Pagination on DynamoDB Queries | P1 | ⏸️ DEFERRED (not needed at current scale) |
+| 12 | Route Conflict /legal vs /:roomCode | P1 | ✅ FIXED |
+| 13 | 11x alert() Calls | P1 | ✅ FIXED |
+| 14 | Room-to-Room Navigation Stale State | P1 | ✅ FIXED |
+| 15 | CloudFront WAF Only in us-east-1 | P1 | ⏸️ DEFERRED (current behavior fine) |
+| 16 | CORS Wildcard Origin | P1 | ⏸️ DEFERRED (keep as-is) |
 
-1. ✅ **Add Composite GSI on ROUNDS_TABLE** (`(roomId, isRevealed)` with `startedAt` sort key) - 1-2 days (Completed)
-2. ✅ **Optimize join-room.ts queries** (5→3 when participantId provided) - 1 day (Completed)
+## Remaining Work
 
-### Week 2: Frontend Memory Leak Fixes
-
-3. ✅ **Remove hookId from dependency arrays** - 0.5 days (Completed)
-4. ✅ **Add setTimeout cleanup** - 0.5 days (Completed)
-5. ✅ **Implement exponential backoff for polling errors** - 1 day (Completed)
-
-### Week 3: Testing & Finalization
-
-6. **Increase test coverage to >70%** - 2-3 days
-   - ✅ **Fixed update-room test failures** (validation error handling, flaky test isolation)
-   - ✅ **Added health.test.ts** (3 tests)
-   - ✅ **Added round-history.test.ts** (7 tests)
-   - ✅ **Added cache unit tests** (9 tests)
-   - ✅ **Added broadcast utility tests** (11 tests)
-   - ✅ **Added vote handler tests** (10 tests, coverage increased to 57.6% statements, 71.42% functions)
-   - ✅ **Coverage target achieved** - additional tests added for remaining handlers (updateParticipant, newRound, updateRound), coverage improved to 74.33% statements, 88.57% functions, 68.07% branch (above 70% target)
-7. **Deploy changes to blue stack & traffic switch testing**
-   - ✅ **All backend tests pass** (77 passed, 0 skipped)
-   - ✅ **Infrastructure changes synthesized** (GSI, cache optimization)
-   - ✅ **Deployed to production blue stack** (updated to latest version, weight 0)
-   - ✅ **Health checks pass** (both blue and green stacks healthy)
-   - ✅ **Frontend updated** (both stacks have latest frontend builds)
-   - ✅ **Production traffic active on green** (weight 100), blue standby ready for rollback
-
-**Status**: Week 3 completed. All critical fixes applied, test coverage target achieved (>70%), production deployment completed with both blue and green stacks synced. Production traffic active on green, blue standby ready for rollback. All P1 tasks completed.
+| # | Finding | Priority |
+|---|---------|----------|
+| 5 | No Point-in-Time Recovery | P0 deferred |
+| 11 | No Pagination on DynamoDB Queries | P1 deferred |
+| 15 | CloudFront WAF Only in us-east-1 | P1 deferred |
+| 16 | CORS Wildcard Origin | P1 deferred |
+| 17-41 | P2 and P3 items | Various (in backlog) |
+```

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import { useRoomConnection } from '../hooks/use-room-connection';
 import { useConnectionStore } from '../store/connection-store';
 import { ApiError } from '../lib/api-client';
@@ -70,13 +71,13 @@ export default function HomePage() {
       navigate(`/${createdRoom.shortCode}`);
     } catch (error) {
       console.error('Failed to join created room:', error);
-      alert('Failed to join room. Please try again.');
+      toast.error('Failed to join room. Please try again.');
     }
   };
 
   const handleJoinRoom = async () => {
     if (!roomCode.trim()) {
-      alert('Please enter a room code');
+      toast.error('Please enter a room code');
       return;
     }
 
@@ -130,7 +131,7 @@ export default function HomePage() {
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text).then(() => {
-      alert('Copied to clipboard!');
+      toast.success('Copied to clipboard!');
     });
   };
 

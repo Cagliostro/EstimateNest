@@ -16,6 +16,7 @@ import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as sns from 'aws-cdk-lib/aws-sns';
+import * as subscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import { Construct } from 'constructs';
@@ -929,6 +930,10 @@ export class EstimateNestStack extends cdk.Stack {
     const alertTopic = new sns.Topic(this, 'AlertTopic', {
       displayName: `EstimateNest-${props.envName}-${deploymentColor}-Alerts`,
     });
+
+    alertTopic.addSubscription(
+      new subscriptions.EmailSubscription('sebastian.roekens@googlemail.com')
+    );
 
     // ====================
     // CloudWatch Alarms

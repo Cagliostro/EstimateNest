@@ -439,6 +439,7 @@ export function useRoomConnection() {
       handlersRegisteredRef.current = false;
       // Clear polling interval on unmount
       stopPolling();
+      service.disconnect();
     };
   }, [handleWebSocketMessage, service, stopPolling]);
 

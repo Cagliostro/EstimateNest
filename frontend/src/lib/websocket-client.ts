@@ -141,6 +141,13 @@ export class WebSocketClient {
       this.log('WebSocket closed:', event.code, event.reason);
       this.setState('disconnected');
 
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+
+      this.ws = null;
+
       // Check if this is a rate limit closure (code 1008 or reason contains "rate limit")
       const isRateLimit =
         event.code === 1008 ||

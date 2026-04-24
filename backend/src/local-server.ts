@@ -44,7 +44,7 @@ app.post('/rooms', (req, res) => {
     const roomId = uuidv4();
     const shortCode = generateShortCode();
     const now = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    const expiresAt = Math.floor(Date.now() / 1000) + 14 * 24 * 60 * 60;
 
     const room: Room = {
       id: roomId,
