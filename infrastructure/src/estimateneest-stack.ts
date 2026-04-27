@@ -561,7 +561,7 @@ export class EstimateNestStack extends cdk.Stack {
         resources: [`${roundsTable.tableArn}/index/*`],
       })
     );
-    roomsTable.grantReadData(joinRoomHandler);
+    roomsTable.grantReadWriteData(joinRoomHandler);
     votesTable.grantReadData(joinRoomHandler);
     // round-history.ts: Reads room codes, rounds, and votes
     roomCodesTable.grantReadData(roundHistoryHandler);
