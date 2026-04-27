@@ -122,6 +122,11 @@ describe('join-room handler', () => {
       Items: [],
     });
 
+    // Mock latest rounds GSI query (fallback, no rounds)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [],
+    });
+
     // Mock votes query (none)
     mockDynamoDB.send.mockResolvedValueOnce({
       Items: [],
@@ -212,6 +217,11 @@ describe('join-room handler', () => {
     });
 
     // Mock rounds query (no rounds)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [],
+    });
+
+    // Mock latest rounds GSI query (fallback, no rounds)
     mockDynamoDB.send.mockResolvedValueOnce({
       Items: [],
     });

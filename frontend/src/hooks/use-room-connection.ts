@@ -131,16 +131,6 @@ export function useRoomConnection() {
   }, []);
 
   /**
-   * Start polling for room state updates
-   */
-  const startPolling = useCallback((roomCode: string, participantId: string) => {
-    pollingRoomCodeRef.current = roomCode;
-    pollingParticipantIdRef.current = participantId;
-    pollingErrorCountRef.current = 0;
-    setPollingDelay(5000);
-  }, []);
-
-  /**
    * Stop polling
    */
   const stopPolling = useCallback(() => {
@@ -280,8 +270,10 @@ export function useRoomConnection() {
         // 7. Connect WebSocket via service
         service.connect(joinResponse.roomId, joinResponse.participantId);
 
-        // 8. Start polling for room state updates (fallback for WebSocket issues)
-        startPolling(roomCode, joinResponse.participantId);
+        // 8. Save polling params for fallback (polling starts only if WebSocket disconnects)
+        pollingRoomCodeRef.current = roomCode;
+        pollingParticipantIdRef.current = joinResponse.participantId;
+        pollingErrorCountRef.current = 0;
 
         return joinResponse;
       } catch (error) {
@@ -293,7 +285,7 @@ export function useRoomConnection() {
         throw error;
       }
     },
-    [startPolling, service]
+    [service]
   );
 
   /**
@@ -303,6 +295,8 @@ export function useRoomConnection() {
     console.log(`[EstimateNest] [${hookId}] disconnect called`);
     service.disconnect();
     stopPolling();
+    pollingRoomCodeRef.current = null;
+    pollingParticipantIdRef.current = null;
     useRoomStore.getState().clearRoom();
     useParticipantStore.getState().clearParticipant();
     useConnectionStore.getState().setDisconnected();
@@ -460,8 +454,13 @@ export function useRoomConnection() {
       console.log(`[EstimateNest] [${currentHookId}] State change callback:`, state);
       if (state === 'connected') {
         useConnectionStore.getState().setConnected();
+        setPollingDelay(null);
       } else if (state === 'disconnected' || state === 'error') {
         useConnectionStore.getState().setDisconnected();
+        if (pollingRoomCodeRef.current && pollingParticipantIdRef.current) {
+          pollingErrorCountRef.current = 0;
+          setPollingDelay(5000);
+        }
       } else if (state === 'connecting') {
         useConnectionStore.getState().setConnecting();
       }

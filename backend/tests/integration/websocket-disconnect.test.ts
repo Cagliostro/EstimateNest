@@ -22,6 +22,7 @@ vi.mock('@aws-sdk/lib-dynamodb', () => ({
   },
   QueryCommand: vi.fn(),
   UpdateCommand: vi.fn(),
+  TransactWriteCommand: vi.fn(),
 }));
 
 // Mock the broadcast utilities
@@ -82,6 +83,9 @@ describe('websocket-disconnect handler', () => {
         },
       ],
     });
+
+    // Mock room connection count decrement (UpdateCommand)
+    mockDynamoDB.send.mockResolvedValueOnce({});
 
     // Mock participant update (UpdateCommand to remove connectionId)
     mockDynamoDB.send.mockResolvedValueOnce({});
@@ -185,6 +189,9 @@ describe('websocket-disconnect handler', () => {
         },
       ],
     });
+
+    // Mock room connection count decrement (UpdateCommand)
+    mockDynamoDB.send.mockResolvedValueOnce({});
 
     // Mock participant update
     mockDynamoDB.send.mockResolvedValueOnce({});

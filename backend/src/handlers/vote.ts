@@ -1,8 +1,5 @@
 // Vote handler for WebSocket messages
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import AWSXRay from 'aws-xray-sdk';
 import {
-  DynamoDBDocumentClient,
   DeleteCommand,
   GetCommand,
   PutCommand,
@@ -10,6 +7,8 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
+import { getDocClient } from '../utils/dynamodb';
+import { createLogger } from '../utils/logger';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
@@ -88,8 +87,7 @@ async function checkRateLimit(
   return true;
 }
 
-const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
-const docClient = DynamoDBDocumentClient.from(client);
+const docClient = getDocClient();
 
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 const ROUNDS_TABLE = process.env.ROUNDS_TABLE!;
@@ -111,15 +109,16 @@ async function getOrCreateActiveRound(
   roomId: string,
   retryCount = 0
 ): Promise<{ roundId: string; round: Round }> {
+  const logger = createLogger();
   const MAX_RETRIES = 3;
-  console.log('getOrCreateActiveRound called for room:', roomId, 'retry:', retryCount);
+  logger.info('getOrCreateActiveRound called', { roomId, retry: retryCount });
   // Try cache first
   const cachedRound = await cacheManager.getActiveRoundWithCache(roomId);
   if (cachedRound) {
-    console.log('Found cached round:', cachedRound.id);
+    logger.info('Found cached round', { roundId: cachedRound.id });
     return { roundId: cachedRound.id, round: cachedRound };
   }
-  console.log('No cached round, creating new one');
+  logger.info('No cached round, creating new one');
 
   const newRoundId = uuidv4();
   const now = new Date().toISOString();
@@ -165,7 +164,7 @@ async function getOrCreateActiveRound(
 
     // Invalidate cache
     cacheManager.invalidateActiveRound(roomId);
-    console.log('Successfully created new round:', newRoundId, 'for room:', roomId);
+    logger.info('Successfully created new round', { roomId, roundId: newRoundId });
     return { roundId: newRoundId, round: newRound };
   } catch (error) {
     if ((error as Error).name === 'ConditionalCheckFailedException') {
@@ -181,7 +180,7 @@ async function getOrCreateActiveRound(
       const activeItem = activeItemResult.Item;
       if (!activeItem || !activeItem.activeRoundId) {
         // Should not happen, retry with increment
-        console.warn('Active item missing activeRoundId, retrying', { roomId, activeItem });
+        logger.warn('Active item missing activeRoundId, retrying', { roomId });
         if (retryCount >= MAX_RETRIES) {
           throw new Error(
             `Max retries (${MAX_RETRIES}) exceeded while trying to create active round`
@@ -201,7 +200,7 @@ async function getOrCreateActiveRound(
       const item = roundResult.Item;
       if (!item) {
         // Round item missing, clean up broken active item and retry
-        console.error('Round item missing for activeRoundId, cleaning up', {
+        logger.error('Round item missing for activeRoundId, cleaning up', {
           roomId,
           existingRoundId,
         });
@@ -229,7 +228,9 @@ async function getOrCreateActiveRound(
         scheduledRevealAt: item.scheduledRevealAt || undefined,
       };
 
-      console.log('Found existing round created by another participant:', existingRoundId);
+      logger.info('Found existing round created by another participant', {
+        roundId: existingRoundId,
+      });
       return { roundId: existingRoundId, round };
     }
     throw error;
@@ -240,9 +241,8 @@ async function handleVote(
   event: APIGatewayProxyEvent,
   message: WebSocketMessage & { type: 'vote' }
 ) {
-  console.log('=== VOTE HANDLER START ===');
-  console.log('Connection ID:', event.requestContext.connectionId);
-  console.log('Message payload:', JSON.stringify(message.payload));
+  const logger = createLogger();
+  logger.info('Vote handler start');
   const { connectionId } = event.requestContext;
   const { roundId: requestedRoundId = '', value } = message.payload;
 
@@ -267,11 +267,9 @@ async function handleVote(
   if (!participant) {
     throw new Error('Participant not found');
   }
-  console.log('Found participant:', {
-    participantId: participant.participantId,
+  logger.info('Found participant', {
     roomId: participant.roomId,
     isModerator: participant.isModerator,
-    connectionId: participant.connectionId,
   });
 
   const { roomId, participantId } = participant;
@@ -289,7 +287,6 @@ async function handleVote(
   // Determine active round
   let roundId = requestedRoundId;
   let round: Round;
-  console.log('RoundId provided:', roundId);
   if (roundId) {
     // Get the specified round
     const roundResult = await docClient.send(
@@ -317,14 +314,8 @@ async function handleVote(
       throw new Error('Round is already revealed');
     }
   } else {
-    console.log('No roundId provided, finding or creating active round');
+    logger.info('No roundId provided, finding or creating active round');
     const activeRoundResult = await getOrCreateActiveRound(roomId);
-    console.log('getOrCreateActiveRound result:', {
-      roundId: activeRoundResult.roundId,
-      round: activeRoundResult.round,
-      hasRound: !!activeRoundResult.round,
-      roundKeys: activeRoundResult.round ? Object.keys(activeRoundResult.round) : [],
-    });
     round = activeRoundResult.round;
     roundId = activeRoundResult.roundId;
   }
@@ -337,9 +328,7 @@ async function handleVote(
   if (!round) {
     throw new Error('round is undefined after getOrCreateActiveRound');
   }
-  console.log('Round object for voting:', JSON.stringify(round));
   // Create vote
-  console.log('Creating vote with roundId:', roundId, 'participantId:', participantId);
   const voteId = uuidv4();
   const votedAt = new Date().toISOString();
   const idempotencyKey = createHash('sha256')
@@ -354,7 +343,7 @@ async function handleVote(
   };
 
   // Store vote and update round in transaction
-  console.log('Attempting vote transaction...', { roomId, roundId, participantId, voteId });
+  logger.debug('Attempting vote transaction', { roomId, roundId });
   try {
     await docClient.send(
       new TransactWriteCommand({
@@ -389,16 +378,9 @@ async function handleVote(
         ],
       })
     );
-    console.log('Vote transaction successful for participant:', participantId, 'roundId:', roundId);
+    logger.info('Vote transaction successful', { roundId });
   } catch (transactionError) {
-    console.error('Vote transaction failed:', transactionError);
-    console.error('Transaction details:', {
-      roomId,
-      roundId,
-      participantId,
-      voteId,
-      idempotencyKey,
-    });
+    logger.error('Vote transaction failed', { error: transactionError, roundId });
     throw transactionError; // Re-throw to trigger error response
   }
 
@@ -411,27 +393,16 @@ async function handleVote(
     (p) => p.connectionId && p.connectionId !== 'REST'
   );
 
-  // Log participant details for debugging
-  console.log(
-    'All participants:',
-    participants.map((p) => ({
-      id: p.id,
-      name: p.name,
-      connectionId: p.connectionId,
-      isModerator: p.isModerator,
-    }))
-  );
-  console.log(
-    'Active participants:',
-    activeParticipants.map((p) => ({ id: p.id, name: p.name, connectionId: p.connectionId }))
-  );
+  logger.info('Participant details', {
+    total: participants.length,
+    active: activeParticipants.length,
+    moderators: participants.filter((p) => p.isModerator).length,
+  });
 
   // Fetch all votes for this round to broadcast, with aggressive retry for consistency
   let votes: Vote[] = [];
   const expectedVoteCount = activeParticipants.length;
-  console.log(
-    `Expected vote count: ${expectedVoteCount} (active participants), roundId: ${roundId}`
-  );
+  logger.debug('Expected vote count', { expectedVoteCount, roundId });
 
   const MAX_ATTEMPTS = 4;
   const BASE_DELAY_MS = 100;
@@ -454,16 +425,11 @@ async function handleVote(
     );
     const queryDuration = Date.now() - queryStart;
     votes = (votesResult.Items as Vote[]) || [];
-    console.log(
-      `Votes query attempt ${attempt + 1}:`,
-      votes.length,
-      'votes',
-      `(${queryDuration}ms)`
-    );
-    console.log(
-      `Votes details:`,
-      votes.map((v) => ({ participantId: v.participantId, value: v.value, voteId: v.id }))
-    );
+    logger.debug('Votes query attempt', {
+      attempt: attempt + 1,
+      count: votes.length,
+      queryDuration,
+    });
 
     // Log which votes we found vs expected participants
     const foundParticipantIds = votes.map((v) => v.participantId);
@@ -472,29 +438,31 @@ async function handleVote(
       .map((p) => p.id);
 
     if (missingParticipantIds.length > 0) {
-      console.log(`Missing votes for participants: ${missingParticipantIds.join(', ')}`);
+      logger.debug('Missing votes for participants', {
+        missingCount: missingParticipantIds.length,
+      });
     }
 
     // If we have all expected votes, break immediately
     if (votes.length >= expectedVoteCount && expectedVoteCount > 0) {
-      console.log(`Found all ${expectedVoteCount} expected votes`);
+      logger.debug('Found all expected votes', { count: expectedVoteCount });
       break;
     }
 
     // If no active participants (shouldn't happen), break
     if (expectedVoteCount === 0) {
-      console.log('No active participants, no votes expected');
+      logger.debug('No active participants, no votes expected');
       break;
     }
 
     // Wait before retrying (exponential backoff with cap)
     const delayMs = Math.min(BASE_DELAY_MS * Math.pow(1.5, attempt), MAX_DELAY_MS);
-    console.log(`Waiting ${delayMs}ms before retry (attempt ${attempt + 1}/${MAX_ATTEMPTS})...`);
+    logger.debug('Waiting before retry', { delayMs, attempt: attempt + 1 });
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
   const totalQueryDuration = Date.now() - totalQueryStart;
-  console.log(`Total votes query duration: ${totalQueryDuration}ms, attempts: ${attemptsUsed}`);
+  logger.debug('Total votes query', { totalQueryDuration, attemptsUsed });
 
   // Check if we're still missing votes after all retries
   const foundParticipantIds = votes.map((v) => v.participantId);
@@ -504,10 +472,11 @@ async function handleVote(
 
   // If still missing votes after all retries, try one more time with longer delay
   if (missingParticipantIdsAfterRetry.length > 0 && votes.length < expectedVoteCount) {
-    console.warn(
-      `🚨 After ${MAX_ATTEMPTS} retries, still missing votes for participants: ${missingParticipantIdsAfterRetry.join(', ')}`
-    );
-    console.warn(`Waiting 2 seconds for final attempt...`);
+    logger.warn('Missing votes after retries, waiting for final attempt', {
+      missingCount: missingParticipantIdsAfterRetry.length,
+      expectedVoteCount,
+      roundId,
+    });
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // Final attempt
@@ -522,7 +491,7 @@ async function handleVote(
       })
     );
     votes = (finalVotesResult.Items as Vote[]) || [];
-    console.log(`Final votes query after 5s wait:`, votes.length, 'votes');
+    logger.info('Final votes query after wait', { count: votes.length });
 
     const finalFoundParticipantIds = votes.map((v) => v.participantId);
     const finalMissingParticipantIds = activeParticipants
@@ -530,89 +499,52 @@ async function handleVote(
       .map((p) => p.id);
 
     if (finalMissingParticipantIds.length > 0) {
-      console.error(
-        `💥 CRITICAL: After ${MAX_ATTEMPTS} retries + 5s wait, STILL missing votes for participants: ${finalMissingParticipantIds.join(', ')}`
-      );
-      console.error(
-        `Broadcasting with only ${votes.length} of ${expectedVoteCount} expected votes. Database consistency issue! Round: ${roundId}`
-      );
+      logger.error('CRITICAL: Still missing votes after final wait', {
+        missingCount: finalMissingParticipantIds.length,
+        expectedVoteCount,
+        roundId,
+      });
     } else {
-      console.log(`✅ Successfully retrieved all ${expectedVoteCount} votes after final wait`);
+      logger.info('Successfully retrieved all votes after final wait', {
+        count: expectedVoteCount,
+      });
     }
   } else if (votes.length === expectedVoteCount) {
-    console.log(`✅ Successfully retrieved all ${expectedVoteCount} votes for round ${roundId}`);
+    logger.info('Successfully retrieved all votes', { count: expectedVoteCount, roundId });
   }
 
-  console.log(
-    'Votes for round:',
-    roundId,
-    votes.map((v) => ({ participantId: v.participantId, value: v.value, voteId: v.id }))
-  );
-
-  console.log(
-    'Auto-reveal check participants:',
-    participants.map((p) => ({
-      id: p.id,
-      name: p.name,
-      isModerator: p.isModerator,
-      connectionId: p.connectionId,
-    }))
-  );
-  console.log(
-    'Auto-reveal check active participants:',
-    activeParticipants.map((p) => ({ id: p.id, name: p.name, connectionId: p.connectionId }))
-  );
-  console.log(
-    'Auto-reveal check votes:',
-    votes.length,
-    'votes',
-    votes.map((v) => ({ participantId: v.participantId, value: v.value }))
-  );
   const allVoted = votes.length === activeParticipants.length && activeParticipants.length > 0;
-  console.log(
-    `All voted check: votes=${votes.length}, participants=${participants.length}, activeParticipants=${activeParticipants.length}, allVoted=${allVoted}, round.isRevealed=${round.isRevealed}`
-  );
+  logger.info('All voted check', {
+    votesCount: votes.length,
+    participantsCount: participants.length,
+    activeParticipantsCount: activeParticipants.length,
+    allVoted,
+    roundIsRevealed: round.isRevealed,
+  });
   // Detailed debug
-  console.log(
-    'Active participant IDs:',
-    activeParticipants.map((p) => p.id)
-  );
-  console.log(
-    'Vote participant IDs:',
-    votes.map((v) => v.participantId)
-  );
-  console.log(
-    'Missing voters:',
-    activeParticipants.filter((p) => !votes.find((v) => v.participantId === p.id)).map((p) => p.id)
-  );
+  const missingVoterIds = activeParticipants
+    .filter((p) => !votes.find((v) => v.participantId === p.id))
+    .map((p) => p.id);
+  if (missingVoterIds.length > 0) {
+    logger.debug('Missing voters', { count: missingVoterIds.length });
+  }
 
   // Fetch room to check auto-reveal settings (cached)
   const roomSettings = (await getRoomWithCache(roomId)) as Room | undefined;
-  console.log('Auto-reveal room settings:', {
-    autoRevealEnabled: roomSettings?.autoRevealEnabled,
-    countdownSeconds: roomSettings?.autoRevealCountdownSeconds,
-    allowAllParticipantsToReveal: roomSettings?.allowAllParticipantsToReveal,
-    maxParticipants: roomSettings?.maxParticipants,
-  });
   const autoRevealEnabled = roomSettings?.autoRevealEnabled !== false; // default: true
   const countdownSeconds = roomSettings?.autoRevealCountdownSeconds ?? 3; // default: 3
 
   // If everyone voted, auto-reveal is enabled, and round not yet revealed
   if (allVoted && autoRevealEnabled && !round.isRevealed) {
-    console.log('All participants voted, checking if auto-reveal already scheduled', {
+    logger.info('All participants voted, checking auto-reveal', {
       roomId,
       roundId,
       countdownSeconds,
-      scheduledRevealAt: round.scheduledRevealAt,
     });
 
     // Only schedule auto-reveal if not already scheduled (prevents duplicate countdowns)
     if (!round.scheduledRevealAt) {
-      console.log('Scheduling auto-reveal', {
-        roomId,
-        roundId,
-        countdownSeconds,
-      });
+      logger.info('Scheduling auto-reveal', { roomId, roundId, countdownSeconds });
 
       // Broadcast countdown start to all participants
       await broadcastToRoom(event, roomId, {
@@ -633,15 +565,11 @@ async function handleVote(
         })
       );
     } else {
-      console.log('Auto-reveal already scheduled, skipping duplicate countdown', {
-        scheduledRevealAt: round.scheduledRevealAt,
-      });
+      logger.info('Auto-reveal already scheduled, skipping duplicate countdown');
     }
   }
 
-  console.log('Broadcasting round update', { roomId, roundId, votesCount: votes.length });
-  const { domainName, stage } = event.requestContext;
-  console.log('Endpoint info:', { domainName, stage });
+  logger.info('Broadcasting round update', { roomId, roundId, votesCount: votes.length });
 
   // Send acknowledgment to voter
   try {
@@ -649,9 +577,8 @@ async function handleVote(
       type: 'ack',
       payload: { message: 'Vote recorded', roundId },
     });
-    console.log('Acknowledgment sent to voter:', connectionId);
   } catch (ackError) {
-    console.warn('Failed to send acknowledgment to voter:', ackError);
+    logger.warn('Failed to send acknowledgment to voter', { error: ackError });
     // Continue anyway
   }
 
@@ -661,9 +588,9 @@ async function handleVote(
       type: 'roundUpdate',
       payload: { round, votes },
     });
-    console.log('Broadcast completed');
+    logger.info('Broadcast completed');
   } catch (broadcastError) {
-    console.error('Failed to broadcast round update:', broadcastError);
+    logger.error('Failed to broadcast round update', { error: broadcastError });
     // Still return success since vote was recorded
   }
 
@@ -674,6 +601,7 @@ async function handleReveal(
   event: APIGatewayProxyEvent,
   message: WebSocketMessage & { type: 'reveal' }
 ) {
+  const logger = createLogger();
   const { connectionId } = event.requestContext;
   const { roundId } = message.payload;
 
@@ -694,12 +622,9 @@ async function handleReveal(
   if (!participant) {
     throw new Error('Participant not found');
   }
-  console.log('Reveal participant found:', {
-    participantId: participant.id,
-    name: participant.name,
-    connectionId: participant.connectionId,
-    isModerator: participant.isModerator,
+  logger.info('Reveal participant found', {
     roomId: participant.roomId,
+    isModerator: participant.isModerator,
   });
 
   const { roomId } = participant;
@@ -719,37 +644,19 @@ async function handleReveal(
 
   // Check if this is an auto-reveal (scheduledRevealAt is set and in the past)
   const isAutoReveal = item.scheduledRevealAt && new Date(item.scheduledRevealAt) <= new Date();
-  console.log('Auto-reveal check:', {
-    scheduledRevealAt: item.scheduledRevealAt,
-    scheduledRevealAtDate: item.scheduledRevealAt
-      ? new Date(item.scheduledRevealAt).toISOString()
-      : null,
-    now: new Date().toISOString(),
-    isAutoReveal,
-    participantIsModerator: participant.isModerator,
-    participantId: participant.id,
-    participantName: participant.name,
-  });
+  logger.info('Auto-reveal check', { isAutoReveal, roomId });
 
   // Fetch room to check allowAllParticipantsToReveal setting (cached)
-  console.log('Fetching room for reveal, roomId:', roomId);
   const room = (await getRoomWithCache(roomId)) as Room | undefined;
-  console.log(
-    'Room fetched:',
-    room ? 'found' : 'not found',
-    room ? { id: room.id, autoRevealEnabled: room.autoRevealEnabled } : null
-  );
   if (!room) {
     throw new Error('Room not found');
   }
 
   // Check if participant is moderator or room allows all participants to reveal
   // OR if this is an auto-reveal (scheduled reveal time has passed)
-  console.log('Reveal permission check:', {
-    participantIsModerator: participant.isModerator,
-    roomAllowAllParticipantsToReveal: room.allowAllParticipantsToReveal,
+  logger.info('Reveal permission check', {
+    isModerator: participant.isModerator,
     isAutoReveal,
-    allowed: participant.isModerator || room.allowAllParticipantsToReveal || isAutoReveal,
   });
   if (!participant.isModerator && !room.allowAllParticipantsToReveal && !isAutoReveal) {
     throw new Error('Only moderators can reveal votes');
@@ -771,7 +678,7 @@ async function handleReveal(
   }
 
   // Update round as revealed
-  console.log('Revealing round:', { roomId, roundId, isAutoReveal });
+  logger.info('Revealing round', { roomId, roundId, isAutoReveal });
   const revealedAt = new Date().toISOString();
   await docClient.send(
     new UpdateCommand({
@@ -813,26 +720,7 @@ async function handleReveal(
 
   // Debug: log participants before broadcast
   const participants = await cacheManager.getParticipantsWithCache(roomId);
-  console.log(
-    'Reveal broadcast participants:',
-    participants.map((p) => ({
-      id: p.id,
-      name: p.name,
-      connectionId: p.connectionId,
-      isModerator: p.isModerator,
-    }))
-  );
-  const moderator = participants.find((p) => p.isModerator);
-  console.log(
-    'Moderator participant:',
-    moderator
-      ? {
-          id: moderator.id,
-          connectionId: moderator.connectionId,
-          name: moderator.name,
-        }
-      : 'No moderator found'
-  );
+  logger.info('Reveal broadcast participants', { count: participants.length });
 
   // Broadcast round update with revealed votes
   await broadcastToRoom(event, roomId, {
@@ -895,17 +783,12 @@ async function handleUpdateParticipant(
   event: APIGatewayProxyEvent,
   message: WebSocketMessage & { type: 'updateParticipant' }
 ) {
-  console.log('========== handleUpdateParticipant START ==========');
-  console.log('handleUpdateParticipant called', {
-    connectionId: event.requestContext.connectionId,
-    name: message.payload.name,
-    message: JSON.stringify(message),
-  });
+  const logger = createLogger();
   const { connectionId } = event.requestContext;
   const { name } = message.payload;
 
   if (!name || typeof name !== 'string') {
-    console.error('Invalid name in updateParticipant:', name);
+    logger.error('Invalid name in updateParticipant');
     throw new Error('Invalid name');
   }
 
@@ -924,25 +807,16 @@ async function handleUpdateParticipant(
 
   const participant = queryResult.Items?.[0] as Participant | undefined;
   if (!participant) {
-    console.error('Participant not found for connectionId:', connectionId);
+    logger.error('Participant not found for connectionId');
     throw new Error('Participant not found');
   }
 
-  console.log('Found participant:', {
-    participantId: participant.participantId,
-    roomId: participant.roomId,
-    currentName: participant.name,
-  });
+  logger.info('Found participant for update', { roomId: participant.roomId });
   const { roomId, participantId } = participant;
   const avatarSeed = createAvatarSeed(name);
 
   // Update participant name and avatarSeed
-  console.log('Updating participant in DynamoDB:', {
-    roomId,
-    participantId,
-    newName: name,
-    avatarSeed,
-  });
+  logger.info('Updating participant name', { roomId });
   await docClient.send(
     new UpdateCommand({
       TableName: PARTICIPANTS_TABLE,
@@ -957,7 +831,7 @@ async function handleUpdateParticipant(
       },
     })
   );
-  console.log('Participant updated successfully');
+  logger.debug('Participant updated in DynamoDB');
 
   // Fetch all participants in the room
   const participantsResult = await docClient.send(
@@ -971,15 +845,14 @@ async function handleUpdateParticipant(
   );
 
   const participants = (participantsResult.Items as Participant[]) || [];
-  console.log('Fetched participants for broadcast:', participants.length, 'participants');
 
   // Broadcast participant list to everyone in the room
-  console.log('Broadcasting participantList to room:', roomId);
+  logger.info('Broadcasting participantList', { roomId, count: participants.length });
   await broadcastToRoom(event, roomId, {
     type: 'participantList',
     payload: { participants },
   });
-  console.log('Broadcast completed');
+  logger.info('Broadcast completed');
 
   // Send confirmation to the sender
   try {
@@ -987,9 +860,8 @@ async function handleUpdateParticipant(
       type: 'participantUpdated',
       payload: { success: true, name },
     });
-    console.log('Confirmation sent to sender');
   } catch (error) {
-    console.error('Failed to send confirmation:', error);
+    logger.error('Failed to send confirmation', { error });
   }
 
   return { message: 'Participant updated' };
@@ -999,6 +871,7 @@ async function handleNewRound(
   event: APIGatewayProxyEvent,
   message: WebSocketMessage & { type: 'newRound' }
 ) {
+  const logger = createLogger();
   const { connectionId } = event.requestContext;
   const { title, description } = message.payload;
 
@@ -1042,17 +915,17 @@ async function handleNewRound(
 
   // If there are existing unrevealed rounds, mark them all as revealed first
   if (activeRoundsResult.Items && activeRoundsResult.Items.length > 0) {
-    console.log(`Found ${activeRoundsResult.Items.length} unrevealed rounds, marking as revealed`);
+    logger.info('Found unrevealed rounds, marking as revealed', {
+      count: activeRoundsResult.Items.length,
+    });
 
-    for (const existingItem of activeRoundsResult.Items) {
+    const revealedAt = new Date().toISOString();
+
+    // Atomically mark all unrevealed rounds as revealed
+    const transactItems = activeRoundsResult.Items.map((existingItem) => {
       const existingRoundId = existingItem.roundId || existingItem.id;
-      console.log('Marking unrevealed round as revealed:', existingRoundId);
-
-      const revealedAt = new Date().toISOString();
-
-      // Mark existing round as revealed and clear any scheduled reveal
-      await docClient.send(
-        new UpdateCommand({
+      return {
+        Update: {
           TableName: ROUNDS_TABLE,
           Key: { roomId, roundId: existingRoundId },
           UpdateExpression:
@@ -1061,10 +934,16 @@ async function handleNewRound(
             ':true': true,
             ':revealedAt': revealedAt,
           },
-        })
-      );
+        },
+      };
+    });
 
-      // Fetch votes for the existing round
+    await docClient.send(new TransactWriteCommand({ TransactItems: transactItems }));
+
+    // Fetch votes and broadcast for each existing round (non-transactional reads)
+    for (const existingItem of activeRoundsResult.Items) {
+      const existingRoundId = existingItem.roundId || existingItem.id;
+
       const existingVotesResult = await docClient.send(
         new QueryCommand({
           TableName: VOTES_TABLE,
@@ -1077,7 +956,6 @@ async function handleNewRound(
       );
       const existingVotes = (existingVotesResult.Items as Vote[]) || [];
 
-      // Broadcast the existing round as revealed
       const existingRound: Round = {
         id: existingRoundId,
         roomId: existingItem.roomId,
@@ -1093,8 +971,6 @@ async function handleNewRound(
         type: 'roundUpdate',
         payload: { round: existingRound, votes: existingVotes },
       });
-
-      console.log('Existing round marked as revealed:', existingRoundId);
     }
     // Invalidate active round cache since we marked existing rounds as revealed
     cacheManager.invalidateActiveRound(roomId);
@@ -1136,7 +1012,7 @@ async function handleNewRound(
     })
   );
 
-  console.log('Created new round:', roundId);
+  logger.info('Created new round', { roundId });
   // Invalidate active round cache since we created a new active round
   cacheManager.invalidateActiveRound(roomId);
 
@@ -1276,25 +1152,13 @@ async function handleUpdateRound(
 }
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
-  console.log('========== VOTE HANDLER INVOKED ==========');
-  console.log('Vote handler updated for new message types');
-  console.log('Vote handler invoked', {
-    connectionId: event.requestContext.connectionId,
-    routeKey: event.requestContext.routeKey,
-    body: event.body,
-  });
-  try {
-    console.log('Raw body (parsed):', event.body ? JSON.parse(event.body) : null);
-  } catch (_e) {
-    console.log('Raw body (cannot parse):', event.body);
-  }
+  const logger = createLogger();
   let message: WebSocketMessage;
 
   try {
     message = JSON.parse(event.body || '{}');
-    console.log('Parsed message:', { type: message.type, payload: message.payload });
   } catch (error) {
-    console.error('Failed to parse JSON:', error, 'body:', event.body);
+    logger.error('Failed to parse JSON', { error, body: event.body });
     return {
       statusCode: 400,
       body: JSON.stringify({ error: 'Invalid JSON message' }),
@@ -1309,7 +1173,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       errors?: Array<{ path: string[]; message: string }>;
     };
     const issues = zodError.issues || zodError.errors;
-    console.error('Message validation failed:', issues);
+    logger.error('Message validation failed', { issues });
     return {
       statusCode: 400,
       body: JSON.stringify({
@@ -1337,7 +1201,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
   try {
     let result;
-    console.log('Processing message type:', message.type);
+    logger.info('Processing message type', { type: message.type });
     switch (message.type) {
       case 'vote':
         result = await handleVote(event, message);
@@ -1369,7 +1233,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       body: createSuccessResponse(result.message || 'Success'),
     };
   } catch (error: unknown) {
-    console.error('Handler error:', error);
+    logger.error('Handler error', { error });
     const e = error as { name?: string; message?: string };
 
     // Check for conditional check failure (duplicate vote)

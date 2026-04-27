@@ -696,7 +696,7 @@ describe('vote handler', () => {
           roomId,
           connectionId,
           name: 'Test User',
-          isModerator: false,
+          isModerator: true,
         },
       ],
     });

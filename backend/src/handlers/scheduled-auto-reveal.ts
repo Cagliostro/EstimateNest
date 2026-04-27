@@ -1,11 +1,6 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import AWSXRay from 'aws-xray-sdk';
-import {
-  DynamoDBDocumentClient,
-  ScanCommand,
-  UpdateCommand,
-  QueryCommand,
-} from '@aws-sdk/lib-dynamodb';
+import { ScanCommand, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { getDocClient } from '../utils/dynamodb';
+import { createLogger } from '../utils/logger';
 import {
   ApiGatewayManagementApiClient,
   PostToConnectionCommand,
@@ -14,8 +9,7 @@ import {
 import { getCacheManager } from '../utils/cache';
 import { WebSocketMessage, Round, Vote, Participant } from '@estimatenest/shared';
 
-const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
-const docClient = DynamoDBDocumentClient.from(client);
+const docClient = getDocClient();
 const cacheManager = getCacheManager();
 
 const ROUNDS_TABLE = process.env.ROUNDS_TABLE!;
@@ -48,6 +42,7 @@ async function broadcastRoundRevealed(
   votes: Vote[],
   participants: Participant[]
 ): Promise<void> {
+  const logger = createLogger();
   const endpoint = getWebSocketApiEndpoint();
   const apiGatewayClient = new ApiGatewayManagementApiClient({ endpoint });
 
@@ -60,7 +55,7 @@ async function broadcastRoundRevealed(
     (p) => p.connectionId && p.connectionId !== 'REST'
   );
 
-  console.log(`Broadcasting roundUpdate to ${activeParticipants.length} active connections`);
+  logger.info('Broadcasting roundUpdate', { count: activeParticipants.length });
 
   const promises = activeParticipants.map(async (participant) => {
     try {
@@ -70,9 +65,9 @@ async function broadcastRoundRevealed(
           Data: JSON.stringify(message),
         })
       );
-      console.log(`Successfully sent roundUpdate to ${participant.connectionId}`);
+      logger.info('Successfully sent roundUpdate');
     } catch (error) {
-      console.warn(`Failed to send message to connection ${participant.connectionId}:`, error);
+      logger.warn('Failed to send message to connection', { error });
       // If the connection is gone (410) or forbidden (403), clean up the stale connection ID
       const isStaleConnection =
         (error as ApiGatewayManagementApiServiceException).$metadata?.httpStatusCode === 410 ||
@@ -99,13 +94,11 @@ async function broadcastRoundRevealed(
               },
             })
           );
-          console.log(
-            `Cleaned up stale connection ${participant.connectionId} for participant ${participant.participantId}`
-          );
+          logger.info('Cleaned up stale connection', { roomId: participant.roomId });
           // Invalidate participant cache since participant connection changed
           cacheManager.invalidateParticipants(participant.roomId);
         } catch (cleanupError) {
-          console.error('Failed to clean up stale connection:', cleanupError);
+          logger.error('Failed to clean up stale connection', { error: cleanupError });
         }
       }
     }
@@ -119,7 +112,8 @@ async function broadcastRoundRevealed(
  * Runs every minute via EventBridge rule.
  */
 export const handler = async (): Promise<void> => {
-  console.log('Scheduled auto-reveal handler started');
+  const logger = createLogger();
+  logger.info('Scheduled auto-reveal handler started');
   const now = new Date().toISOString();
 
   // Validate required environment variables
@@ -145,12 +139,12 @@ export const handler = async (): Promise<void> => {
     );
 
     const rounds = scanResult.Items || [];
-    console.log(`Found ${rounds.length} rounds pending auto-reveal`);
+    logger.info('Found rounds pending auto-reveal', { count: rounds.length });
 
     for (const roundItem of rounds) {
       const roomId = roundItem.roomId;
       const roundId = roundItem.roundId || roundItem.id;
-      console.log(`Processing auto-reveal for round ${roundId} in room ${roomId}`);
+      logger.info('Processing auto-reveal for round', { roundId, roomId });
 
       // Update round as revealed
       await docClient.send(
@@ -207,12 +201,12 @@ export const handler = async (): Promise<void> => {
       // Broadcast round update to all participants
       await broadcastRoundRevealed(roomId, roundId, roundData, votes, participants);
 
-      console.log(`Round ${roundId} auto-revealed via scheduled Lambda and broadcasted`);
+      logger.info('Round auto-revealed via scheduled Lambda and broadcasted', { roundId });
     }
 
-    console.log('Scheduled auto-reveal handler completed');
+    logger.info('Scheduled auto-reveal handler completed');
   } catch (error) {
-    console.error('Scheduled auto-reveal error:', error);
+    logger.error('Scheduled auto-reveal error', { error });
     throw error;
   }
 };

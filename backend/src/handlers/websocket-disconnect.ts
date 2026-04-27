@@ -1,17 +1,17 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import AWSXRay from 'aws-xray-sdk';
-import { DynamoDBDocumentClient, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { QueryCommand, TransactWriteCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { getDocClient } from '../utils/dynamodb';
+import { createLogger } from '../utils/logger';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { broadcastToRoom } from '../utils/broadcast';
 import { getCacheManager } from '../utils/cache';
 
-const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
-const docClient = DynamoDBDocumentClient.from(client);
+const docClient = getDocClient();
 const cacheManager = getCacheManager();
 const ROOMS_TABLE = process.env.ROOMS_TABLE!;
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+  const logger = createLogger();
   const { connectionId } = event.requestContext;
 
   try {
@@ -80,41 +80,37 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           new Date(oldest.joinedAt) < new Date(current.joinedAt) ? oldest : current
         );
 
-        // Update new moderator
+        // Atomically reassign moderator role
         await docClient.send(
-          new UpdateCommand({
-            TableName: PARTICIPANTS_TABLE,
-            Key: { roomId, participantId: newModerator.id },
-            UpdateExpression: 'SET isModerator = :true',
-            ExpressionAttributeValues: {
-              ':true': true,
-            },
-          })
-        );
-
-        // Update disconnected participant to no longer be moderator
-        await docClient.send(
-          new UpdateCommand({
-            TableName: PARTICIPANTS_TABLE,
-            Key: { roomId, participantId },
-            UpdateExpression: 'SET isModerator = :false',
-            ExpressionAttributeValues: {
-              ':false': false,
-            },
+          new TransactWriteCommand({
+            TransactItems: [
+              {
+                Update: {
+                  TableName: PARTICIPANTS_TABLE,
+                  Key: { roomId, participantId: newModerator.id },
+                  UpdateExpression: 'SET isModerator = :true',
+                  ExpressionAttributeValues: { ':true': true },
+                },
+              },
+              {
+                Update: {
+                  TableName: PARTICIPANTS_TABLE,
+                  Key: { roomId, participantId },
+                  UpdateExpression: 'SET isModerator = :false',
+                  ExpressionAttributeValues: { ':false': false },
+                },
+              },
+            ],
           })
         );
 
         // Invalidate cache again since moderator status changed
         cacheManager.invalidateParticipants(roomId);
-        console.log(
-          `Moderator reassigned from ${participantId} to ${newModerator.id} in room ${roomId}`
-        );
+        logger.info('Moderator reassigned', { roomId });
       } else {
         // No other connected participants - keep disconnected participant as moderator
         // They may reconnect later
-        console.log(
-          `Moderator ${participantId} disconnected but no other connected participants to reassign to`
-        );
+        logger.info('Moderator disconnected with no reassignment candidates', { roomId });
       }
     }
 
@@ -131,7 +127,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       },
       connectionId
     ).catch((broadcastError) => {
-      console.warn('Broadcast participantList failed:', broadcastError);
+      logger.warn('Broadcast participantList failed', { error: broadcastError });
     });
 
     // Also send a leave notification for clients that track individual leaves (fire-and-forget)
@@ -144,7 +140,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       },
       connectionId
     ).catch((broadcastError) => {
-      console.warn('Broadcast leave failed:', broadcastError);
+      logger.warn('Broadcast leave failed', { error: broadcastError });
     });
 
     return {
@@ -152,7 +148,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       body: JSON.stringify({ type: 'disconnected', payload: { message: 'Disconnected' } }),
     };
   } catch (error) {
-    console.error('WebSocket disconnect error:', error);
+    logger.error('WebSocket disconnect error', { error });
     return {
       statusCode: 500,
       body: JSON.stringify({ type: 'error', payload: { error: 'Internal server error' } }),

@@ -1,6 +1,6 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import AWSXRay from 'aws-xray-sdk';
-import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { getDocClient } from '../utils/dynamodb';
+import { createLogger } from '../utils/logger';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import {
   Room,
@@ -12,14 +12,14 @@ import {
 import { ZodError } from 'zod';
 import { hashPassword } from '../utils/password';
 
-const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
-const docClient = DynamoDBDocumentClient.from(client);
+const docClient = getDocClient();
 
 const ROOMS_TABLE = process.env.ROOMS_TABLE!;
 const ROOM_CODES_TABLE = process.env.ROOM_CODES_TABLE!;
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+  const logger = createLogger();
   try {
     const { code } = event.pathParameters || {};
 
@@ -33,7 +33,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     try {
       validatedBody = validateUpdateRoomRequest(rawBody);
     } catch (error) {
-      console.error('Request validation failed:', error);
+      logger.error('Request validation failed', { error });
       const origin = event.headers.origin || event.headers.Origin;
       const headers = {
         'Content-Type': 'application/json',
@@ -233,7 +233,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       }),
     };
   } catch (error) {
-    console.error('Update room error:', error);
+    logger.error('Update room error', { error });
     const origin = event.headers.origin || event.headers.Origin;
     const headers = {
       'Content-Type': 'application/json',

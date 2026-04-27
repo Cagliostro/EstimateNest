@@ -125,10 +125,10 @@ describe('websocket-connect handler', () => {
       maxParticipants: 100,
     });
 
-    // Mock connection limit check (QueryCommand for count) - over limit
-    mockDynamoDB.send.mockResolvedValueOnce({
-      Count: 120, // over 100 limit
-    });
+    // Mock connection limit check (UpdateCommand with ConditionExpression) - over limit
+    const conditionalError = new Error('Conditional check failed');
+    (conditionalError as Error & { name: string }).name = 'ConditionalCheckFailedException';
+    mockDynamoDB.send.mockRejectedValueOnce(conditionalError);
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
     console.log('Response:', response.statusCode, response.body);

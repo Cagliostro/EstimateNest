@@ -1,5 +1,5 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, QueryCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
+import { getDocClient } from './dynamodb';
 import { Participant, Round } from '@estimatenest/shared';
 
 // Cache configuration
@@ -194,7 +194,7 @@ let sharedInstance: CacheManager | null = null;
 export function getCacheManager(): CacheManager {
   if (!sharedInstance) {
     sharedInstance = new CacheManager(
-      DynamoDBDocumentClient.from(new DynamoDBClient({})),
+      getDocClient(),
       process.env.PARTICIPANTS_TABLE!,
       process.env.ROUNDS_TABLE!,
       process.env.ROOMS_TABLE!

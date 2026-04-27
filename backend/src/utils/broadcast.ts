@@ -1,5 +1,6 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { getDocClient } from './dynamodb';
+import { createLogger } from './logger';
 import {
   ApiGatewayManagementApiClient,
   PostToConnectionCommand,
@@ -9,8 +10,7 @@ import { APIGatewayProxyEvent } from 'aws-lambda';
 import { WebSocketMessage } from '@estimatenest/shared';
 import { getCacheManager } from './cache';
 
-const client = new DynamoDBClient({});
-const docClient = DynamoDBDocumentClient.from(client);
+const docClient = getDocClient();
 const cacheManager = getCacheManager();
 /**
  * Broadcast a WebSocket message to all participants in a room.
@@ -25,6 +25,7 @@ export async function broadcastToRoom(
   message: WebSocketMessage,
   excludeConnectionId?: string
 ): Promise<void> {
+  const logger = createLogger();
   const { domainName, stage, apiId } = event.requestContext;
   // Determine region from domainName (if execute-api domain) or from environment
   let region = process.env.AWS_REGION || 'eu-central-1';
@@ -33,56 +34,32 @@ export async function broadcastToRoom(
     if (match) region = match[1];
   }
   const endpoint = `https://${apiId}.execute-api.${region}.amazonaws.com/${stage}`;
-  console.log(
-    `Broadcast endpoint: domainName=${domainName}, stage=${stage}, apiId=${apiId}, region=${region}, endpoint=${endpoint}, room: ${roomId}, exclude: ${excludeConnectionId}`
-  );
+  logger.info('Broadcast endpoint', { roomId, region, stage });
   const apiGatewayClient = new ApiGatewayManagementApiClient({ endpoint });
 
   // Fetch all participants in the room
   // Fetch all participants in the room (cached)
   const participants = await cacheManager.getParticipantsWithCache(roomId);
   if (!message.type) {
-    console.error('⚠️ Broadcast message missing type field! Message:', JSON.stringify(message));
+    logger.error('Broadcast message missing type field');
   }
-  console.log(
-    `Broadcasting message type: ${message.type}`,
+  const roundIdFromPayload =
     message.type === 'roundUpdate'
-      ? `roundId: ${(message.payload as { round?: { id: string } }).round?.id}`
-      : ''
-  );
-  console.log(`Broadcast: ${participants.length} participants total, room ${roomId}`);
+      ? (message.payload as { round?: { id: string } }).round?.id
+      : undefined;
+  logger.info('Broadcasting message', {
+    type: message.type,
+    roundId: roundIdFromPayload,
+    roomId,
+    participantCount: participants.length,
+  });
   const activeParticipants = participants.filter(
     (p) => p.connectionId && p.connectionId !== 'REST' && p.connectionId !== excludeConnectionId
   );
-  console.log(`Broadcast: ${activeParticipants.length} active connections to send to`);
-  console.log(
-    'Active participants:',
-    activeParticipants.map((p) => ({
-      participantId: p.participantId,
-      connectionId: p.connectionId,
-      name: p.name,
-    }))
-  );
-  console.log(
-    'All participants:',
-    participants.map((p) => ({
-      participantId: p.participantId,
-      connectionId: p.connectionId,
-      name: p.name,
-    }))
-  );
+  logger.info('Active connections to send to', { count: activeParticipants.length });
 
   // Send message to each active WebSocket connection
   const promises = activeParticipants.map(async (participant) => {
-    if (message.type === 'roundUpdate') {
-      const round = (message.payload as { round?: { id: string; isRevealed: boolean } }).round;
-      console.log(
-        `Broadcasting roundUpdate to ${participant.connectionId}, roundId: ${round?.id}, isRevealed: ${round?.isRevealed}`
-      );
-    }
-    console.log(
-      `Attempting to send to connection ${participant.connectionId}, message type: ${message.type}`
-    );
     try {
       await apiGatewayClient.send(
         new PostToConnectionCommand({
@@ -90,9 +67,8 @@ export async function broadcastToRoom(
           Data: JSON.stringify(message),
         })
       );
-      console.log(`Successfully sent ${message.type} to ${participant.connectionId}`);
     } catch (error) {
-      console.warn(`Failed to send message to connection ${participant.connectionId}:`, error);
+      logger.warn('Failed to send message to connection', { error });
 
       // If the connection is gone (410) or forbidden (403), clean up the stale connection ID
       const isStaleConnection =
@@ -120,13 +96,11 @@ export async function broadcastToRoom(
               },
             })
           );
-          console.log(
-            `Cleaned up stale connection ${participant.connectionId} for participant ${participant.participantId}`
-          );
+          logger.info('Cleaned up stale connection', { roomId: participant.roomId });
           // Invalidate participant cache since participant connection changed
           cacheManager.invalidateParticipants(participant.roomId);
         } catch (cleanupError) {
-          console.error('Failed to clean up stale connection:', cleanupError);
+          logger.error('Failed to clean up stale connection', { error: cleanupError });
         }
       }
     }
@@ -146,6 +120,7 @@ export async function sendToConnection(
   connectionId: string,
   message: WebSocketMessage
 ): Promise<void> {
+  const logger = createLogger();
   const { domainName, stage, apiId } = event.requestContext;
   // Determine region from domainName (if execute-api domain) or from environment
   let region = process.env.AWS_REGION || 'eu-central-1';
@@ -154,16 +129,9 @@ export async function sendToConnection(
     if (match) region = match[1];
   }
   const endpoint = `https://${apiId}.execute-api.${region}.amazonaws.com/${stage}`;
-  console.log(
-    `SendToConnection constructing endpoint: domainName=${domainName}, stage=${stage}, apiId=${apiId}, region=${region}, endpoint=${endpoint}`
-  );
   const apiGatewayClient = new ApiGatewayManagementApiClient({ endpoint });
-  console.log(`SendToConnection endpoint: ${endpoint}, connection: ${connectionId}`);
   if (!message.type) {
-    console.error(
-      '⚠️ SendToConnection message missing type field! Message:',
-      JSON.stringify(message)
-    );
+    logger.error('SendToConnection message missing type field');
   }
 
   const maxRetries = 3;
@@ -177,18 +145,18 @@ export async function sendToConnection(
           Data: JSON.stringify(message),
         })
       );
-      console.log(`Successfully sent to ${connectionId} (attempt ${attempt})`);
+      logger.info('Successfully sent to connection', { attempt });
       return;
     } catch (error) {
       lastError = error;
       const isGoneException =
         (error as ApiGatewayManagementApiServiceException).$metadata?.httpStatusCode === 410;
-      console.warn(`Attempt ${attempt} failed to send to ${connectionId}:`, error);
+      logger.warn('Failed to send to connection', { attempt, error });
 
       if (isGoneException && attempt < maxRetries) {
         // Wait before retrying (exponential backoff)
         const delayMs = 100 * Math.pow(2, attempt - 1);
-        console.log(`Connection ${connectionId} gone, retrying in ${delayMs}ms...`);
+        logger.info('Connection gone, retrying', { delayMs });
         await new Promise((resolve) => setTimeout(resolve, delayMs));
         continue;
       }
@@ -197,10 +165,7 @@ export async function sendToConnection(
     }
   }
 
-  console.warn(
-    `Failed to send message to connection ${connectionId} after ${maxRetries} attempts:`,
-    lastError
-  );
+  logger.warn('Failed to send message after all attempts', { maxRetries, error: lastError });
   // Re-throw the last error so the caller can handle it
   throw lastError;
 }

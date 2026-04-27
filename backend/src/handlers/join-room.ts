@@ -1,12 +1,6 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import AWSXRay from 'aws-xray-sdk';
-import {
-  DynamoDBDocumentClient,
-  GetCommand,
-  PutCommand,
-  QueryCommand,
-  UpdateCommand,
-} from '@aws-sdk/lib-dynamodb';
+import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { getDocClient } from '../utils/dynamodb';
+import { createLogger } from '../utils/logger';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -21,8 +15,7 @@ import { ZodError } from 'zod';
 import { getCacheManager } from '../utils/cache';
 import { verifyPassword } from '../utils/password';
 
-const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
-const docClient = DynamoDBDocumentClient.from(client);
+const docClient = getDocClient();
 const cacheManager = getCacheManager();
 const ROOM_CODES_TABLE = process.env.ROOM_CODES_TABLE!;
 const ROOMS_TABLE = process.env.ROOMS_TABLE!;
@@ -60,6 +53,7 @@ async function createParticipantRecord(
 }
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+  const logger = createLogger();
   try {
     // Validate request parameters
     const requestData = {
@@ -73,7 +67,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     try {
       validatedData = validateJoinRoomRequest(requestData);
     } catch (error) {
-      console.error('Request validation failed:', error);
+      logger.error('Request validation failed', { error });
 
       if (error instanceof ZodError || (error as Error).name === 'ZodError') {
         const zodError = error as { errors?: Array<{ path: string[]; message: string }> };
@@ -188,7 +182,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         }
       } catch (error) {
         // If Get fails (e.g., item not found), treat as missing
-        console.debug('Participant not found via GetCommand:', error);
+        logger.debug('Participant not found via GetCommand', { error });
       }
     }
 
@@ -455,7 +449,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       }),
     };
   } catch (error) {
-    console.error('Join room error:', error);
+    logger.error('Join room error', { error });
     // CORS headers for error response
     const origin = event.headers.origin || event.headers.Origin;
     const headers = {

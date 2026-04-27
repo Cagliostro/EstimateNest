@@ -1,14 +1,13 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import AWSXRay from 'aws-xray-sdk';
-import { DynamoDBDocumentClient, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { getDocClient } from '../utils/dynamodb';
+import { createLogger } from '../utils/logger';
 import { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda';
 import { broadcastToRoom } from '../utils/broadcast';
 import { validateWebSocketConnectionParams, Room } from '@estimatenest/shared';
 import { ZodError } from 'zod';
 import { getCacheManager } from '../utils/cache';
 
-const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
-const docClient = DynamoDBDocumentClient.from(client);
+const docClient = getDocClient();
 const cacheManager = getCacheManager();
 const ROOMS_TABLE = process.env.ROOMS_TABLE!;
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
@@ -17,6 +16,7 @@ export const handler = async (
   event: APIGatewayProxyEvent,
   _context: Context
 ): Promise<APIGatewayProxyResult> => {
+  const logger = createLogger();
   const { connectionId } = event.requestContext;
   const { roomId, participantId } = event.queryStringParameters || {};
 
@@ -37,13 +37,11 @@ export const handler = async (
   }
 
   try {
-    console.log('WebSocket connect requestContext keys:', Object.keys(event.requestContext));
-    console.log(
-      'domainName:',
-      event.requestContext.domainName,
-      'stage:',
-      event.requestContext.stage
-    );
+    logger.info('WebSocket connect requestContext', {
+      keys: Object.keys(event.requestContext),
+      domainName: event.requestContext.domainName,
+      stage: event.requestContext.stage,
+    });
 
     // Get room to check maxParticipants limit
     const roomData = await cacheManager.getRoomWithCache(roomId);
@@ -106,19 +104,13 @@ export const handler = async (
     // Fetch all participants in the room (cached, invalidated just above)
     const participants = await cacheManager.getParticipantsWithCache(roomId);
 
-    console.log(
-      'WebSocket connect participants:',
-      participants.map((p) => ({
-        participantId: p.id,
-        name: p.name,
-        connectionId: p.connectionId,
-        isModerator: p.isModerator,
-      }))
-    );
+    logger.info('WebSocket connect participants', {
+      roomId,
+      count: participants.length,
+      isModerator: participants.filter((p) => p.isModerator).length,
+    });
 
-    console.log(
-      `Broadcasting participant list to room ${roomId}, excluding connection ${connectionId}`
-    );
+    logger.info('Broadcasting participant list', { roomId });
     // Broadcast updated participant list to everyone else in the room (fire-and-forget)
     broadcastToRoom(
       event,
@@ -129,7 +121,7 @@ export const handler = async (
       },
       connectionId // exclude the newly connected participant
     ).catch((broadcastError) => {
-      console.warn('Broadcast to room failed:', broadcastError);
+      logger.warn('Broadcast to room failed', { error: broadcastError });
     });
 
     return {
@@ -137,7 +129,7 @@ export const handler = async (
       body: JSON.stringify({ type: 'connected', payload: { message: 'Connected' } }),
     };
   } catch (error) {
-    console.error('WebSocket connect error:', error);
+    logger.error('WebSocket connect error', { error });
 
     // Handle validation errors
     if (error instanceof ZodError) {

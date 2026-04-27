@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback, type KeyboardEvent, type MouseEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useRoomConnection } from '../hooks/use-room-connection';
@@ -35,6 +35,54 @@ export default function HomePage() {
   const [joinPasswordError, setJoinPasswordError] = useState('');
   const [pendingJoinCode, setPendingJoinCode] = useState('');
   const [pendingJoinName, setPendingJoinName] = useState('');
+
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  const closePasswordDialog = useCallback(() => {
+    setShowPasswordDialog(false);
+    setJoinPassword('');
+    setJoinPasswordError('');
+  }, []);
+
+  const handleOverlayKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closePasswordDialog();
+        return;
+      }
+      if (e.key === 'Tab') {
+        const dialog = dialogRef.current;
+        if (!dialog) return;
+        const focusable = dialog.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey) {
+          if (document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          }
+        } else {
+          if (document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+      }
+    },
+    [closePasswordDialog]
+  );
+
+  const handleOverlayClick = useCallback(
+    (e: MouseEvent) => {
+      if (e.target === e.currentTarget) {
+        closePasswordDialog();
+      }
+    },
+    [closePasswordDialog]
+  );
 
   const handleCreateRoom = async () => {
     setIsCreating(true);
@@ -389,9 +437,21 @@ export default function HomePage() {
 
         {/* Password join dialog */}
         {showPasswordDialog && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 max-w-md w-full mx-4">
-              <h2 className="text-xl font-semibold mb-2">This room requires a password</h2>
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+            onKeyDown={handleOverlayKeyDown}
+            onClick={handleOverlayClick}
+          >
+            <div
+              ref={dialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="password-dialog-title"
+              className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 max-w-md w-full mx-4"
+            >
+              <h2 id="password-dialog-title" className="text-xl font-semibold mb-2">
+                This room requires a password
+              </h2>
               <p className="text-gray-500 dark:text-gray-400 mb-6">
                 Enter the password to join room{' '}
                 <span className="font-mono font-bold">{pendingJoinCode}</span>

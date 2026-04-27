@@ -113,6 +113,8 @@ export class WebSocketService {
     }
     this.currentRoomId = null;
     this.currentParticipantId = null;
+    this.messageHandlers.clear();
+    this.stateChangeCallbacks.clear();
     this.setState('disconnected');
   }
 

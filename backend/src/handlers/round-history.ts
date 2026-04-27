@@ -1,12 +1,11 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import AWSXRay from 'aws-xray-sdk';
-import { DynamoDBDocumentClient, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { getDocClient } from '../utils/dynamodb';
+import { createLogger } from '../utils/logger';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { Round, Vote, validateRoomCodePath } from '@estimatenest/shared';
 import { ZodError } from 'zod';
 
-const client = AWSXRay.captureAWSv3Client(new DynamoDBClient({}));
-const docClient = DynamoDBDocumentClient.from(client);
+const docClient = getDocClient();
 
 const ROOM_CODES_TABLE = process.env.ROOM_CODES_TABLE!;
 const ROUNDS_TABLE = process.env.ROUNDS_TABLE!;
@@ -18,6 +17,7 @@ export interface RoundHistoryItem extends Round {
 }
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+  const logger = createLogger();
   try {
     const { code } = event.pathParameters || {};
 
@@ -115,7 +115,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       body: JSON.stringify(history),
     };
   } catch (error) {
-    console.error('Round history error:', error);
+    logger.error('Round history error', { error });
     // CORS headers for error response
     const origin = event.headers.origin || event.headers.Origin;
     const headers = {
