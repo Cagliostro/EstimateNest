@@ -569,11 +569,11 @@ export class EstimateNestStack extends cdk.Stack {
     votesTable.grantReadData(roundHistoryHandler);
     // websocket-connect.ts: Reads participants (read/write), rooms, and rounds
     participantsTable.grantReadWriteData(websocketConnectHandler);
-    roomsTable.grantReadData(websocketConnectHandler);
+    roomsTable.grantReadWriteData(websocketConnectHandler);
     roundsTable.grantReadData(websocketConnectHandler);
     // websocket-disconnect.ts: Reads participants (read/write), rooms, and rounds
     participantsTable.grantReadWriteData(websocketDisconnectHandler);
-    roomsTable.grantReadData(websocketDisconnectHandler);
+    roomsTable.grantReadWriteData(websocketDisconnectHandler);
     roundsTable.grantReadData(websocketDisconnectHandler);
     // vote.ts (WebSocket): Read/write votes, rounds, participants; read rooms; rate limiting
     // Granular permissions per table
