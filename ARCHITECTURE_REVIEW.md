@@ -1,8 +1,8 @@
 # EstimateNest Architecture Review
 
-**Date**: April 24, 2026
+**Date**: April 27, 2026
 **Reviewer**: Architecture Assessment
-**Version**: 3.0 (Fresh Review)
+**Version**: 3.1 (Updated)
 
 ---
 
@@ -10,7 +10,7 @@
 
 EstimateNest is a real-time planning poker application using serverless AWS infrastructure (Lambda, DynamoDB, API Gateway, CloudFront) with a React frontend and WebSocket-based real-time communication. The architecture has solid foundations — clean monorepo structure, comprehensive CDK IaC, Zod validation, and TypeScript throughout. However, this review uncovered **5 critical, 11 high-priority, and 10+ medium-priority issues** spanning all layers.
 
-**Key concerns (resolved in April 24 session):**
+**Key concerns (resolved in April 24–27 sessions):**
 
 - ✅ **DynamoDB TTL is completely broken** — auto-expiry never works, leading to unbounded table growth → **FIXED**: `expiresAt` now uses epoch seconds throughout
 - ✅ **SNS AlertTopic has no subscribers** — operational alarms fire into a void → **FIXED**: email subscription added
@@ -18,6 +18,7 @@ EstimateNest is a real-time planning poker application using serverless AWS infr
 - ✅ **Multiple race conditions** in join-room, vote, and WebSocket handlers → **FIXED**: atomic modifier claim, atomic connection counter, isModerator check
 - ✅ **No ErrorBoundary wired** — React crashes produce white screen → **FIXED**: ErrorBoundary wraps App
 - ✅ **Accessibility and UX debt** — 11 `alert()` calls, missing ARIA semantics → **FIXED**: replaced with `react-hot-toast`
+- 🟡 **Utility scaffolding for P2** — centralized `dynamodb.ts` and `logger.ts` created (not yet wired into handlers)
 
 ---
 
@@ -420,19 +421,19 @@ Restrict to known frontend origins (e.g., `https://estimatenest.net`, `https://d
 
 ### P2 — MEDIUM PRIORITY (Within 2-3 Sprints)
 
-| # | Finding | Layer | File | Issue |
-|---|---------|-------|------|-------|
-| 17 | Scheduled auto-reveal uses `ScanCommand` | Backend | `scheduled-auto-reveal.ts:134-145` | `Scan` on Rounds table doesn't scale. Filter `isRevealed=false` over scanned data. Also no `ConditionExpression` on reveal `UpdateCommand` (line 156-166), allowing double-reveal. |
-| 18 | `handleNewRound` partial failure risk | Backend | `vote.ts:1026-1097` | Marks all unrevealed rounds as revealed by iterating and updating each. No transaction — failure mid-loop leaves inconsistent state. |
-| 19 | Moderator reassignment race | Backend | `websocket-disconnect.ts:56-108` | Two moderators disconnecting simultaneously race on reading participant list and assigning new moderator. |
-| 20 | Excessive logging with PII | Backend | `vote.ts:415-427` | `console.log` dumps full participant lists with names, connectionIds, and vote values. CloudWatch cost + PII exposure. |
-| 21 | API Gateway usage plan 10K req/month | Infra | `estimateneest-stack.ts:742` | ~333 requests/day. At 100 req/min allowance, quota hit in under 2 hours at sustained traffic. Way too low for production. |
-| 22 | No request correlation ID | Backend | All handlers | Log entries lack trace/request ID. Hard to correlate log lines across Lambda invocations without structured logging. |
-| 23 | WebSocket singleton holds stale state | Frontend | `websocket-service.ts:22` | `WebSocketService` singleton persists across room changes. May hold references to stale room/participant data. |
-| 24 | HTTP polling never stops | Frontend | `use-room-connection.ts:284` | 5-second HTTP polling runs alongside healthy WebSocket indefinitely. Unnecessary network traffic. |
-| 25 | "View all history" button dead | Frontend | `RoomPage.tsx:990` | Clickable `<button>` element with no `onClick` handler. Incomplete feature or should be non-interactive. |
-| 26 | Password dialog lacks ARIA modal | Frontend | `HomePage.tsx:390-440` | No `role="dialog"`, `aria-modal`, focus trap, or Escape key handler. Violates WCAG. |
-| 27 | Broadcast/cache create own DynamoDB clients | Backend | `broadcast.ts:12-13`, `cache.ts:197` | Separate client instances bypass X-Ray tracing. Connection pools duplicated. |
+| # | Finding | Layer | File | Issue | Status |
+|---|---------|-------|------|-------|--------|
+| 17 | Scheduled auto-reveal uses `ScanCommand` | Backend | `scheduled-auto-reveal.ts:134-145` | `Scan` on Rounds table doesn't scale. Filter `isRevealed=false` over scanned data. Also no `ConditionExpression` on reveal `UpdateCommand` (line 156-166), allowing double-reveal. | ❌ OPEN |
+| 18 | `handleNewRound` partial failure risk | Backend | `vote.ts:1026-1097` | Marks all unrevealed rounds as revealed by iterating and updating each. No transaction — failure mid-loop leaves inconsistent state. | ❌ OPEN |
+| 19 | Moderator reassignment race | Backend | `websocket-disconnect.ts:56-108` | Two moderators disconnecting simultaneously race on reading participant list and assigning new moderator. | ❌ OPEN |
+| 20 | Excessive logging with PII | Backend | `vote.ts:415-427` | `console.log` dumps full participant lists with names, connectionIds, and vote values. CloudWatch cost + PII exposure. | ❌ OPEN |
+| 21 | API Gateway usage plan 10K req/month | Infra | `estimateneest-stack.ts:742` | ~333 requests/day. At 100 req/min allowance, quota hit in under 2 hours at sustained traffic. Way too low for production. | ⏸️ DEFERRED (keep as-is) |
+| 22 | No request correlation ID | Backend | All handlers | Log entries lack trace/request ID. Hard to correlate log lines across Lambda invocations without structured logging. | 🟡 PARTIAL — `logger.ts` utility created but not wired into handlers |
+| 23 | WebSocket singleton holds stale state | Frontend | `websocket-service.ts:22` | `WebSocketService` singleton persists across room changes. May hold references to stale room/participant data. | ❌ OPEN (`disconnect()` doesn't clear `messageHandlers`) |
+| 24 | HTTP polling never stops | Frontend | `use-room-connection.ts:284` | 5-second HTTP polling runs alongside healthy WebSocket indefinitely. Unnecessary network traffic. | ❌ OPEN |
+| 25 | "View all history" button dead | Frontend | `RoomPage.tsx:990` | Clickable `<button>` element with no `onClick` handler. Incomplete feature or should be non-interactive. | ❌ OPEN |
+| 26 | Password dialog lacks ARIA modal | Frontend | `HomePage.tsx:390-440` | No `role="dialog"`, `aria-modal`, focus trap, or Escape key handler. Violates WCAG. | ❌ OPEN |
+| 27 | Broadcast/cache create own DynamoDB clients | Backend | `broadcast.ts:12-13`, `cache.ts:197` | Separate client instances bypass X-Ray tracing. Connection pools duplicated. | 🟡 PARTIAL — `dynamodb.ts` utility created but not wired into handlers |
 
 ---
 
@@ -531,6 +532,17 @@ Restrict to known frontend origins (e.g., `https://estimatenest.net`, `https://d
 | 14 | Room-to-Room Navigation Stale State | P1 | ✅ FIXED |
 | 15 | CloudFront WAF Only in us-east-1 | P1 | ⏸️ DEFERRED (current behavior fine) |
 | 16 | CORS Wildcard Origin | P1 | ⏸️ DEFERRED (keep as-is) |
+| 17 | Scheduled auto-reveal uses ScanCommand | P2 | ❌ OPEN |
+| 18 | handleNewRound partial failure risk | P2 | ❌ OPEN |
+| 19 | Moderator reassignment race | P2 | ❌ OPEN |
+| 20 | Excessive logging with PII | P2 | ❌ OPEN |
+| 21 | API Gateway usage plan 10K req/month | P2 | ⏸️ DEFERRED |
+| 22 | No request correlation ID | P2 | 🟡 PARTIAL (logger.ts exists, not wired) |
+| 23 | WebSocket singleton holds stale state | P2 | ❌ OPEN |
+| 24 | HTTP polling never stops | P2 | ❌ OPEN |
+| 25 | "View all history" button dead | P2 | ❌ OPEN |
+| 26 | Password dialog lacks ARIA modal | P2 | ❌ OPEN |
+| 27 | Broadcast/cache create own DynamoDB clients | P2 | 🟡 PARTIAL (dynamodb.ts exists, not wired) |
 
 ## Remaining Work
 
@@ -540,5 +552,16 @@ Restrict to known frontend origins (e.g., `https://estimatenest.net`, `https://d
 | 11 | No Pagination on DynamoDB Queries | P1 deferred |
 | 15 | CloudFront WAF Only in us-east-1 | P1 deferred |
 | 16 | CORS Wildcard Origin | P1 deferred |
-| 17-41 | P2 and P3 items | Various (in backlog) |
+| 17 | Scheduled auto-reveal uses ScanCommand | P2 |
+| 18 | handleNewRound partial failure risk | P2 |
+| 19 | Moderator reassignment race | P2 |
+| 20 | Excessive logging with PII | P2 |
+| 21 | API Gateway usage plan 10K req/month | P2 deferred |
+| 22 | No request correlation ID | P2 (partial) |
+| 23 | WebSocket singleton holds stale state | P2 |
+| 24 | HTTP polling never stops | P2 |
+| 25 | "View all history" button dead | P2 |
+| 26 | Password dialog lacks ARIA modal | P2 |
+| 27 | Broadcast/cache create own DynamoDB clients | P2 (partial) |
+| 28-41 | P3 items | Various (in backlog) |
 ```
