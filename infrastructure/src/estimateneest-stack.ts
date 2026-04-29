@@ -164,7 +164,7 @@ export class EstimateNestStack extends cdk.Stack {
     // ====================
 
     const createRoomHandler = new lambdaNodejs.NodejsFunction(this, 'CreateRoomHandler', {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
       entry: '../backend/dist/handlers/create-room.js',
       handler: 'handler',
@@ -189,7 +189,7 @@ export class EstimateNestStack extends cdk.Stack {
       this,
       'WebSocketConnectHandler',
       {
-        runtime: lambda.Runtime.NODEJS_20_X,
+        runtime: lambda.Runtime.NODEJS_24_X,
         architecture: lambda.Architecture.ARM_64,
         entry: '../backend/dist/handlers/websocket-connect.js',
         handler: 'handler',
@@ -214,7 +214,7 @@ export class EstimateNestStack extends cdk.Stack {
       this,
       'WebSocketDisconnectHandler',
       {
-        runtime: lambda.Runtime.NODEJS_20_X,
+        runtime: lambda.Runtime.NODEJS_24_X,
         architecture: lambda.Architecture.ARM_64,
         entry: '../backend/dist/handlers/websocket-disconnect.js',
         handler: 'handler',
@@ -236,7 +236,7 @@ export class EstimateNestStack extends cdk.Stack {
     );
 
     const voteHandler = new lambdaNodejs.NodejsFunction(this, 'VoteHandler', {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
       entry: '../backend/dist/handlers/vote.js',
       handler: 'handler',
@@ -409,7 +409,7 @@ export class EstimateNestStack extends cdk.Stack {
     }
 
     const joinRoomHandler = new lambdaNodejs.NodejsFunction(this, 'JoinRoomHandler', {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
       entry: '../backend/dist/handlers/join-room.js',
       handler: 'handler',
@@ -433,7 +433,7 @@ export class EstimateNestStack extends cdk.Stack {
     });
 
     const roundHistoryHandler = new lambdaNodejs.NodejsFunction(this, 'RoundHistoryHandler', {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
       entry: '../backend/dist/handlers/round-history.js',
       handler: 'handler',
@@ -454,7 +454,7 @@ export class EstimateNestStack extends cdk.Stack {
     });
 
     const updateRoomHandler = new lambdaNodejs.NodejsFunction(this, 'UpdateRoomHandler', {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
       entry: '../backend/dist/handlers/update-room.js',
       handler: 'handler',
@@ -475,7 +475,7 @@ export class EstimateNestStack extends cdk.Stack {
     });
 
     const healthHandler = new lambdaNodejs.NodejsFunction(this, 'HealthHandler', {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
       entry: '../backend/dist/handlers/health.js',
       handler: 'handler',
@@ -497,7 +497,7 @@ export class EstimateNestStack extends cdk.Stack {
       this,
       'ScheduledAutoRevealHandler',
       {
-        runtime: lambda.Runtime.NODEJS_20_X,
+        runtime: lambda.Runtime.NODEJS_24_X,
         architecture: lambda.Architecture.ARM_64,
         entry: '../backend/dist/handlers/scheduled-auto-reveal.js',
         handler: 'handler',
