@@ -24,7 +24,6 @@ import * as path from 'path';
 
 export interface EstimateNestStackProps extends cdk.StackProps {
   envName: string;
-  deploymentColor?: 'blue' | 'green';
   domainName: string;
   certificateArn: string;
   hostedZoneId: string;
@@ -36,10 +35,6 @@ export class EstimateNestStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: EstimateNestStackProps) {
     super(scope, id, props);
 
-    const isProduction = props.envName === 'prod';
-    const deploymentColor = props.deploymentColor || 'blue';
-    const colorSuffix = deploymentColor ? `-${deploymentColor}` : '';
-
     // ====================
     // DynamoDB Tables
     // ====================
@@ -47,32 +42,20 @@ export class EstimateNestStack extends cdk.Stack {
     const roomsTable = new dynamodb.Table(this, 'RoomsTable', {
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
-      billingMode: isProduction
-        ? dynamodb.BillingMode.PROVISIONED
-        : dynamodb.BillingMode.PAY_PER_REQUEST,
-      readCapacity: isProduction ? 5 : undefined,
-      writeCapacity: isProduction ? 5 : undefined,
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       timeToLiveAttribute: 'expiresAt',
     });
 
     const roomCodesTable = new dynamodb.Table(this, 'RoomCodesTable', {
       partitionKey: { name: 'shortCode', type: dynamodb.AttributeType.STRING },
-      billingMode: isProduction
-        ? dynamodb.BillingMode.PROVISIONED
-        : dynamodb.BillingMode.PAY_PER_REQUEST,
-      readCapacity: isProduction ? 5 : undefined,
-      writeCapacity: isProduction ? 5 : undefined,
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       timeToLiveAttribute: 'expiresAt',
     });
 
     const participantsTable = new dynamodb.Table(this, 'ParticipantsTable', {
       partitionKey: { name: 'roomId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'participantId', type: dynamodb.AttributeType.STRING },
-      billingMode: isProduction
-        ? dynamodb.BillingMode.PROVISIONED
-        : dynamodb.BillingMode.PAY_PER_REQUEST,
-      readCapacity: isProduction ? 5 : undefined,
-      writeCapacity: isProduction ? 5 : undefined,
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       timeToLiveAttribute: 'expiresAt',
     });
 
@@ -85,11 +68,7 @@ export class EstimateNestStack extends cdk.Stack {
     const roundsTable = new dynamodb.Table(this, 'RoundsTable', {
       partitionKey: { name: 'roomId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'roundId', type: dynamodb.AttributeType.STRING },
-      billingMode: isProduction
-        ? dynamodb.BillingMode.PROVISIONED
-        : dynamodb.BillingMode.PAY_PER_REQUEST,
-      readCapacity: isProduction ? 5 : undefined,
-      writeCapacity: isProduction ? 5 : undefined,
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       timeToLiveAttribute: 'expiresAt',
     });
 
@@ -103,11 +82,7 @@ export class EstimateNestStack extends cdk.Stack {
     const votesTable = new dynamodb.Table(this, 'VotesTable', {
       partitionKey: { name: 'roundId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'participantId', type: dynamodb.AttributeType.STRING },
-      billingMode: isProduction
-        ? dynamodb.BillingMode.PROVISIONED
-        : dynamodb.BillingMode.PAY_PER_REQUEST,
-      readCapacity: isProduction ? 5 : undefined,
-      writeCapacity: isProduction ? 5 : undefined,
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       timeToLiveAttribute: 'expiresAt',
     });
 
@@ -121,43 +96,9 @@ export class EstimateNestStack extends cdk.Stack {
     const rateLimitTable = new dynamodb.Table(this, 'RateLimitTable', {
       partitionKey: { name: 'key', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'timestamp', type: dynamodb.AttributeType.NUMBER },
-      billingMode: isProduction
-        ? dynamodb.BillingMode.PROVISIONED
-        : dynamodb.BillingMode.PAY_PER_REQUEST,
-      readCapacity: isProduction ? 5 : undefined,
-      writeCapacity: isProduction ? 5 : undefined,
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       timeToLiveAttribute: 'expiresAt',
     });
-
-    // ====================
-    // DynamoDB Auto-Scaling (Production only)
-    // ====================
-    if (isProduction) {
-      const tables = [
-        roomsTable,
-        roomCodesTable,
-        participantsTable,
-        roundsTable,
-        votesTable,
-        rateLimitTable,
-      ];
-      tables.forEach((table) => {
-        const readScaling = table.autoScaleReadCapacity({
-          minCapacity: 5,
-          maxCapacity: 50,
-        });
-        readScaling.scaleOnUtilization({
-          targetUtilizationPercent: 70,
-        });
-        const writeScaling = table.autoScaleWriteCapacity({
-          minCapacity: 5,
-          maxCapacity: 50,
-        });
-        writeScaling.scaleOnUtilization({
-          targetUtilizationPercent: 70,
-        });
-      });
-    }
 
     // ====================
     // Lambda Functions
@@ -259,7 +200,7 @@ export class EstimateNestStack extends cdk.Stack {
     });
 
     const webSocketApi = new apigatewayv2.WebSocketApi(this, 'WebSocketApi', {
-      apiName: `estimatenest-ws-${props.envName}${colorSuffix}`,
+      apiName: `estimatenest-ws-${props.envName}`,
       routeSelectionExpression: '$request.body.type',
       connectRouteOptions: {
         integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
@@ -345,14 +286,8 @@ export class EstimateNestStack extends cdk.Stack {
     let restApiCustomUrl: string | undefined;
     let webSocketCustomUrl: string | undefined;
 
-    const restApiSubdomain =
-      deploymentColor === 'blue'
-        ? `api.${props.domainName}`
-        : `api-${deploymentColor}.${props.domainName}`;
-    const webSocketSubdomain =
-      deploymentColor === 'blue'
-        ? `ws.${props.domainName}`
-        : `ws-${deploymentColor}.${props.domainName}`;
+    const restApiSubdomain = `api.${props.domainName}`;
+    const webSocketSubdomain = `ws.${props.domainName}`;
 
     // If API certificate is provided, set up custom domains for REST and WebSocket APIs
     const apiCertificateArn = props.apiCertificateArn || props.certificateArn;
@@ -652,7 +587,7 @@ export class EstimateNestStack extends cdk.Stack {
     const corsAllowOrigins = apigateway.Cors.ALL_ORIGINS;
 
     const restApi = new apigateway.RestApi(this, 'RestApi', {
-      restApiName: `estimatenest-rest-${props.envName}${colorSuffix}`,
+      restApiName: `estimatenest-rest-${props.envName}`,
       defaultCorsPreflightOptions: {
         allowOrigins: corsAllowOrigins,
         allowMethods: apigateway.Cors.ALL_METHODS,
@@ -749,9 +684,9 @@ export class EstimateNestStack extends cdk.Stack {
     });
 
     // Create API Key for REST API with deterministic value for each environment
-    const apiKeyValue = `estimatenest-${props.envName}${colorSuffix}-${this.account}-${this.region}`;
+    const apiKeyValue = `estimatenest-${props.envName}-${this.account}-${this.region}`;
     const restApiKey = new apigateway.CfnApiKey(this, 'RestApiKey', {
-      name: `estimatenest-rest-${props.envName}${colorSuffix}-key`,
+      name: `estimatenest-rest-${props.envName}-key`,
       enabled: true,
       value: apiKeyValue,
     });
@@ -768,7 +703,7 @@ export class EstimateNestStack extends cdk.Stack {
     // ====================
 
     const frontendBucket = new s3.Bucket(this, 'FrontendBucket', {
-      bucketName: `estimatenest-${props.envName}${colorSuffix}-frontend-${this.account}-${this.region}`,
+      bucketName: `estimatenest-${props.envName}-frontend-${this.account}-${this.region}`,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
@@ -787,7 +722,11 @@ export class EstimateNestStack extends cdk.Stack {
       enableAcceptEncodingBrotli: true,
     });
 
-    // If domain is provided, set up custom domain
+    // Import certificate for CloudFront custom domain
+    const distributionCert = props.certificateArn
+      ? acm.Certificate.fromCertificateArn(this, 'DistributionCert', props.certificateArn)
+      : undefined;
+
     let distributionProps: cloudfront.DistributionProps = {
       defaultRootObject: 'index.html',
       defaultBehavior: {
@@ -809,12 +748,10 @@ export class EstimateNestStack extends cdk.Stack {
           responsePagePath: '/index.html',
         },
       ],
+      domainNames: props.domainName ? [props.domainName] : undefined,
+      certificate: distributionCert,
     };
 
-    // Domain aliases and certificate are managed by the switch-traffic script
-    // to avoid CNAME conflicts between blue and green CloudFront distributions.
-    // The distribution uses CloudFront's default certificate until aliases and
-    // the custom cert are assigned by switch-traffic.sh during a traffic switch.
     let hostedZone: route53.IHostedZone | undefined;
     if (props.hostedZoneId) {
       hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {
@@ -826,15 +763,10 @@ export class EstimateNestStack extends cdk.Stack {
     const distribution = new cloudfront.Distribution(this, 'Distribution', distributionProps);
 
     if (hostedZone) {
-      // Weighted Route 53 record for blue-green deployments
-      // Each deployment color adds its own weighted record entry
-      const weight = deploymentColor === 'blue' ? 100 : 0;
       new route53.ARecord(this, 'CloudFrontAliasRecord', {
         zone: hostedZone,
         recordName: props.domainName,
         target: route53.RecordTarget.fromAlias(new route53Targets.CloudFrontTarget(distribution)),
-        weight: weight,
-        setIdentifier: `cloudfront-${deploymentColor}`,
       });
 
       // Create www redirect for production root domain
@@ -900,20 +832,19 @@ export class EstimateNestStack extends cdk.Stack {
               responsePagePath: '/index.html',
             },
           ],
+          domainNames: [wwwDomainName],
+          certificate: distributionCert,
         });
 
-        // Weighted Route 53 record for www redirect (blue-green)
         new route53.ARecord(this, 'WwwCloudFrontAliasRecord', {
           zone: hostedZone,
           recordName: wwwDomainName,
           target: route53.RecordTarget.fromAlias(
             new route53Targets.CloudFrontTarget(wwwDistribution)
           ),
-          weight: weight,
-          setIdentifier: `www-cloudfront-${deploymentColor}`,
         });
 
-        // Output for www CloudFront distribution (for blue-green traffic switching)
+        // Output for www CloudFront distribution
         new cdk.CfnOutput(this, 'WwwCloudFrontDomainName', {
           value: wwwDistribution.distributionDomainName,
         });
@@ -928,7 +859,7 @@ export class EstimateNestStack extends cdk.Stack {
     // ====================
 
     const alertTopic = new sns.Topic(this, 'AlertTopic', {
-      displayName: `EstimateNest-${props.envName}-${deploymentColor}-Alerts`,
+      displayName: `EstimateNest-${props.envName}-Alerts`,
     });
 
     alertTopic.addSubscription(
@@ -1098,7 +1029,7 @@ export class EstimateNestStack extends cdk.Stack {
     // ====================
 
     const dashboard = new cloudwatch.Dashboard(this, 'MonitoringDashboard', {
-      dashboardName: `EstimateNest-${props.envName}-${deploymentColor}-Monitoring`,
+      dashboardName: `EstimateNest-${props.envName}-Monitoring`,
     });
 
     // Lambda error rate widget

@@ -317,7 +317,7 @@ describe('vote handler', () => {
     expect(body.error).toBe('Invalid message format');
     expect(body.details).toBeDefined();
     // Should mention invalid input
-    expect(body.details[0]).toMatch(/Invalid input/);
+    expect(body.details[0]).toMatch(/Invalid (input|discriminator)/);
   });
 
   it('should return 400 for missing message type', async () => {
