@@ -64,6 +64,7 @@ export class EstimateNestStack extends cdk.Stack {
       partitionKey: { name: 'connectionId', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
     });
+    addOnDemandThroughputToGsils(participantsTable);
 
     const roundsTable = new dynamodb.Table(this, 'RoundsTable', {
       partitionKey: { name: 'roomId', type: dynamodb.AttributeType.STRING },
@@ -78,6 +79,7 @@ export class EstimateNestStack extends cdk.Stack {
       sortKey: { name: 'startedAt', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
     });
+    addOnDemandThroughputToGsils(roundsTable);
 
     const votesTable = new dynamodb.Table(this, 'VotesTable', {
       partitionKey: { name: 'roundId', type: dynamodb.AttributeType.STRING },
@@ -92,6 +94,7 @@ export class EstimateNestStack extends cdk.Stack {
       sortKey: { name: 'roundId', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
     });
+    addOnDemandThroughputToGsils(votesTable);
 
     const rateLimitTable = new dynamodb.Table(this, 'RateLimitTable', {
       partitionKey: { name: 'key', type: dynamodb.AttributeType.STRING },
@@ -1349,6 +1352,17 @@ export class EstimateNestStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'RestApiKeyValue', {
       value: apiKeyValue,
       description: 'API Key value for REST API requests',
+    });
+  }
+}
+
+function addOnDemandThroughputToGsils(table: dynamodb.Table): void {
+  const cfnTable = table.node.defaultChild as dynamodb.CfnTable;
+  const gsis = cfnTable.globalSecondaryIndexes;
+  if (gsis) {
+    cfnTable.addPropertyOverride('GlobalSecondaryIndexes.0.OnDemandThroughput', {
+      MaxReadRequestUnits: 40000,
+      MaxWriteRequestUnits: 40000,
     });
   }
 }
