@@ -81,8 +81,11 @@ export class WebSocketService {
       return;
     }
 
-    // Disconnect existing connection if any
-    this.disconnect();
+    // Disconnect existing client but preserve handlers and callbacks
+    if (this.client) {
+      this.client.disconnect();
+      this.client = null;
+    }
 
     this.currentRoomId = roomId;
     this.currentParticipantId = participantId;
