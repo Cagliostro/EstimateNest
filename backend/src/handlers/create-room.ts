@@ -130,7 +130,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       maxParticipants,
       autoRevealEnabled,
       autoRevealCountdownSeconds,
-      moderatorAssigned: true, // creator is the first moderator
+      moderatorAssigned: false, // first browser join will claim moderator role
       deck: resolvedDeck,
     };
 
@@ -148,30 +148,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       })
     );
 
-    const participantId = uuidv4();
-    const creatorName = name?.trim() || 'Anonymous';
-    const avatarSeed = createAvatarSeed(creatorName);
-
-    const participant: Participant = {
-      id: participantId,
-      roomId,
-      connectionId: 'REST',
-      name: creatorName,
-      avatarSeed,
-      joinedAt: now,
-      lastSeenAt: now,
-      isModerator: true,
-    };
-
-    await docClient.send(
-      new PutCommand({
-        TableName: PARTICIPANTS_TABLE,
-        Item: {
-          ...participant,
-          participantId: participant.id,
-        },
-      })
-    );
+    // No participant is created here — the first browser user to join
+    // via GET /rooms/{code} becomes the first participant and moderator.
+    // This avoids phantom participants that never connect via WebSocket.
 
     const origin = event.headers.origin || event.headers.Origin;
     const headers = {
@@ -185,7 +164,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       body: JSON.stringify({
         roomId,
         shortCode,
-        participantId,
         joinUrl: `https://${process.env.DOMAIN_NAME || 'example.com'}/${shortCode}`,
         expiresAt,
         hasPassword,
