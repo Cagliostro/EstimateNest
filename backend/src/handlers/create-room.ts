@@ -59,7 +59,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       autoRevealEnabled = true,
       autoRevealCountdownSeconds = 3,
       moderatorPassword,
-      name,
     } = validatedBody;
 
     const roomId = uuidv4();
