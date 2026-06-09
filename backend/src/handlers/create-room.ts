@@ -18,7 +18,6 @@ const docClient = getDocClient();
 
 const ROOMS_TABLE = process.env.ROOMS_TABLE!;
 const ROOM_CODES_TABLE = process.env.ROOM_CODES_TABLE!;
-const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   const logger = createLogger();
