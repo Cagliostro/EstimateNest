@@ -81,9 +81,11 @@ export class WebSocketService {
       return;
     }
 
-    // Disconnect existing client but preserve handlers and callbacks
+    // Disconnect existing client and prevent it from reconnecting
     if (this.client) {
-      this.client.disconnect();
+      this.client.disconnect(); // triggers onclose → attemptReconnect
+      // Prevent the old client from reconnecting after we abandon it
+      this.client.stopReconnect();
       this.client = null;
     }
 
@@ -116,9 +118,13 @@ export class WebSocketService {
     }
     this.currentRoomId = null;
     this.currentParticipantId = null;
-    this.messageHandlers.clear();
-    this.stateChangeCallbacks.clear();
     this.setState('disconnected');
+    // DO NOT clear messageHandlers or stateChangeCallbacks here.
+    // The service is a singleton — individual hooks manage their own
+    // handler/callback registrations via removeMessageHandler /
+    // removeStateChangeCallback in their useEffect cleanups.
+    // Clearing them globally would nuke handlers registered by a
+    // concurrent hook instance (React Strict Mode double-mount race).
   }
 
   send(message: WebSocketMessage): void {

@@ -191,6 +191,18 @@ export class WebSocketClient {
   }
 
   /**
+   * Permanently stop all reconnect attempts.
+   * Call this before abandoning a client to prevent orphan reconnects.
+   */
+  stopReconnect(): void {
+    this.shouldReconnect = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  /**
    * Send a WebSocket message
    * Note: API Gateway WebSocket API uses the 'action' field to route messages
    */
