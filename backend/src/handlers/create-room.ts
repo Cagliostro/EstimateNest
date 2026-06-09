@@ -7,11 +7,9 @@ import {
   generateShortCode,
   getRoomTTL,
   Room,
-  Participant,
   CardDeck,
   validateCreateRoomRequest,
   parseDeckInput,
-  createAvatarSeed,
 } from '@estimatenest/shared';
 import { ZodError } from 'zod';
 import { hashPassword } from '../utils/password';
