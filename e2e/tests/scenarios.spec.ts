@@ -35,6 +35,9 @@ test.describe('scenarios', () => {
       await guest.navigate(`/${roomCode}`);
       await guest.waitForReady();
 
+      // Start a round first (vote buttons only appear after round starts)
+      await host.startNewRound();
+
       // Both vote
       await host.castVote(5);
       await guest.castVote(8);
@@ -112,6 +115,9 @@ test.describe('scenarios', () => {
       await user.navigate(`/${roomCode}`);
       await user.waitForReady();
 
+      // Start a round to make vote buttons visible
+      await user.startNewRound();
+
       // Verify tshirt values are rendered as voting buttons
       const expectedValues = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
       for (const val of expectedValues) {
@@ -145,6 +151,9 @@ test.describe('scenarios', () => {
       await user2.waitForReady();
       await user3.navigate(`/${roomCode}`);
       await user3.waitForReady();
+
+      // Start a round first
+      await user1.startNewRound();
 
       // All vote
       await user1.castVote(3);
@@ -184,9 +193,10 @@ test.describe('scenarios', () => {
       // Create room with allowAllParticipantsToReveal so reconnected user can reveal
       const { roomCode } = await user.createRoom({ allowAllParticipantsToReveal: true });
 
-      // Join and vote
+      // Join and start a round
       await user.navigate(`/${roomCode}`);
       await user.waitForReady();
+      await user.startNewRound();
       await user.castVote(5);
       await user.page.waitForTimeout(500);
 

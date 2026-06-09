@@ -184,7 +184,7 @@ export default function RoomPage() {
   }, [roomCode]);
 
   const handleVote = (value: number | string) => {
-    if (!participantId) return;
+    if (!participantId || !currentRound) return;
 
     setSelectedValue(value);
     try {
@@ -566,31 +566,39 @@ export default function RoomPage() {
                 </div>
               ) : (
                 <>
-                  <p className="text-gray-500 dark:text-gray-400 mb-6">
-                    {connectionState !== 'connected'
-                      ? 'Connecting...'
-                      : hasVoted
-                        ? 'You have voted. Waiting for others...'
-                        : 'Select your estimate below.'}
-                    {votes.length > 0 && ` ${votes.length} vote(s) cast.`}
-                  </p>
-                  <div className="grid grid-cols-4 md:grid-cols-6 gap-4">
-                    {deck.values.map((value: number | string) => (
-                      <button
-                        key={value}
-                        data-value={value}
-                        onClick={() => handleVote(value)}
-                        disabled={hasVoted || connectionState !== 'connected'}
-                        className={`bg-primary-100 dark:bg-primary-900 hover:bg-primary-200 dark:hover:bg-primary-800 text-primary-800 dark:text-primary-200 font-bold py-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                          selectedValue === value
-                            ? 'ring-4 ring-primary-400 dark:ring-primary-600'
-                            : ''
-                        }`}
-                      >
-                        {value}
-                      </button>
-                    ))}
-                  </div>
+                  {!currentRound ? (
+                    <p className="text-gray-500 dark:text-gray-400 mb-4">
+                      Start a new estimation round to begin voting.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-gray-500 dark:text-gray-400 mb-6">
+                        {connectionState !== 'connected'
+                          ? 'Connecting...'
+                          : hasVoted
+                            ? 'You have voted. Waiting for others...'
+                            : 'Select your estimate below.'}
+                        {votes.length > 0 && ` ${votes.length} vote(s) cast.`}
+                      </p>
+                      <div className="grid grid-cols-4 md:grid-cols-6 gap-4">
+                        {deck.values.map((value: number | string) => (
+                          <button
+                            key={value}
+                            data-value={value}
+                            onClick={() => handleVote(value)}
+                            disabled={hasVoted || connectionState !== 'connected'}
+                            className={`bg-primary-100 dark:bg-primary-900 hover:bg-primary-200 dark:hover:bg-primary-800 text-primary-800 dark:text-primary-200 font-bold py-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                              selectedValue === value
+                                ? 'ring-4 ring-primary-400 dark:ring-primary-600'
+                                : ''
+                            }`}
+                          >
+                            {value}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </>
               )}
             </div>

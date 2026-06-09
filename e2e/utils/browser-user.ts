@@ -111,9 +111,7 @@ export class BrowserUser {
   }
 
   async waitForReady(timeout = 20_000): Promise<void> {
-    // Wait for voting buttons to appear (indicates WS connection + round loaded)
-    await this.page.waitForSelector('[data-value]', { timeout });
-    // Also check that we're connected
+    // Wait for the room page to load (room code header visible)
     await this.page.waitForFunction(
       () => {
         const body = document.body;
@@ -121,6 +119,18 @@ export class BrowserUser {
       },
       { timeout }
     );
+    // Wait for participant list section to appear
+    await this.page.waitForSelector('text=Participants', { timeout });
+  }
+
+  async startNewRound(): Promise<void> {
+    this.logger.logAction('startNewRound');
+    const newRoundButton = this.page.locator('button', { hasText: 'New Round' });
+    await newRoundButton.waitFor({ state: 'visible', timeout: 10000 });
+    await newRoundButton.click();
+    // Wait for vote buttons to appear after round starts
+    await this.page.waitForSelector('[data-value]', { timeout: 10000 });
+    this.logger.logActionResult('startNewRound');
   }
 
   async castVote(value: string | number): Promise<void> {
@@ -137,13 +147,6 @@ export class BrowserUser {
     const revealButton = this.page.locator('button', { hasText: 'Reveal' });
     await revealButton.click();
     this.logger.logActionResult('reveal');
-  }
-
-  async startNewRound(): Promise<void> {
-    this.logger.logAction('startNewRound');
-    const newRoundButton = this.page.locator('button', { hasText: 'New Round' });
-    await newRoundButton.click();
-    this.logger.logActionResult('startNewRound');
   }
 
   async changeName(name: string): Promise<void> {

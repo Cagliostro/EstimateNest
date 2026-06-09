@@ -34,7 +34,6 @@ test.describe('smoke', () => {
       // Guest navigates to the room — auto-join via WS
       await guest.navigate(`/${roomCode}`);
       await guest.waitForReady();
-      await guest.waitForSelector('[data-value]');
 
       // Both should see the room code somewhere on the page
       await expect(host.page.locator('body')).toContainText(roomCode);
@@ -60,11 +59,16 @@ test.describe('smoke', () => {
       // Create room
       const { roomCode } = await host.createRoom();
 
-      // Both join the room page and wait for WS connection + voting UI
+      // Both join the room page and wait for WS connection
       await host.navigate(`/${roomCode}`);
       await host.waitForReady();
       await guest.navigate(`/${roomCode}`);
       await guest.waitForReady();
+
+      // Start a new estimation round (vote buttons only appear after round starts)
+      await host.startNewRound();
+
+      // Host votes
 
       // Host votes
       await host.castVote(5);

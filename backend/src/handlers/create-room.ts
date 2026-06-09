@@ -130,6 +130,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       maxParticipants,
       autoRevealEnabled,
       autoRevealCountdownSeconds,
+      moderatorAssigned: true, // creator is the first moderator
       deck: resolvedDeck,
     };
 

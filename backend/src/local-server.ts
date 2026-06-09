@@ -57,16 +57,8 @@ app.post('/rooms', (req, res) => {
 
     rooms.set(roomId, room);
 
-    // Create initial round
-    const roundId = uuidv4();
-    const round: Round = {
-      id: roundId,
-      roomId,
-      startedAt: now,
-      isRevealed: false,
-      scheduledRevealAt: undefined,
-    };
-    rounds.set(roundId, round);
+    // No initial round — matches production behavior where rounds are created via WebSocket newRound
+    // (the first client to join starts the first round programmatically)
 
     res.status(201).json({
       roomId,
@@ -388,13 +380,25 @@ async function handleWebSocketMessage(
     }
 
     case 'join': {
-      // Join is already handled via connection URL params, just acknowledge
-      ws.send(
-        JSON.stringify({
-          type: 'ack',
-          payload: { message: 'Joined room' },
-        })
+      // Broadcast updated participant list to the room
+      broadcastParticipantList(roomId);
+
+      // Send current round state (matching production VoteHandler behavior)
+      const roomRounds = Array.from(rounds.values()).filter(
+        (r) => r.roomId === roomId && !r.isRevealed
       );
+      if (roomRounds.length > 0) {
+        const activeRound = roomRounds[0];
+        const roundVotes = Array.from(votes.values()).filter(
+          (v) => v.roundId === activeRound.id
+        );
+        ws.send(
+          JSON.stringify({
+            type: 'roundUpdate',
+            payload: { round: activeRound, votes: roundVotes },
+          })
+        );
+      }
       break;
     }
 
