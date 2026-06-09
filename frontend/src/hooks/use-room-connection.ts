@@ -433,7 +433,11 @@ export function useRoomConnection() {
       handlersRegisteredRef.current = false;
       // Clear polling interval on unmount
       stopPolling();
-      service.disconnect();
+      // NOTE: Do NOT call service.disconnect() here.
+      // WebSocketService is a singleton — disconnecting would break
+      // any concurrent hook instance (React Strict Mode double-mount).
+      // The WebSocketClient's internal reconnect handles disconnections.
+      // Individual hook cleanup only removes its own handler + polling.
     };
   }, [handleWebSocketMessage, service, stopPolling]);
 
