@@ -20,6 +20,8 @@
     "format": "prettier --write .",
     "test:e2e": "npx playwright test --config=e2e/playwright.config.ts --project=chromium",
     "test:dev-smoke": "npx playwright test --config=e2e/playwright.dev-smoke.config.ts --project=chromium",
+    "test:seo": "npx playwright test --config=e2e/playwright.seo.config.ts --project=chromium",
+    "test:seo:build": "npm run build --workspace=frontend && npm run test:seo",
     "deploy:dev": "npm run deploy --workspace=infrastructure -- --context env=dev",
     "deploy:prod": "npm run deploy --workspace=infrastructure -- --context env=prod",
     "destroy:dev": "npm run destroy --workspace=infrastructure -- --context env=dev",

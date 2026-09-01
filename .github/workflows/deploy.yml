@@ -59,6 +59,7 @@ jobs:
           export VITE_API_URL="https://example.com/api"
           export VITE_WEBSOCKET_URL="wss://example.com/ws"
           export VITE_FRONTEND_URL="https://example.com"
+          export VITE_ROBOTS="noindex,nofollow"
           npm run build
 
       - name: Test
@@ -234,12 +235,19 @@ jobs:
           export VITE_FRONTEND_URL="${{ steps.outputs.outputs.frontend_url }}"
           export VITE_API_KEY="${{ steps.outputs.outputs.rest_api_key_value }}"
           export VITE_API_KEY_ENABLED="true"
+          # Dev must not rank: only prod gets index,follow (build mode is production in both)
+          if [[ "${{ steps.env.outputs.env }}" == "prod" ]]; then
+            export VITE_ROBOTS="index,follow"
+          else
+            export VITE_ROBOTS="noindex,nofollow"
+          fi
           echo "Building frontend with env:"
           echo "VITE_API_URL=$VITE_API_URL"
           echo "VITE_WEBSOCKET_URL=$VITE_WEBSOCKET_URL"
           echo "VITE_FRONTEND_URL=$VITE_FRONTEND_URL"
           echo "VITE_API_KEY=***"
           echo "VITE_API_KEY_ENABLED=$VITE_API_KEY_ENABLED"
+          echo "VITE_ROBOTS=$VITE_ROBOTS"
           # Clean previous build and ensure correct working directory for PostCSS
           rm -rf frontend/dist
           cd frontend && npm run build
@@ -254,6 +262,22 @@ jobs:
             head -c 500 dist/assets/*.css
             exit 1
           fi
+
+      - name: SEO test (prerendered HTML + meta)
+        run: |
+          # Re-export the same env vars so the tested dist matches the build
+          # above (test:seo no longer rebuilds — it tests exactly what gets uploaded)
+          export VITE_API_URL="${{ steps.outputs.outputs.rest_api_url }}"
+          export VITE_WEBSOCKET_URL="${{ steps.outputs.outputs.websocket_url }}"
+          export VITE_FRONTEND_URL="${{ steps.outputs.outputs.frontend_url }}"
+          export VITE_API_KEY="${{ steps.outputs.outputs.rest_api_key_value }}"
+          export VITE_API_KEY_ENABLED="true"
+          if [[ "${{ steps.env.outputs.env }}" == "prod" ]]; then
+            export VITE_ROBOTS="index,follow"
+          else
+            export VITE_ROBOTS="noindex,nofollow"
+          fi
+          npm run test:seo
 
       - name: Upload frontend to S3
         run: |

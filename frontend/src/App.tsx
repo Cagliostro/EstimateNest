@@ -1,7 +1,9 @@
 import { Suspense, lazy } from 'react';
 import { Routes, Route } from 'react-router-dom';
+import HomePage from './pages/HomePage';
 
-const HomePage = lazy(() => import('./pages/HomePage'));
+// Landing page is loaded eagerly to avoid a flash of the static prerendered
+// content (Suspense spinner) on first paint; secondary pages stay lazy.
 const RoomPage = lazy(() => import('./pages/RoomPage'));
 const LegalPage = lazy(() => import('./pages/LegalPage'));
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage'));

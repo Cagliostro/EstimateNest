@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { useRoomConnection } from '../hooks/use-room-connection';
 import { useConnectionStore } from '../store/connection-store';
 import { ApiError } from '../lib/api-client';
+import { landing } from '../content/landing';
 
 export default function HomePage() {
   const navigate = useNavigate();
@@ -186,10 +187,13 @@ export default function HomePage() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-6">
       <div className="max-w-2xl w-full text-center">
-        <h1 className="text-5xl font-bold text-primary-600 mb-4">EstimateNest</h1>
-        <p className="text-xl text-gray-600 dark:text-gray-300 mb-8">
-          Real‑time collaborative planning‑poker for agile teams. No registration required.
-        </p>
+        {landing.hero.badge && (
+          <span className="inline-block bg-primary-50 dark:bg-primary-900/30 border border-primary-200 dark:border-primary-800 text-primary-700 dark:text-primary-300 text-sm font-medium px-3 py-1 rounded-full mb-4">
+            {landing.hero.badge}
+          </span>
+        )}
+        <h1 className="text-5xl font-bold text-primary-600 mb-4">{landing.hero.title}</h1>
+        <p className="text-xl text-gray-600 dark:text-gray-300 mb-8">{landing.hero.subtitle}</p>
 
         {error && (
           <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl p-4 mb-6 text-red-700 dark:text-red-300">
@@ -501,25 +505,27 @@ export default function HomePage() {
         )}
 
         <div className="grid md:grid-cols-3 gap-6 text-left">
-          <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow">
-            <h3 className="font-bold text-lg mb-2">Zero sign‑up</h3>
-            <p className="text-gray-500 dark:text-gray-400">
-              Create a room and share the link. No accounts, no passwords.
-            </p>
-          </div>
-          <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow">
-            <h3 className="font-bold text-lg mb-2">Real‑time voting</h3>
-            <p className="text-gray-500 dark:text-gray-400">
-              See votes appear live. Reveal when ready, or auto‑reveal when everyone has voted.
-            </p>
-          </div>
-          <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow">
-            <h3 className="font-bold text-lg mb-2">Flexible decks</h3>
-            <p className="text-gray-500 dark:text-gray-400">
-              Fibonacci, T‑shirt sizes, powers‑of‑two, or bring your own custom scale.
-            </p>
-          </div>
+          {landing.features.map((feature) => (
+            <div key={feature.title} className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow">
+              <h3 className="font-bold text-lg mb-2">{feature.title}</h3>
+              <p className="text-gray-500 dark:text-gray-400">{feature.description}</p>
+            </div>
+          ))}
         </div>
+
+        <section className="mt-12 text-left">
+          <h2 className="text-3xl font-bold text-gray-800 dark:text-gray-100 mb-6">
+            Frequently asked questions
+          </h2>
+          <div className="space-y-4">
+            {landing.faq.map((item) => (
+              <div key={item.question} className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow">
+                <h3 className="font-bold mb-2">{item.question}</h3>
+                <p className="text-gray-500 dark:text-gray-400">{item.answer}</p>
+              </div>
+            ))}
+          </div>
+        </section>
 
         <footer className="mt-12 text-gray-400 text-sm">
           <p className="mb-2">
