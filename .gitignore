@@ -18,8 +18,10 @@ cdk.out
 # Environment variables
 .env
 .env.local
-.env.development
-.env.production
+# Vite defaults are committed so fresh clones build valid meta tags (no
+# secrets — VITE_* vars are public and overridden by CI)
+!.env.development
+!.env.production
 
 # IDE
 .vscode

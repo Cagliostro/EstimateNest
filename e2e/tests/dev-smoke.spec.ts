@@ -23,6 +23,28 @@ async function createRoom(): Promise<RoomInfo> {
   return await res.json();
 }
 
+test.describe('Dev Smoke — SEO basics', () => {
+  test('home page ships robots noindex and OG tags (dev must not rank)', async ({ request }) => {
+    const res = await request.get('/');
+    expect(res.status()).toBe(200);
+    const html = await res.text();
+
+    expect(html).toMatch(/<meta name="robots" content="noindex,nofollow"/);
+    expect(html).toContain('property="og:title"');
+    expect(html).toContain('property="og:image"');
+  });
+
+  test('sitemap.xml and robots.txt are served', async ({ request }) => {
+    const sitemap = await request.get('/sitemap.xml');
+    expect(sitemap.status()).toBe(200);
+    expect(await sitemap.text()).toContain('<loc>');
+
+    const robots = await request.get('/robots.txt');
+    expect(robots.status()).toBe(200);
+    expect(await robots.text()).toContain('Sitemap:');
+  });
+});
+
 test.describe('Dev Smoke — Multi-User Estimation', () => {
   test.setTimeout(120_000);
 
