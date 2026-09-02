@@ -14,6 +14,8 @@ import {
 import { ZodError } from 'zod';
 import { getCacheManager } from '../utils/cache';
 import { verifyPassword } from '../utils/password';
+import { filterPresent } from '../utils/participants';
+import { handleModeratorVacancy } from '../utils/moderator';
 
 const docClient = getDocClient();
 const cacheManager = getCacheManager();
@@ -22,6 +24,7 @@ const ROOMS_TABLE = process.env.ROOMS_TABLE!;
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 const ROUNDS_TABLE = process.env.ROUNDS_TABLE!;
 const VOTES_TABLE = process.env.VOTES_TABLE!;
+const DEFAULT_TTL_SECONDS = 14 * 24 * 60 * 60;
 
 // Helper function to create participant record
 async function createParticipantRecord(
@@ -29,7 +32,8 @@ async function createParticipantRecord(
   participantId: string,
   name: string,
   avatarSeed: string,
-  isModerator: boolean = false
+  isModerator: boolean = false,
+  expiresAt?: number
 ) {
   const participant: Participant = {
     id: participantId,
@@ -47,6 +51,7 @@ async function createParticipantRecord(
       Item: {
         ...participant,
         participantId: participant.id,
+        expiresAt,
       },
     })
   );
@@ -129,6 +134,13 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     }
     const room = roomResult.Item as Room;
 
+    // Participant rows must expire with the room (TTL in epoch seconds) —
+    // without expiresAt a row whose client never returns lives forever.
+    const participantExpiresAt =
+      typeof room.expiresAt === 'number'
+        ? room.expiresAt
+        : Math.floor(Date.now() / 1000) + DEFAULT_TTL_SECONDS;
+
     // Check password if room has one
     let passwordValid = !room.moderatorPassword;
     if (room.moderatorPassword && validatedData.participantId) {
@@ -201,10 +213,14 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       const nameChanged = newName && newName !== fetchedParticipant.name;
       name = nameChanged ? newName : fetchedParticipant.name;
       avatarSeed = nameChanged ? createAvatarSeed(name) : fetchedParticipant.avatarSeed;
-      // Update lastSeenAt and possibly name in DynamoDB
+      // Update lastSeenAt and possibly name in DynamoDB. A row whose
+      // connectionId was removed (client left) becomes an active REST poller
+      // again: mark it REST so the present-filter keeps listing it — but never
+      // overwrite a live WebSocket mapping.
+      const now = new Date().toISOString();
       const updateExpression = nameChanged
-        ? 'SET lastSeenAt = :now, #nm = :name, avatarSeed = :seed'
-        : 'SET lastSeenAt = :now';
+        ? 'SET lastSeenAt = :now, #nm = :name, avatarSeed = :seed, expiresAt = :exp, connectionId = if_not_exists(connectionId, :rest)'
+        : 'SET lastSeenAt = :now, expiresAt = :exp, connectionId = if_not_exists(connectionId, :rest)';
       await docClient.send(
         new UpdateCommand({
           TableName: PARTICIPANTS_TABLE,
@@ -212,10 +228,17 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           UpdateExpression: updateExpression,
           ExpressionAttributeNames: nameChanged ? { '#nm': 'name' } : undefined,
           ExpressionAttributeValues: nameChanged
-            ? { ':now': new Date().toISOString(), ':name': name, ':seed': avatarSeed }
-            : { ':now': new Date().toISOString() },
+            ? {
+                ':now': now,
+                ':name': name,
+                ':seed': avatarSeed,
+                ':exp': participantExpiresAt,
+                ':rest': 'REST',
+              }
+            : { ':now': now, ':exp': participantExpiresAt, ':rest': 'REST' },
         })
       );
+      cacheManager.invalidateParticipants(roomId);
       // Update participant in our local list if present
       const participantIndex = participants.findIndex((p) => p.id === participantId);
       if (participantIndex >= 0) {
@@ -223,7 +246,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           ...participants[participantIndex],
           name,
           avatarSeed,
-          lastSeenAt: new Date().toISOString(),
+          lastSeenAt: now,
+          connectionId: participants[participantIndex].connectionId ?? 'REST',
         };
       } else {
         // Participant not in cached list (should not happen) - add it
@@ -231,7 +255,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           ...fetchedParticipant,
           name,
           avatarSeed,
-          lastSeenAt: new Date().toISOString(),
+          lastSeenAt: now,
+          connectionId: fetchedParticipant.connectionId ?? 'REST',
         });
       }
     } else if (providedParticipantId) {
@@ -261,7 +286,14 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           if ((error as Error).name !== 'ConditionalCheckFailedException') throw error;
         }
       }
-      await createParticipantRecord(roomId, participantId, name, avatarSeed, isModerator);
+      await createParticipantRecord(
+        roomId,
+        participantId,
+        name,
+        avatarSeed,
+        isModerator,
+        participantExpiresAt
+      );
       // Invalidate participant cache since new participant added
       cacheManager.invalidateParticipants(roomId);
       // Add new participant to our list
@@ -302,7 +334,14 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           if ((error as Error).name !== 'ConditionalCheckFailedException') throw error;
         }
       }
-      await createParticipantRecord(roomId, participantId, name, avatarSeed, isModerator);
+      await createParticipantRecord(
+        roomId,
+        participantId,
+        name,
+        avatarSeed,
+        isModerator,
+        participantExpiresAt
+      );
       // Invalidate participant cache since new participant added
       cacheManager.invalidateParticipants(roomId);
       // Add new participant to our list
@@ -316,6 +355,18 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         lastSeenAt: new Date().toISOString(),
         isModerator,
       });
+    }
+
+    // A moderator handoff pending from a disconnect may now resolve (the
+    // joining participant could be the returning moderator or a new holder).
+    // Lazy and self-healing — never block the join on it.
+    try {
+      const vacancy = await handleModeratorVacancy(roomId, participantId);
+      if (vacancy.handled) {
+        logger.info('Moderator vacancy resolved via join', { roomId, reason: vacancy.reason });
+      }
+    } catch (error) {
+      logger.warn('Moderator vacancy resolution failed', { roomId, error });
     }
 
     // Fetch latest round (active or most recent revealed)
@@ -408,8 +459,13 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       votes = (votesResult.Items as Vote[]) || [];
     }
 
+    // Only present participants are shown: rows whose WebSocket is gone AND
+    // whose REST polling stopped (ghosts) must not appear. The joiner's own
+    // row was just refreshed above and always qualifies.
+    const presentParticipants = filterPresent(participants);
+
     // Remove connectionId from response for privacy/security
-    const participantsWithoutConnection = participants.map((p) => ({
+    const participantsWithoutConnection = presentParticipants.map((p) => ({
       id: p.id,
       roomId: p.roomId,
       name: p.name,

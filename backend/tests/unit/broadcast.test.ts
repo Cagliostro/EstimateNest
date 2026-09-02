@@ -243,18 +243,34 @@ describe('broadcast utility', () => {
           isModerator: true,
         },
       ];
-      mockCacheManager.getParticipantsWithCache.mockResolvedValue(participants);
+      // First fetch feeds the original fan-out; the cleanup invalidates the
+      // cache, so subsequent fetches (the refresh's own prefetch + the nested
+      // broadcast's fetch) return the roster without the stale connection.
+      mockCacheManager.getParticipantsWithCache
+        .mockResolvedValueOnce(participants)
+        .mockResolvedValue([participants[1]]);
 
-      // First call fails with 410 (GoneException), second succeeds
+      // First send fails with 410 (GoneException), follow-up sends succeed
       const goneError = { $metadata: { httpStatusCode: 410 } };
-      mockSend.mockRejectedValueOnce(goneError).mockResolvedValueOnce({});
+      mockSend.mockRejectedValueOnce(goneError).mockResolvedValue({});
 
       await broadcastToRoom(mockEvent, roomId, message);
 
-      expect(mockSend).toHaveBeenCalledTimes(2);
+      // Original fan-out: stale-conn + good-conn; roster refresh: good-conn only
+      expect(mockSend).toHaveBeenCalledTimes(3);
       // Should have attempted to clean up stale connection
       expect(mockDocClientSend).toHaveBeenCalledTimes(1);
       expect(mockCacheManager.invalidateParticipants).toHaveBeenCalledWith(roomId);
+      // The remaining client is told the roster shrank (no ghost participant)
+      const refresh = mockSend.mock.calls[2][0].input;
+      expect(refresh.ConnectionId).toBe('good-conn');
+      expect(JSON.parse(refresh.Data)).toMatchObject({
+        type: 'participantList',
+        payload: { participants: [participants[1]] },
+      });
+      // Bounded: exactly one refresh (its prefetch + the nested broadcast's
+      // own fetch), no further fan-outs after the refresh sends succeed
+      expect(mockCacheManager.getParticipantsWithCache).toHaveBeenCalledTimes(3);
     });
 
     it('should clean up stale connections (403 status)', async () => {
@@ -271,7 +287,11 @@ describe('broadcast utility', () => {
           isModerator: false,
         },
       ];
-      mockCacheManager.getParticipantsWithCache.mockResolvedValue(participants);
+      // Post-cleanup refetch returns an empty roster (the only participant was
+      // cleaned up) — the refresh fan-out then sends to nobody.
+      mockCacheManager.getParticipantsWithCache
+        .mockResolvedValueOnce(participants)
+        .mockResolvedValue([]);
 
       const forbiddenError = { $metadata: { httpStatusCode: 403 } };
       mockSend.mockRejectedValueOnce(forbiddenError);
@@ -280,6 +300,7 @@ describe('broadcast utility', () => {
 
       expect(mockDocClientSend).toHaveBeenCalledTimes(1);
       expect(mockCacheManager.invalidateParticipants).toHaveBeenCalledWith(roomId);
+      expect(mockSend).toHaveBeenCalledTimes(1); // original send only, nothing left to refresh to
     });
 
     it('should not clean up connection on other errors', async () => {

@@ -6,6 +6,8 @@ import { broadcastToRoom } from '../utils/broadcast';
 import { validateWebSocketConnectionParams, Room } from '@estimatenest/shared';
 import { ZodError } from 'zod';
 import { getCacheManager } from '../utils/cache';
+import { filterPresent } from '../utils/participants';
+import { handleModeratorVacancy } from '../utils/moderator';
 
 const docClient = getDocClient();
 const cacheManager = getCacheManager();
@@ -101,28 +103,47 @@ export const handler = async (
     // Invalidate participant cache since connectionId updated
     cacheManager.invalidateParticipants(roomId);
 
-    // Fetch all participants in the room (cached, invalidated just above)
+    // A pending moderator handoff may now resolve: this connect could be the
+    // returning moderator (keeps the role) or trigger the lazy promotion.
+    // Lazy and self-healing — never fail the connection on it.
+    try {
+      const vacancy = await handleModeratorVacancy(roomId, participantId);
+      if (vacancy.handled) {
+        logger.info('Moderator vacancy resolved via connect', { roomId, reason: vacancy.reason });
+      }
+    } catch (error) {
+      logger.warn('Moderator vacancy resolution failed', { roomId, error });
+    }
+
+    // Fetch all participants in the room (cached; refreshed above if a
+    // vacancy was resolved)
     const participants = await cacheManager.getParticipantsWithCache(roomId);
+    const presentParticipants = filterPresent(participants);
 
     logger.info('WebSocket connect participants', {
       roomId,
-      count: participants.length,
-      isModerator: participants.filter((p) => p.isModerator).length,
+      count: presentParticipants.length,
+      isModerator: presentParticipants.filter((p) => p.isModerator).length,
     });
 
     logger.info('Broadcasting participant list', { roomId });
-    // Broadcast updated participant list to everyone else in the room (fire-and-forget)
-    broadcastToRoom(
-      event,
-      roomId,
-      {
-        type: 'participantList',
-        payload: { participants },
-      },
-      connectionId // exclude the newly connected participant
-    ).catch((broadcastError) => {
-      logger.warn('Broadcast to room failed', { error: broadcastError });
-    });
+    // Awaited, not fire-and-forget: the Lambda runtime freezes pending promises
+    // when the handler returns, so an un-awaited broadcast would stall until
+    // the next warm-container invocation — delaying the join update for the
+    // other clients. A broadcast error must not fail the connect.
+    try {
+      await broadcastToRoom(
+        event,
+        roomId,
+        {
+          type: 'participantList',
+          payload: { participants: presentParticipants },
+        },
+        connectionId // exclude the newly connected participant
+      );
+    } catch (error) {
+      logger.warn('Broadcast to room failed', { error });
+    }
 
     return {
       statusCode: 200,

@@ -9,6 +9,7 @@ import {
 import { APIGatewayProxyEvent } from 'aws-lambda';
 import { WebSocketMessage } from '@estimatenest/shared';
 import { getCacheManager } from './cache';
+import { filterPresent } from './participants';
 
 const docClient = getDocClient();
 const cacheManager = getCacheManager();
@@ -18,12 +19,15 @@ const cacheManager = getCacheManager();
  * @param roomId The room ID
  * @param message The message to broadcast
  * @param excludeConnectionId Optional connection ID to exclude (e.g., sender)
+ * @param isRosterRefresh Internal: this call was spawned as the roster refresh
+ *   after a stale-connection cleanup and must not chain another refresh.
  */
 export async function broadcastToRoom(
   event: APIGatewayProxyEvent,
   roomId: string,
   message: WebSocketMessage,
-  excludeConnectionId?: string
+  excludeConnectionId?: string,
+  isRosterRefresh = false
 ): Promise<void> {
   const logger = createLogger();
   const { domainName, stage, apiId } = event.requestContext;
@@ -37,7 +41,6 @@ export async function broadcastToRoom(
   logger.info('Broadcast endpoint', { roomId, region, stage });
   const apiGatewayClient = new ApiGatewayManagementApiClient({ endpoint });
 
-  // Fetch all participants in the room
   // Fetch all participants in the room (cached)
   const participants = await cacheManager.getParticipantsWithCache(roomId);
   if (!message.type) {
@@ -57,6 +60,12 @@ export async function broadcastToRoom(
     (p) => p.connectionId && p.connectionId !== 'REST' && p.connectionId !== excludeConnectionId
   );
   logger.info('Active connections to send to', { count: activeParticipants.length });
+
+  // Set when this fan-out removed a stale connectionId mapping: whoever
+  // removes a mapping must inform the room, or the remaining clients keep a
+  // ghost — the departed client's $disconnect is racing or already done and
+  // will no-op against the empty mapping, so no leave broadcast ever fires.
+  let cleanedStaleConnection = false;
 
   // Send message to each active WebSocket connection
   const promises = activeParticipants.map(async (participant) => {
@@ -82,7 +91,9 @@ export async function broadcastToRoom(
         participant.participantId
       ) {
         try {
-          // Remove connectionId from the participant record
+          // Remove connectionId only if it still maps the dead connection — a
+          // racing reconnect may have mapped this row to a live connection and
+          // must not be stripped (mapping-nuke race).
           await docClient.send(
             new UpdateCommand({
               TableName: process.env.PARTICIPANTS_TABLE!,
@@ -91,7 +102,9 @@ export async function broadcastToRoom(
                 participantId: participant.participantId,
               },
               UpdateExpression: 'REMOVE connectionId SET lastSeenAt = :now',
+              ConditionExpression: 'connectionId = :cid',
               ExpressionAttributeValues: {
+                ':cid': participant.connectionId,
                 ':now': new Date().toISOString(),
               },
             })
@@ -99,14 +112,40 @@ export async function broadcastToRoom(
           logger.info('Cleaned up stale connection', { roomId: participant.roomId });
           // Invalidate participant cache since participant connection changed
           cacheManager.invalidateParticipants(participant.roomId);
+          cleanedStaleConnection = true;
         } catch (cleanupError) {
-          logger.error('Failed to clean up stale connection', { error: cleanupError });
+          // ConditionalCheckFailed: the row maps a newer live connection now —
+          // nothing to clean up. Logged below to avoid noise.
+          if ((cleanupError as Error).name !== 'ConditionalCheckFailedException') {
+            logger.error('Failed to clean up stale connection', { error: cleanupError });
+          }
         }
       }
     }
   });
 
   await Promise.allSettled(promises);
+
+  // A cleanup above removed a mapping without anyone else broadcasting the
+  // departure. Push one fresh roster to the remaining clients so the ghost
+  // heals. isRosterRefresh bounds the cascade to this single extra fan-out.
+  if (cleanedStaleConnection && !isRosterRefresh) {
+    try {
+      const freshParticipants = await cacheManager.getParticipantsWithCache(roomId);
+      await broadcastToRoom(
+        event,
+        roomId,
+        {
+          type: 'participantList',
+          payload: { participants: filterPresent(freshParticipants) },
+        },
+        excludeConnectionId,
+        true
+      );
+    } catch (error) {
+      logger.warn('Roster refresh broadcast failed', { error });
+    }
+  }
 }
 
 /**

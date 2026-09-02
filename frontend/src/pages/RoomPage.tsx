@@ -8,6 +8,7 @@ import { useRoomConnection } from '../hooks/use-room-connection';
 import { DEFAULT_DECKS } from '@estimatenest/shared';
 import { config } from '../lib/config';
 import { apiClient } from '../lib/api-client';
+import { getIdentity } from '../lib/room-identity';
 import CountdownOverlay from '../components/CountdownOverlay';
 import Avatar from '../components/Avatar';
 
@@ -109,34 +110,39 @@ export default function RoomPage() {
     }
   };
 
-  // Auto-join when landing on room page with a room code but no connection
+  // The room page is only usable once the store holds THIS room: store data of
+  // a previous room (stale cross-room state) must never render under another
+  // room's URL.
+  const joined = !!roomId && shortCode === roomCode?.toUpperCase();
+
+  // Auto-join when the page shows a room we are not joined to — this includes
+  // a reload (no room in store) and a room-code change (store holds another
+  // room). The identity stored for this code makes the rejoin land in the
+  // SAME participant row instead of spawning a duplicate.
   const hasAttemptedAutoJoin = useRef(false);
   useEffect(() => {
-    if (
-      connectionState === 'disconnected' &&
-      !roomId &&
-      roomCode &&
-      !hasAttemptedAutoJoin.current
-    ) {
-      console.log('[EstimateNest] Auto-join triggered:', {
-        roomCode,
-        participantName,
-        hasRoomId: !!roomId,
-        connectionState,
-      });
-      hasAttemptedAutoJoin.current = true;
-      const name = participantName || 'Anonymous';
-      console.log('[EstimateNest] Attempting joinRoom with name:', name);
-      joinRoom(roomCode, name).catch((error) => {
-        console.error('[EstimateNest] Auto-join failed:', error);
-        setError(error instanceof Error ? error.message : 'Failed to join room');
-        // Reset the flag after some time to allow retry
-        setTimeout(() => {
-          hasAttemptedAutoJoin.current = false;
-        }, 3000);
-      });
-    }
-  }, [connectionState, roomId, roomCode, joinRoom, participantName, setError]);
+    if (joined || !roomCode || hasAttemptedAutoJoin.current) return;
+
+    console.log('[EstimateNest] Auto-join triggered:', {
+      roomCode,
+      participantName,
+      joined,
+    });
+    hasAttemptedAutoJoin.current = true;
+    const identity = getIdentity(roomCode);
+    const name = identity?.name || participantName || 'Anonymous';
+    console.log('[EstimateNest] Attempting joinRoom with name:', name, {
+      rejoinWithStoredIdentity: !!identity,
+    });
+    joinRoom(roomCode, name, undefined, identity?.participantId).catch((error) => {
+      console.error('[EstimateNest] Auto-join failed:', error);
+      setError(error instanceof Error ? error.message : 'Failed to join room');
+      // Reset the flag after some time to allow retry
+      setTimeout(() => {
+        hasAttemptedAutoJoin.current = false;
+      }, 3000);
+    });
+  }, [joined, roomCode, joinRoom, participantName, setError]);
 
   // Fetch round history when room is joined
   useEffect(() => {
@@ -217,8 +223,9 @@ export default function RoomPage() {
   const handleRetryJoin = () => {
     if (!roomCode) return;
     hasAttemptedAutoJoin.current = false;
-    const name = participantName || 'Anonymous';
-    joinRoom(roomCode, name).catch((error) => {
+    const identity = getIdentity(roomCode);
+    const name = identity?.name || participantName || 'Anonymous';
+    joinRoom(roomCode, name, undefined, identity?.participantId).catch((error) => {
       console.error('[EstimateNest] Retry join failed:', error);
       setError(error instanceof Error ? error.message : 'Failed to join room');
     });
@@ -330,7 +337,7 @@ export default function RoomPage() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-4">
       {/* Countdown Overlay */}
-      <CountdownOverlay />
+      {joined && <CountdownOverlay />}
 
       {/* Header */}
       <header className="max-w-6xl mx-auto py-6">
@@ -422,6 +429,7 @@ export default function RoomPage() {
         </div>
       )}
 
+      {joined ? (
       <main className="max-w-6xl mx-auto">
         <div className="grid lg:grid-cols-3 gap-8">
           {/* Main voting area */}
@@ -996,6 +1004,14 @@ export default function RoomPage() {
           </div>
         </div>
       </main>
+      ) : (
+      <main className="max-w-6xl mx-auto">
+        <div className="flex flex-col items-center justify-center py-32 text-center">
+          <div className="w-10 h-10 border-4 border-primary-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+          <p className="text-gray-600 dark:text-gray-400">Joining room…</p>
+        </div>
+      </main>
+      )}
 
       <footer className="max-w-6xl mx-auto mt-8 pt-4 border-t border-gray-200 dark:border-gray-800 text-center text-gray-400 text-sm">
         <p>

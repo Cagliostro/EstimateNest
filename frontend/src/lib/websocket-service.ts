@@ -94,20 +94,30 @@ export class WebSocketService {
 
     this.setState('connecting');
 
-    this.client = new WebSocketClient({
+    const client = new WebSocketClient({
       roomId,
       participantId,
       hookId: 'websocket-service',
-      onMessage: (message) => this.handleMessage(message),
+      onMessage: (message) => {
+        // Drop messages from a client that was already replaced (e.g. the
+        // room changed): a stale in-flight participantList from room A must
+        // never overwrite room B's state.
+        if (this.client === client) {
+          this.handleMessage(message);
+        }
+      },
       onStateChange: (state) => {
-        this.log('Client state change:', state);
-        this.setState(state);
+        if (this.client === client) {
+          this.log('Client state change:', state);
+          this.setState(state);
+        }
       },
       reconnectAttempts: options?.reconnectAttempts,
       reconnectDelay: options?.reconnectDelay,
     });
+    this.client = client;
 
-    this.client.connect();
+    client.connect();
   }
 
   disconnect(): void {

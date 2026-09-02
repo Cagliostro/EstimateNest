@@ -105,11 +105,28 @@ export const useRoomStore = create<RoomState>((set) => ({
     })),
 
   setCurrentRound: (round) =>
-    set((state) => ({
-      currentRound: round,
-      votes: round?.id === state.currentRound?.id ? state.votes : [],
-      isRevealed: round?.isRevealed || false,
-    })),
+    set((state) => {
+      // A reveal is terminal per round. Vote broadcasts come from concurrent
+      // voter Lambda invocations whose gateway delivery order is not
+      // guaranteed, so a pre-reveal "N votes, not revealed" update can land
+      // AFTER the reveal update. Applying it would regress the UI back to a
+      // voting state — drop unrevealed updates for an already-revealed round.
+      const currentRoundAlreadyRevealed =
+        state.currentRound?.id != null &&
+        state.currentRound?.id === round?.id &&
+        (state.isRevealed || !!state.currentRound?.isRevealed);
+      if (round?.isRevealed === false && currentRoundAlreadyRevealed) {
+        console.warn('[RoomStore] Dropping stale roundUpdate for revealed round', {
+          roundId: round.id,
+        });
+        return state;
+      }
+      return {
+        currentRound: round,
+        votes: round?.id === state.currentRound?.id ? state.votes : [],
+        isRevealed: round?.isRevealed || false,
+      };
+    }),
 
   addVote: (vote) =>
     set((state) => ({

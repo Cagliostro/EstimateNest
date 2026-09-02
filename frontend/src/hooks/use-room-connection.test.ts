@@ -232,6 +232,9 @@ describe('useRoomConnection', () => {
 
     expect(mockApiClient.joinRoom).toHaveBeenCalledWith('TEST', 'Test User', undefined, undefined);
     expect(mockStores.connectionStoreState.setConnecting).toHaveBeenCalled();
+    // Joining a room must drop any previous room's state (cross-room leak guard).
+    expect(mockStores.roomStoreState.clearRoom).toHaveBeenCalled();
+    expect(mockStores.participantStoreState.clearParticipant).toHaveBeenCalled();
     expect(mockStores.participantStoreState.setParticipant).toHaveBeenCalledWith(
       'test-participant-id',
       'Test User',

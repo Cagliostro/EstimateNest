@@ -15,7 +15,10 @@ async function createRoom(): Promise<RoomInfo> {
       'Content-Type': 'application/json',
       'x-api-key': API_KEY,
     },
-    body: JSON.stringify({ deck: 'fibonacci' }),
+    // autoRevealEnabled off: once everyone voted, the full-screen countdown
+    // overlay would otherwise race (and intercept) the manual reveal clicks
+    // this suite performs — the manual flow must stay deterministic.
+    body: JSON.stringify({ deck: 'fibonacci', autoRevealEnabled: false }),
   });
   if (!res.ok) {
     throw new Error(`Failed to create room: ${res.status} ${await res.text()}`);
@@ -120,6 +123,25 @@ test.describe('Dev Smoke — Multi-User Estimation', () => {
         throw new Error('Failed to start round after 3 attempts');
       }
 
+      // ── Sync helpers ─────────────────────────────────────────
+      // Vote fan-out over API Gateway can lag by hundreds of ms. Only reveal
+      // once the host sees all votes registered, and only start the next
+      // round once every client rendered the reveal — otherwise a client
+      // still on the previous (active) round would cast its vote into that
+      // stale round and the vote would be silently lost.
+      async function waitForAllVotesCast(page: typeof alicePage) {
+        await expect(page.locator('body')).toContainText('3 vote(s) cast.', { timeout: 20_000 });
+      }
+      async function waitForRevealOnAll() {
+        for (const [name, page] of Object.entries({
+          alice: alicePage,
+          bob: bobPage,
+          charlie: charliePage,
+        })) {
+          await expect(page.locator('body')).toContainText('Revealed!', { timeout: 20_000 });
+        }
+      }
+
       // ── Round 1 ──────────────────────────────────────────────
       console.log('--- Round 1 ---');
       await startRound(alicePage);
@@ -128,12 +150,11 @@ test.describe('Dev Smoke — Multi-User Estimation', () => {
       await alicePage.locator('[data-value="5"]').click();
       await bobPage.locator('[data-value="8"]').click();
       await charliePage.locator('[data-value="13"]').click();
-      await alicePage.waitForTimeout(1000);
+      await waitForAllVotesCast(alicePage);
 
       // Alice reveals
-      const revealBtn = alicePage.locator('button', { hasText: 'Reveal Votes' });
-      await revealBtn.click();
-      await alicePage.waitForTimeout(1000);
+      await alicePage.locator('button', { hasText: 'Reveal Votes' }).click();
+      await alicePage.waitForTimeout(500);
 
       // Verify results on Alice's screen
       await expect(alicePage.locator('body')).toContainText('Revealed!');
@@ -143,6 +164,7 @@ test.describe('Dev Smoke — Multi-User Estimation', () => {
       // Average: (5+8+13)/3 = 8.7 (rounded to 1 decimal)
       await expect(alicePage.locator('body')).toContainText('8.7');
       console.log('Round 1 revealed — average 8.7');
+      await waitForRevealOnAll();
 
       // ── Round 2 ──────────────────────────────────────────────
       console.log('--- Round 2 ---');
@@ -151,14 +173,15 @@ test.describe('Dev Smoke — Multi-User Estimation', () => {
       await alicePage.locator('[data-value="1"]').click();
       await bobPage.locator('[data-value="2"]').click();
       await charliePage.locator('[data-value="3"]').click();
-      await alicePage.waitForTimeout(500);
+      await waitForAllVotesCast(alicePage);
 
       await alicePage.locator('button', { hasText: 'Reveal Votes' }).click();
-      await alicePage.waitForTimeout(1000);
+      await alicePage.waitForTimeout(500);
 
       await expect(alicePage.locator('body')).toContainText('Revealed!');
       await expect(alicePage.locator('body')).toContainText('2.0');
       console.log('Round 2 revealed — average 2.0');
+      await waitForRevealOnAll();
 
       // ── Round 3 ──────────────────────────────────────────────
       console.log('--- Round 3 ---');
@@ -167,10 +190,10 @@ test.describe('Dev Smoke — Multi-User Estimation', () => {
       await alicePage.locator('[data-value="40"]').click();
       await bobPage.locator('[data-value="100"]').click();
       await charliePage.locator('[data-value="?"]').click();
-      await alicePage.waitForTimeout(500);
+      await waitForAllVotesCast(alicePage);
 
       await alicePage.locator('button', { hasText: 'Reveal Votes' }).click();
-      await alicePage.waitForTimeout(1000);
+      await alicePage.waitForTimeout(500);
 
       await expect(alicePage.locator('body')).toContainText('Revealed!');
       // "?" is a special value — should still be displayed

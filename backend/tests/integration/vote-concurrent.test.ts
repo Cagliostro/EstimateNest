@@ -320,4 +320,121 @@ describe('vote handler - concurrent scenarios', () => {
 
     // In sequential voting, only one round should be created
   });
+
+  describe('vote transaction conflict retry', () => {
+    const conflictRoomId = '11111111-2222-3333-8444-555555555555';
+    const existingRoundId = 'existing-round-id';
+    const participantItem = {
+      participantId: participantId2,
+      roomId: conflictRoomId,
+      isModerator: false,
+      connectionId: connectionId2,
+    };
+    const deckRoom = {
+      id: conflictRoomId,
+      deck: { id: 'fibonacci', values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'] },
+    };
+    const voteItem = {
+      id: 'vote-id-retry',
+      roundId: existingRoundId,
+      participantId: participantId2,
+      value: 5,
+    };
+
+    // Register the full single-vote flow (rate limit, participant lookup, deck
+    // validation, existing active round, vote query fan-out). configureTx runs
+    // at the exact queue position of the vote transaction send.
+    function registerVoteFlow(configureTx: () => void) {
+      mockUuid.v4.mockReturnValueOnce('vote-id-retry');
+      // Rate limit: count query + record put
+      mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 });
+      mockDynamoDB.send.mockResolvedValueOnce({});
+      // Participant lookup by connectionId
+      mockDynamoDB.send.mockResolvedValueOnce({ Items: [participantItem] });
+      // Deck validation
+      mockCacheManager.getRoomWithCache.mockResolvedValueOnce(deckRoom);
+      // Active round already exists (no round creation)
+      mockCacheManager.getActiveRoundWithCache.mockResolvedValueOnce({
+        id: existingRoundId,
+        roomId: conflictRoomId,
+        startedAt: new Date().toISOString(),
+        isRevealed: false,
+      });
+      // Vote transaction
+      configureTx();
+      // Vote-consistency queries (handler re-queries until count matches)
+      for (let i = 0; i < 5; i++) {
+        mockDynamoDB.send.mockResolvedValueOnce({ Items: [voteItem] });
+      }
+      // Participants fetch (after transaction) — single active participant
+      mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
+        {
+          ...participantItem,
+          id: participantId2,
+          name: 'Charlie',
+          avatarSeed: 'seed2',
+          joinedAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+        },
+      ]);
+      // Auto-reveal settings (off — matches the dev-smoke flow)
+      mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
+        id: conflictRoomId,
+        autoRevealEnabled: false,
+        autoRevealCountdownSeconds: 3,
+      });
+    }
+
+    function transactionCanceledError(reasonCodes: string[]): Error {
+      return Object.assign(new Error('Transaction canceled'), {
+        name: 'TransactionCanceledException',
+        CancellationReasons: reasonCodes.map((Code) => ({ Code })),
+      });
+    }
+
+    it('retries the vote transaction when it conflicts with a concurrent write', async () => {
+      registerVoteFlow(() => {
+        // First attempt loses the per-item serialization race, retry wins
+        mockDynamoDB.send
+          .mockRejectedValueOnce(
+            transactionCanceledError(['None', 'TransactionConflict'])
+          )
+          .mockResolvedValueOnce({});
+      });
+
+      const response = await handler(mockEvent2 as APIGatewayProxyEvent);
+      expect(response.statusCode).toBe(200);
+      // 2 rate limit + 1 participant + 2 transaction attempts + 1 votes query
+      expect(mockDynamoDB.send).toHaveBeenCalledTimes(6);
+    });
+
+    it('does not retry when the transaction fails on a condition', async () => {
+      registerVoteFlow(() => {
+        // Duplicate-vote condition — a retry can never succeed, must fail fast
+        mockDynamoDB.send.mockRejectedValueOnce(
+          transactionCanceledError(['ConditionalCheckFailed', 'None'])
+        );
+      });
+
+      const response = await handler(mockEvent2 as APIGatewayProxyEvent);
+      expect(response.statusCode).toBe(500);
+      expect(mockDynamoDB.send).toHaveBeenCalledTimes(4); // no retry, no votes query
+    });
+
+    it('gives up after max retries when conflicts persist', async () => {
+      registerVoteFlow(() => {
+        // Competing writes keep winning — bounded retries, then fail
+        for (let i = 0; i < 5; i++) {
+          mockDynamoDB.send.mockRejectedValueOnce(
+            transactionCanceledError(['None', 'TransactionConflict'])
+          );
+        }
+      });
+
+      const response = await handler(mockEvent2 as APIGatewayProxyEvent);
+      expect(response.statusCode).toBe(500);
+      // 2 rate limit + 1 participant + 5 transaction attempts, no votes query
+      expect(mockDynamoDB.send).toHaveBeenCalledTimes(8);
+    });
+  });
 });

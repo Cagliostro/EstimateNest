@@ -21,11 +21,61 @@ app.use((req, res, next) => {
 
 // In-memory storage
 const rooms = new Map<string, Room>();
-const participants = new Map<string, Participant>();
+// connectionId may be absent (disconnect removes it, like the Lambda REMOVE),
+// despite the shared type declaring it required.
+type LocalParticipant = Participant & { connectionId?: string };
+const participants = new Map<string, LocalParticipant>();
 const connections = new Map<string, WSWebSocket>(); // connectionId -> WebSocket
 const participantByConnection = new Map<string, string>(); // connectionId -> participantId
 const rounds = new Map<string, Round>();
 const votes = new Map<string, Vote>();
+// roomId -> ISO timestamp of when the moderator's connection left
+const moderatorVacantAt = new Map<string, string>();
+
+// Mirrors backend/src/utils/participants.ts and moderator.ts
+const REST_PRESENT_GRACE_MS = 90_000;
+const MODERATOR_HANDOFF_GRACE_MS = 60_000;
+
+function isPresent(p: LocalParticipant): boolean {
+  if (!p.connectionId) return false;
+  if (p.connectionId === 'REST') {
+    return Date.now() - new Date(p.lastSeenAt).getTime() < REST_PRESENT_GRACE_MS;
+  }
+  return connections.has(p.connectionId);
+}
+
+function filterPresent(list: LocalParticipant[]): LocalParticipant[] {
+  return list.filter(isPresent);
+}
+
+function resolveModeratorVacancy(roomId: string, connectingParticipantId: string): void {
+  const vacantAtRaw = moderatorVacantAt.get(roomId);
+  if (!vacantAtRaw) return;
+  const vacantAt = new Date(vacantAtRaw).getTime();
+  const roomParticipants = Array.from(participants.values()).filter((p) => p.roomId === roomId);
+  const moderator = roomParticipants.find((p) => p.isModerator);
+
+  if (moderator && (isPresent(moderator) || moderator.id === connectingParticipantId)) {
+    // The moderator is (back) online — the vacancy is stale, drop it.
+    moderatorVacantAt.delete(roomId);
+    return;
+  }
+
+  if (Date.now() - vacantAt < MODERATOR_HANDOFF_GRACE_MS) return;
+
+  const candidates = filterPresent(roomParticipants).filter((p) => p.id !== moderator?.id);
+  if (candidates.length === 0) return;
+  const newModerator = candidates.reduce((oldest, current) =>
+    new Date(oldest.joinedAt) < new Date(current.joinedAt) ? oldest : current
+  );
+  if (moderator) moderator.isModerator = false;
+  newModerator.isModerator = true;
+  moderatorVacantAt.delete(roomId);
+  console.log('Moderator handoff: promoted', {
+    roomId,
+    newModerator: newModerator.id,
+  });
+}
 
 // Create avatar seed
 function createAvatarSeed(name?: string): string {
@@ -93,12 +143,14 @@ app.get('/rooms/:code', (req, res) => {
       // Try to fetch existing participant
       const existingParticipant = participants.get(participantId);
       if (existingParticipant && existingParticipant.roomId === room.id) {
-        // Participant exists - use stored details
+        // Participant exists - use stored details. Mirrors the Lambda: a row
+        // whose WebSocket mapping was removed on disconnect becomes an active
+        // REST poller again — but a live WebSocket mapping is never replaced.
         finalParticipantId = participantId;
         finalName = existingParticipant.name;
         avatarSeed = existingParticipant.avatarSeed;
-        // Update lastSeenAt
         existingParticipant.lastSeenAt = new Date().toISOString();
+        existingParticipant.connectionId = existingParticipant.connectionId ?? 'REST';
         participants.set(participantId, existingParticipant);
       } else {
         // Participant not found - treat as new participant
@@ -117,12 +169,11 @@ app.get('/rooms/:code', (req, res) => {
 
     // Create new participant record if new
     if (isNewParticipant) {
-      const connectionId = uuidv4(); // Temporary for response, real one set on WS connect
       const now = new Date().toISOString();
       const participant: Participant = {
         id: finalParticipantId,
         roomId: room.id,
-        connectionId,
+        connectionId: 'REST', // real connection ID is set on WS connect
         name: finalName,
         avatarSeed,
         joinedAt: now,
@@ -141,8 +192,13 @@ app.get('/rooms/:code', (req, res) => {
       participants.set(finalParticipantId, participant);
     }
 
-    // Fetch all participants in the room (including the one we just added)
-    const roomParticipants = Array.from(participants.values()).filter((p) => p.roomId === room.id);
+    // A pending moderator handoff may resolve on this join (mirrors join-room.ts)
+    resolveModeratorVacancy(room.id, finalParticipantId);
+
+    // Only present participants are shown (mirrors join-room.ts response)
+    const presentParticipants = filterPresent(
+      Array.from(participants.values()).filter((p) => p.roomId === room.id)
+    );
 
     // Fetch active round (not revealed)
     const roomRounds = Array.from(rounds.values()).filter(
@@ -155,7 +211,7 @@ app.get('/rooms/:code', (req, res) => {
     }
 
     // Remove connectionId from response for privacy/security
-    const participantsWithoutConnection = roomParticipants.map((p) => ({
+    const participantsWithoutConnection = presentParticipants.map((p) => ({
       id: p.id,
       roomId: p.roomId,
       name: p.name,
@@ -229,6 +285,9 @@ wss.on('connection', (ws, req) => {
   participant.connectionId = connectionId;
   participants.set(participantId, participant);
 
+  // A pending moderator handoff may resolve on this connect (mirrors websocket-connect.ts)
+  resolveModeratorVacancy(roomId, participantId);
+
   console.log(`WebSocket connected: participant=${participantId}, room=${roomId}`);
 
   // Send welcome message
@@ -264,10 +323,26 @@ wss.on('connection', (ws, req) => {
     connections.delete(connectionId);
     participantByConnection.delete(connectionId);
 
-    // Update participant last seen
     if (participant) {
+      // Mirrors the Lambda: REMOVE connectionId SET lastSeenAt
+      participant.connectionId = undefined;
       participant.lastSeenAt = new Date().toISOString();
       participants.set(participantId, participant);
+
+      // Moderator: mark a vacancy instead of reassigning immediately — a
+      // quick reconnect (page reload) must keep the role. Only when other
+      // live connections remain (mirrors websocket-disconnect.ts).
+      if (participant.isModerator) {
+        const otherLive = Array.from(participants.values()).filter(
+          (p) => p.roomId === roomId && p.id !== participantId && connections.has(p.connectionId ?? '')
+        );
+        if (otherLive.length > 0) {
+          moderatorVacantAt.set(roomId, new Date().toISOString());
+          console.log('Moderator disconnected — vacancy marked', { roomId });
+        } else {
+          console.log('Moderator disconnected with no reassignment candidates', { roomId });
+        }
+      }
     }
 
     // Broadcast leave notification
@@ -488,7 +563,9 @@ function broadcastToRoom(roomId: string, message: WebSocketMessage) {
 }
 
 function broadcastParticipantList(roomId: string) {
-  const roomParticipants = Array.from(participants.values()).filter((p) => p.roomId === roomId);
+  const roomParticipants = filterPresent(
+    Array.from(participants.values()).filter((p) => p.roomId === roomId)
+  );
 
   broadcastToRoom(roomId, {
     type: 'participantList',
