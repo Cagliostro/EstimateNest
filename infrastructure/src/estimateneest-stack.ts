@@ -483,10 +483,17 @@ export class EstimateNestStack extends cdk.Stack {
     participantsTable.grantWriteData(createRoomHandler);
     // join-room.ts: Reads room codes, reads/writes participants, reads rounds and votes
     roomCodesTable.grantReadData(joinRoomHandler);
-    // Granular permissions for participants table: GetItem, Query, PutItem, UpdateItem
+    // Granular permissions for participants table: GetItem, Query, PutItem,
+    // UpdateItem, TransactWriteItems (moderator vacancy promotion transaction)
     joinRoomHandler.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:PutItem', 'dynamodb:UpdateItem'],
+        actions: [
+          'dynamodb:GetItem',
+          'dynamodb:Query',
+          'dynamodb:PutItem',
+          'dynamodb:UpdateItem',
+          'dynamodb:TransactWriteItems',
+        ],
         resources: [participantsTable.tableArn],
       })
     );
@@ -514,10 +521,11 @@ export class EstimateNestStack extends cdk.Stack {
     roundsTable.grantReadData(websocketDisconnectHandler);
     // vote.ts (WebSocket): Read/write votes, rounds, participants; read rooms; rate limiting
     // Granular permissions per table
-    // roomsTable: GetItem only
+    // roomsTable: GetItem + UpdateItem (connectionCount balance in broadcast
+    // cleanup) + TransactWriteItems (moderator vacancy promotion transaction)
     voteHandler.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ['dynamodb:GetItem'],
+        actions: ['dynamodb:GetItem', 'dynamodb:UpdateItem', 'dynamodb:TransactWriteItems'],
         resources: [roomsTable.tableArn],
       })
     );
@@ -528,10 +536,11 @@ export class EstimateNestStack extends cdk.Stack {
         resources: [rateLimitTable.tableArn],
       })
     );
-    // participantsTable: Query, UpdateItem (including GSI queries)
+    // participantsTable: Query, UpdateItem (including GSI queries),
+    // TransactWriteItems (moderator vacancy promotion transaction)
     voteHandler.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ['dynamodb:Query', 'dynamodb:UpdateItem'],
+        actions: ['dynamodb:Query', 'dynamodb:UpdateItem', 'dynamodb:TransactWriteItems'],
         resources: [participantsTable.tableArn, `${participantsTable.tableArn}/index/*`],
       })
     );

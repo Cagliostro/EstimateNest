@@ -16,12 +16,15 @@ const { mockDynamoDB, mockCacheManager } = vi.hoisted(() => {
   };
 });
 
-// Mock the DynamoDB DocumentClient - hoisted before imports
+// Mock the DynamoDB DocumentClient - hoisted before imports. GetCommand must
+// exist: the handler resolves a pending moderator vacancy (moderator.ts reads
+// the room META item) right after the participant update.
 vi.mock('@aws-sdk/lib-dynamodb', () => ({
   DynamoDBDocumentClient: {
     from: vi.fn(() => mockDynamoDB),
   },
   QueryCommand: vi.fn(),
+  GetCommand: vi.fn(),
   UpdateCommand: vi.fn(),
 }));
 
@@ -90,6 +93,11 @@ describe('websocket-connect handler', () => {
     // Mock participant update (UpdateCommand)
     mockDynamoDB.send.mockResolvedValueOnce({});
 
+    // Mock moderator vacancy read (room META — no pending vacancy)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {},
+    });
+
     // Mock participants cache
     mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
       {
@@ -116,6 +124,9 @@ describe('websocket-connect handler', () => {
     expect(mockCacheManager.invalidateParticipants).toHaveBeenCalledWith(
       '11111111-2222-4333-8444-555555555555'
     );
+    // Exactly three DynamoDB calls: count increment, participant update,
+    // moderator vacancy read.
+    expect(mockDynamoDB.send).toHaveBeenCalledTimes(3);
   });
 
   it('should reject connection when room connection limit exceeded', async () => {

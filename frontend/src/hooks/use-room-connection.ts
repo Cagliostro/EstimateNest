@@ -6,6 +6,7 @@ import { useRoomStore } from '../store/room-store';
 import { useParticipantStore } from '../store/participant-store';
 import { useConnectionStore } from '../store/connection-store';
 import { useInterval } from './use-interval';
+import { saveIdentity } from '../lib/room-identity';
 
 export interface UseRoomConnectionOptions {
   autoReconnect?: boolean;
@@ -70,7 +71,13 @@ export function useRoomConnection() {
           isRevealed: message.payload.round.isRevealed,
           participantIds: message.payload.votes.map((v) => v.participantId),
         });
-        useRoomStore.getState().setCurrentRound(message.payload.round);
+        // A dropped update (stale vote broadcast after reveal, or an older
+        // round after a new one started) must not overwrite votes either —
+        // the payload carries the stale pre-reveal snapshot.
+        if (!useRoomStore.getState().setCurrentRound(message.payload.round)) {
+          console.warn(`[EstimateNest] [${currentHookId}] Dropped stale roundUpdate`);
+          break;
+        }
         useRoomStore.getState().setVotes(message.payload.votes);
         if (message.payload.round.isRevealed) {
           console.log(`[EstimateNest] [${currentHookId}] Calling revealVotes`);
@@ -148,6 +155,11 @@ export function useRoomConnection() {
 
     try {
       const response = await apiClient.joinRoom(roomCode, undefined, participantId);
+      // A poll that started in another room must not write into this room's
+      // store (in-flight leak across room switches).
+      if (response.roomId !== useRoomStore.getState().roomId) {
+        return;
+      }
       // Update store with latest state
       if (response.participants) {
         useRoomStore.getState().setParticipants(response.participants);
@@ -208,6 +220,15 @@ export function useRoomConnection() {
       const currentHookId = hookIdRef.current;
       try {
         console.log(`[EstimateNest] [${currentHookId}] Joining room:`, roomCode, 'as', name);
+
+        // Leaving any previous room: stop its polling and drop its state so
+        // stale messages or store remnants of room A can never surface under
+        // room B's URL.
+        stopPolling();
+        pollingRoomCodeRef.current = null;
+        pollingParticipantIdRef.current = null;
+        useRoomStore.getState().clearRoom();
+        useParticipantStore.getState().clearParticipant();
         useConnectionStore.getState().setConnecting();
 
         // 1. Join via REST API
@@ -243,6 +264,14 @@ export function useRoomConnection() {
 
         // 3. Set room info
         useRoomStore.getState().setRoom(joinResponse.roomId, roomCode.toUpperCase());
+
+        // Remember this identity for the room code so a reload of the room
+        // page rejoins as the same participant (no duplicate rows, name and
+        // moderator role survive).
+        saveIdentity(roomCode, {
+          participantId: joinResponse.participantId,
+          name: joinResponse.name,
+        });
 
         // 4. Set room settings if provided
         if (joinResponse.room) {
@@ -285,7 +314,7 @@ export function useRoomConnection() {
         throw error;
       }
     },
-    [service]
+    [service, stopPolling]
   );
 
   /**

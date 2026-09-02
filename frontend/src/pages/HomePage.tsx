@@ -5,6 +5,7 @@ import { useRoomConnection } from '../hooks/use-room-connection';
 import { useConnectionStore } from '../store/connection-store';
 import { ApiError } from '../lib/api-client';
 import { landing } from '../content/landing';
+import { getIdentity } from '../lib/room-identity';
 
 export default function HomePage() {
   const navigate = useNavigate();
@@ -130,17 +131,22 @@ export default function HomePage() {
       return;
     }
 
-    const name = participantName.trim() || 'Anonymous';
+    const code = roomCode.trim().toUpperCase();
+    // Rejoining a room this tab already visited: pass the stored identity so
+    // the server updates the existing participant row instead of creating a
+    // duplicate.
+    const identity = getIdentity(code);
+    const name = identity?.name || participantName.trim() || 'Anonymous';
     setIsJoining(true);
     try {
-      await joinRoom(roomCode.trim().toUpperCase(), name);
-      navigate(`/${roomCode.trim().toUpperCase()}`);
+      await joinRoom(code, name, undefined, identity?.participantId);
+      navigate(`/${code}`);
     } catch (error) {
       if (
         error instanceof ApiError &&
         (error.details as { code?: string })?.code === 'PASSWORD_REQUIRED'
       ) {
-        setPendingJoinCode(roomCode.trim().toUpperCase());
+        setPendingJoinCode(code);
         setPendingJoinName(name);
         setJoinPassword('');
         setJoinPasswordError('');
@@ -161,7 +167,13 @@ export default function HomePage() {
 
     setIsJoining(true);
     try {
-      await joinRoom(pendingJoinCode, pendingJoinName, joinPassword);
+      const identity = getIdentity(pendingJoinCode);
+      await joinRoom(
+        pendingJoinCode,
+        pendingJoinName,
+        joinPassword,
+        identity?.participantId
+      );
       setShowPasswordDialog(false);
       navigate(`/${pendingJoinCode}`);
     } catch (error) {

@@ -190,8 +190,11 @@ test.describe('scenarios', () => {
     const user = await BrowserUser.create(ctx, 'User');
 
     try {
-      // Create room with allowAllParticipantsToReveal so reconnected user can reveal
-      const { roomCode } = await user.createRoom({ allowAllParticipantsToReveal: true });
+      // The user is the first participant, so they are the moderator. The
+      // room has no password and no allowAllParticipantsToReveal: revealing
+      // after the reconnect only works if the moderator role survived the
+      // reload (identity reuse — the fix for "moderator lost after reload").
+      const { roomCode } = await user.createRoom();
 
       // Join and start a round
       await user.navigate(`/${roomCode}`);
@@ -208,21 +211,19 @@ test.describe('scenarios', () => {
       await user.reconnect();
       await user.waitForReady();
 
-      // Verify voting buttons are available (WS reconnected)
-      const voteButton = user.page.locator('[data-value="8"]');
-      await expect(voteButton).toBeVisible({ timeout: 10_000 });
-      await expect(voteButton).toBeEnabled({ timeout: 10_000 });
+      // The same participant rejoined (stored identity): exactly one own row
+      // with the moderator crown — no duplicate from the reload.
+      await expect(user.page.locator('body')).toContainText('Connected');
+      await expect(user.page.locator('[data-value="5"]')).toBeDisabled({ timeout: 10_000 });
+      await expect(user.page.locator('main ul li')).toHaveCount(1);
+      await expect(user.page.locator('body')).toContainText('👑');
 
-      // Cast a vote to confirm round interaction works after reconnect
-      await user.castVote(8);
-      await user.page.waitForTimeout(500);
-
-      // Reveal and verify
+      // Reveal as the (still) moderator and verify
       await user.revealRound();
       await user.page.waitForTimeout(500);
 
       await expect(user.page.locator('body')).toContainText('Revealed!');
-      await expect(user.page.locator('body')).toContainText('8');
+      await expect(user.page.locator('body')).toContainText('5');
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       await BrowserUser.dumpAll([user], outputDir, msg);

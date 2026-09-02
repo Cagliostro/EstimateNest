@@ -43,6 +43,27 @@ vi.mock('../../src/utils/cache', () => ({
   getCacheManager: vi.fn(() => mockCacheManager),
 }));
 
+function makeParticipantRow(
+  participantId: string,
+  roomId: string,
+  connectionId: string,
+  isModerator: boolean,
+  joinedMsAgo: number,
+  lastSeenMsAgo = 0
+) {
+  return {
+    participantId,
+    id: participantId,
+    roomId,
+    connectionId,
+    isModerator,
+    name: `User ${participantId}`,
+    avatarSeed: 'seed',
+    joinedAt: new Date(Date.now() - joinedMsAgo).toISOString(),
+    lastSeenAt: new Date(Date.now() - lastSeenMsAgo).toISOString(),
+  };
+}
+
 describe('vote handler', () => {
   let mockEvent: Partial<APIGatewayProxyEvent>;
 
@@ -264,7 +285,10 @@ describe('vote handler', () => {
     mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 });
     mockDynamoDB.send.mockResolvedValueOnce({});
 
-    // Mock participant query returning empty items
+    // Mock participant query returning empty items (the lookup retries three
+    // times to tolerate the eventually-consistent ConnectionIdIndex)
+    mockDynamoDB.send.mockResolvedValueOnce({ Items: [] });
+    mockDynamoDB.send.mockResolvedValueOnce({ Items: [] });
     mockDynamoDB.send.mockResolvedValueOnce({ Items: [] });
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
@@ -363,6 +387,9 @@ describe('vote handler', () => {
       ],
     });
 
+    // Mock room META get for moderator vacancy check (no vacancy pending)
+    mockDynamoDB.send.mockResolvedValueOnce({ Item: {} });
+
     // Mock round get
     mockDynamoDB.send.mockResolvedValueOnce({
       Item: {
@@ -458,6 +485,9 @@ describe('vote handler', () => {
       ],
     });
 
+    // Mock room META get for moderator vacancy check (no vacancy pending)
+    mockDynamoDB.send.mockResolvedValueOnce({ Item: {} });
+
     // Mock round get returning empty (no item)
     mockDynamoDB.send.mockResolvedValueOnce({ Item: null });
 
@@ -502,6 +532,9 @@ describe('vote handler', () => {
       ],
     });
 
+    // Mock room META get for moderator vacancy check (no vacancy pending)
+    mockDynamoDB.send.mockResolvedValueOnce({ Item: {} });
+
     // Mock round get with isRevealed true
     mockDynamoDB.send.mockResolvedValueOnce({
       Item: {
@@ -537,6 +570,64 @@ describe('vote handler', () => {
     expect(body.type).toBe('error');
     expect(body.payload.message).toBe('Round is already revealed');
     expect(body.payload.code).toBe('ROUND_ALREADY_REVEALED');
+  });
+
+  it('should retry a briefly stale ConnectionIdIndex lookup on join', async () => {
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+    const connectionId = 'test-connection-id';
+
+    // Mock rate limit check (allow)
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 }); // rate limit query
+    mockDynamoDB.send.mockResolvedValueOnce({}); // rate limit put
+
+    // First lookup misses (GSI hasn't propagated the fresh $connect mapping
+    // yet), the retry finds the participant.
+    mockDynamoDB.send.mockResolvedValueOnce({ Items: [] });
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [
+        {
+          participantId,
+          id: participantId,
+          roomId,
+          isModerator: false,
+          connectionId,
+          name: 'Test User',
+          avatarSeed: 'seed',
+          joinedAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+        },
+      ],
+    });
+
+    // Mock participants query by roomId
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [
+        {
+          participantId,
+          id: participantId,
+          roomId,
+          isModerator: false,
+          connectionId,
+          name: 'Test User',
+          avatarSeed: 'seed',
+          joinedAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+        },
+      ],
+    });
+
+    const joinEvent = {
+      ...mockEvent,
+      body: JSON.stringify({ type: 'join', payload: {} }),
+    } as APIGatewayProxyEvent;
+
+    const response = await handler(joinEvent);
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.payload.message).toBe('Joined');
+    expect(broadcastToRoom).toHaveBeenCalledTimes(1);
   });
 
   it('should handle join message successfully', async () => {
@@ -701,6 +792,9 @@ describe('vote handler', () => {
       ],
     });
 
+    // Mock room META get for moderator vacancy check (no vacancy pending)
+    mockDynamoDB.send.mockResolvedValueOnce({ Item: {} });
+
     // Mock query for existing unrevealed rounds (none)
     mockDynamoDB.send.mockResolvedValueOnce({ Items: [] });
 
@@ -742,6 +836,201 @@ describe('vote handler', () => {
     );
     // Verify cache invalidation was called
     expect(mockCacheManager.invalidateActiveRound).toHaveBeenCalledWith(roomId);
+  });
+
+  it('allows newRound for a participant promoted via a pending vacancy', async () => {
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+    const connectionId = 'test-connection-id';
+
+    // Mock rate limit check (allow)
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 });
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Participant query by connectionId — the GSI row is stale: the sender
+    // was promoted by the vacancy resolution below but still reads
+    // isModerator: false.
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [makeParticipantRow(participantId, roomId, connectionId, false, 300_000)],
+    });
+
+    // Vacancy pending past the grace window
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: { moderatorVacantAt: new Date(Date.now() - 120_000).toISOString() },
+    });
+
+    // Promotion transaction: the sender is the oldest present candidate
+    mockDynamoDB.send.mockResolvedValueOnce({});
+    mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
+      makeParticipantRow('mod-id', roomId, 'REST', true, 3600_000, 300_000),
+      makeParticipantRow(participantId, roomId, connectionId, false, 300_000),
+      makeParticipantRow('other-id', roomId, 'other-conn', false, 60_000),
+    ]);
+    // Post-promotion roster broadcast
+    mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([]);
+
+    // Mock query for existing unrevealed rounds (none)
+    mockDynamoDB.send.mockResolvedValueOnce({ Items: [] });
+
+    // Mock PutCommand for new round
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock PutCommand for ACTIVE coordination item
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock query for votes (empty)
+    mockDynamoDB.send.mockResolvedValueOnce({ Items: [] });
+
+    const newRoundEvent = {
+      ...mockEvent,
+      body: JSON.stringify({
+        type: 'newRound',
+        payload: { title: 'New Round Title', description: 'New round description' },
+      }),
+    } as APIGatewayProxyEvent;
+
+    const response = await handler(newRoundEvent);
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.payload.message).toBe('New round created or updated');
+    // First the post-promotion roster, then the new round
+    expect(broadcastToRoom).toHaveBeenCalledTimes(2);
+    expect(broadcastToRoom).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      roomId,
+      expect.objectContaining({ type: 'roundUpdate' })
+    );
+  });
+
+  it('blocks newRound when the vacancy promoted a different participant', async () => {
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+    const connectionId = 'test-connection-id';
+
+    // Mock rate limit check (allow)
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 });
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [makeParticipantRow(participantId, roomId, connectionId, false, 60_000)],
+    });
+
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: { moderatorVacantAt: new Date(Date.now() - 120_000).toISOString() },
+    });
+
+    // Promotion picks the OTHER participant (older join), not the sender
+    mockDynamoDB.send.mockResolvedValueOnce({});
+    mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
+      makeParticipantRow('mod-id', roomId, 'REST', true, 3600_000, 300_000),
+      makeParticipantRow(participantId, roomId, connectionId, false, 60_000),
+      makeParticipantRow('other-id', roomId, 'other-conn', false, 300_000),
+    ]);
+    // Post-promotion roster broadcast
+    mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([]);
+
+    const newRoundEvent = {
+      ...mockEvent,
+      body: JSON.stringify({
+        type: 'newRound',
+        payload: { title: 'New Round Title', description: 'New round description' },
+      }),
+    } as APIGatewayProxyEvent;
+
+    const response = await handler(newRoundEvent);
+
+    // Pre-existing behavior: the moderator check error maps to a 500
+    expect(response.statusCode).toBe(500);
+    // Only the post-promotion roster was broadcast — no roundUpdate escaped
+    expect(broadcastToRoom).toHaveBeenCalledTimes(1);
+    expect(broadcastToRoom).toHaveBeenCalledWith(
+      expect.anything(),
+      roomId,
+      expect.objectContaining({ type: 'participantList' })
+    );
+  });
+
+  it('allows reveal for a participant promoted via a pending vacancy', async () => {
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+    const roundId = 'round-123';
+    const connectionId = 'test-connection-id';
+
+    // Mock rate limit check (allow)
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 });
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Stale GSI row: sender already promoted but the flag still reads false
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [makeParticipantRow(participantId, roomId, connectionId, false, 300_000)],
+    });
+
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: { moderatorVacantAt: new Date(Date.now() - 120_000).toISOString() },
+    });
+
+    // Promotion transaction: the sender is the oldest present candidate
+    mockDynamoDB.send.mockResolvedValueOnce({});
+    mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
+      makeParticipantRow('mod-id', roomId, 'REST', true, 3600_000, 300_000),
+      makeParticipantRow(participantId, roomId, connectionId, false, 300_000),
+      makeParticipantRow('other-id', roomId, 'other-conn', false, 60_000),
+    ]);
+    // Post-promotion roster broadcast
+    mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([]);
+
+    // Mock round get (not revealed)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        roomId,
+        roundId,
+        title: 'Test Round',
+        description: '',
+        startedAt: new Date().toISOString(),
+        revealedAt: null,
+        isRevealed: false,
+        scheduledRevealAt: null,
+      },
+    });
+
+    // Mock room cache
+    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
+      id: roomId,
+      sk: 'META',
+      allowAllParticipantsToReveal: false,
+      autoRevealEnabled: true,
+      autoRevealCountdownSeconds: 3,
+    });
+
+    // Mock round update
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock delete ACTIVE coordination item
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock votes query
+    mockDynamoDB.send.mockResolvedValueOnce({ Items: [] });
+
+    const revealEvent = {
+      ...mockEvent,
+      body: JSON.stringify({ type: 'reveal', payload: { roundId } }),
+    } as APIGatewayProxyEvent;
+
+    const response = await handler(revealEvent);
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.payload.message).toBe('Votes revealed');
+    // Roster broadcast from the promotion, then the roundUpdate reveal
+    expect(broadcastToRoom).toHaveBeenCalledTimes(2);
+    expect(broadcastToRoom).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      roomId,
+      expect.objectContaining({ type: 'roundUpdate' })
+    );
   });
 
   it('should handle updateRound message successfully', async () => {

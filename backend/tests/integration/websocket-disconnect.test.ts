@@ -15,14 +15,29 @@ const { mockDynamoDB, mockCacheManager } = vi.hoisted(() => {
   };
 });
 
-// Mock the DynamoDB DocumentClient - hoisted before imports
+// Mock the DynamoDB DocumentClient - hoisted before imports. Command
+// constructors capture their input on the instance so tests can assert on
+// UpdateExpressions (e.g. the mapping-nuke ConditionExpression).
 vi.mock('@aws-sdk/lib-dynamodb', () => ({
   DynamoDBDocumentClient: {
     from: vi.fn(() => mockDynamoDB),
   },
-  QueryCommand: vi.fn(),
-  UpdateCommand: vi.fn(),
+  QueryCommand: vi.fn(function (this: { input: unknown }, input: unknown) {
+    this.input = input;
+  }),
+  GetCommand: vi.fn(function (this: { input: unknown }, input: unknown) {
+    this.input = input;
+  }),
+  UpdateCommand: vi.fn(function (this: { input: unknown }, input: unknown) {
+    this.input = input;
+  }),
   TransactWriteCommand: vi.fn(),
+  ConditionalCheckFailedException: class extends Error {
+    constructor(message?: string) {
+      super(message);
+      this.name = 'ConditionalCheckFailedException';
+    }
+  },
 }));
 
 // Mock the broadcast utilities
@@ -34,6 +49,28 @@ vi.mock('../../src/utils/broadcast', () => ({
 vi.mock('../../src/utils/cache', () => ({
   getCacheManager: vi.fn(() => mockCacheManager),
 }));
+
+const ROOM_ID = '11111111-2222-4333-8444-555555555555';
+const PARTICIPANT_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const OTHER_ID = 'bbbbbbbb-cccc-dddd-9eee-ffffffffffff';
+const CONNECTION_ID = 'test-connection-id';
+
+function liveParticipant(id: string, isModerator: boolean) {
+  return { id, roomId: ROOM_ID, name: 'User', connectionId: `conn-${id}`, isModerator };
+}
+
+interface UpdateInput {
+  UpdateExpression?: string;
+  ConditionExpression?: string;
+  ExpressionAttributeValues?: Record<string, unknown>;
+}
+
+/** All UpdateCommand inputs passed to send. */
+function updateInputs() {
+  return mockDynamoDB.send.mock.calls
+    .map((call) => (call[0] as { input?: UpdateInput }).input)
+    .filter((input) => input && input.UpdateExpression !== undefined);
+}
 
 describe('websocket-disconnect handler', () => {
   let mockEvent: Partial<APIGatewayProxyEvent>;
@@ -57,54 +94,48 @@ describe('websocket-disconnect handler', () => {
 
     // Set environment variables required by the handler
     process.env.PARTICIPANTS_TABLE = 'test-participants-table';
+    process.env.ROOMS_TABLE = 'test-rooms-table';
 
     mockEvent = {
       requestContext: {
-        connectionId: 'test-connection-id',
+        connectionId: CONNECTION_ID,
         domainName: 'test.execute-api.us-east-1.amazonaws.com',
         stage: 'test',
       },
     };
   });
 
-  it('should successfully disconnect WebSocket and update participant', async () => {
-    const roomId = '11111111-2222-4333-8444-555555555555';
-    const participantId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
-
-    // Mock participant query by connectionId (QueryCommand on GSI)
+  function mockRowByConnection() {
     mockDynamoDB.send.mockResolvedValueOnce({
       Items: [
         {
-          roomId,
-          participantId,
+          roomId: ROOM_ID,
+          participantId: PARTICIPANT_ID,
           name: 'Test User',
           isModerator: false,
-          connectionId: 'test-connection-id',
+          connectionId: CONNECTION_ID,
         },
       ],
     });
+  }
 
-    // Mock room connection count decrement (UpdateCommand)
-    mockDynamoDB.send.mockResolvedValueOnce({});
+  function mockRowRead(item?: Record<string, unknown>) {
+    mockDynamoDB.send.mockResolvedValueOnce({ Item: item });
+  }
 
-    // Mock participant update (UpdateCommand to remove connectionId)
-    mockDynamoDB.send.mockResolvedValueOnce({});
+  it('should remove the connection mapping and decrement the count on disconnect', async () => {
+    mockRowByConnection();
+    mockRowRead({
+      roomId: ROOM_ID,
+      participantId: PARTICIPANT_ID,
+      isModerator: false,
+      connectionId: CONNECTION_ID,
+    });
+    mockDynamoDB.send.mockResolvedValueOnce({}); // conditional REMOVE connectionId
+    mockDynamoDB.send.mockResolvedValueOnce({}); // decrement connectionCount
 
-    // Mock participants cache
     mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
-      {
-        id: 'bbbbbbbb-cccc-dddd-9eee-ffffffffffff',
-        name: 'Another User',
-        connectionId: 'other-connection-id',
-        isModerator: true,
-      },
-      // Disconnected participant should not be in the list (no connectionId)
-      {
-        id: participantId,
-        name: 'Test User',
-        connectionId: null,
-        isModerator: false,
-      },
+      liveParticipant(OTHER_ID, false),
     ]);
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
@@ -112,25 +143,220 @@ describe('websocket-disconnect handler', () => {
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body);
     expect(body.type).toBe('disconnected');
-    expect(body.payload.message).toBe('Disconnected');
-    // Verify cache invalidation was called
-    expect(mockCacheManager.invalidateParticipants).toHaveBeenCalledWith(roomId);
+    expect(mockCacheManager.invalidateParticipants).toHaveBeenCalledWith(ROOM_ID);
+
+    // Mapping-nuke guard: the row's connectionId is only removed when it still
+    // maps THIS connection.
+    const removeInput = updateInputs().find((input) =>
+      input.UpdateExpression?.startsWith('REMOVE connectionId')
+    );
+    expect(removeInput).toBeDefined();
+    expect(removeInput!.ConditionExpression).toBe(
+      'connectionId = :cid AND attribute_exists(connectionId)'
+    );
+
+    // Count balance: exactly one decrement after a successful mapping removal.
+    const decrements = updateInputs().filter((input) =>
+      input.UpdateExpression?.startsWith('ADD connectionCount')
+    );
+    expect(decrements).toHaveLength(1);
   });
 
-  it('should return success when no participant found with connectionId', async () => {
-    // Mock participant query returns no items
-    mockDynamoDB.send.mockResolvedValueOnce({
-      Items: [],
+  it('should treat a stale disconnect as successful without touching the live row', async () => {
+    mockRowByConnection();
+    // The consistent read is the authority: a racing reconnect already
+    // replaced the mapping with a newer live connection.
+    mockRowRead({
+      roomId: ROOM_ID,
+      participantId: PARTICIPANT_ID,
+      isModerator: false,
+      connectionId: 'newer-live-connection',
+    });
+    mockDynamoDB.send.mockResolvedValueOnce({}); // count-balance decrement
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(200);
+    // No invalidation, no broadcast — the row maps a live connection.
+    expect(mockCacheManager.invalidateParticipants).not.toHaveBeenCalled();
+    const { broadcastToRoom } = await import('../../src/utils/broadcast.js');
+    expect(broadcastToRoom).not.toHaveBeenCalled();
+
+    // Even stale disconnects balance the connection count (each counted
+    // $connect receives exactly one disconnect event).
+    const decrements = updateInputs().filter((input) =>
+      input.UpdateExpression?.startsWith('ADD connectionCount')
+    );
+    expect(decrements).toHaveLength(1);
+  });
+
+  it('should not decrement when the mapping was already removed (redelivery)', async () => {
+    mockRowByConnection();
+    // Base row without connectionId: the first delivery (or a broadcast
+    // cleanup) already removed the mapping — only the eventually-consistent
+    // GSI entry still lingers.
+    mockRowRead({ roomId: ROOM_ID, participantId: PARTICIPANT_ID, isModerator: false });
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(200);
+    expect(mockCacheManager.invalidateParticipants).not.toHaveBeenCalled();
+    // Whoever removed the mapping already balanced the count — a decrement
+    // here would double it.
+    expect(updateInputs()).toHaveLength(0);
+  });
+
+  it('should not decrement when the row now maps the REST poller marker', async () => {
+    mockRowByConnection();
+    // Cleanup removed the WS mapping (and balanced the count), then the
+    // participant REST-rejoined (connectionId = 'REST') before the late
+    // $disconnect of the old connection arrived.
+    mockRowRead({
+      roomId: ROOM_ID,
+      participantId: PARTICIPANT_ID,
+      isModerator: false,
+      connectionId: 'REST',
     });
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
 
     expect(response.statusCode).toBe(200);
-    const body = JSON.parse(response.body);
-    expect(body.type).toBe('disconnected');
-    expect(body.payload.message).toBe('Disconnected');
-    // Should not call cache invalidation when no participant found
     expect(mockCacheManager.invalidateParticipants).not.toHaveBeenCalled();
+    expect(updateInputs()).toHaveLength(0);
+  });
+
+  it('should return success when no participant row maps the connection', async () => {
+    // GSI returns nothing
+    mockDynamoDB.send.mockResolvedValueOnce({ Items: [] });
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(200);
+    expect(mockCacheManager.invalidateParticipants).not.toHaveBeenCalled();
+    expect(updateInputs()).toHaveLength(0);
+  });
+
+  it('should return success when the row expired between queries', async () => {
+    mockRowByConnection();
+    mockRowRead(undefined); // consistent read finds no row
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(200);
+    expect(mockCacheManager.invalidateParticipants).not.toHaveBeenCalled();
+    expect(updateInputs()).toHaveLength(0);
+  });
+
+  it('should mark a moderator vacancy when other live connections remain', async () => {
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [
+        {
+          roomId: ROOM_ID,
+          participantId: PARTICIPANT_ID,
+          name: 'Moderator',
+          isModerator: true,
+          connectionId: CONNECTION_ID,
+        },
+      ],
+    });
+    mockRowRead({
+      roomId: ROOM_ID,
+      participantId: PARTICIPANT_ID,
+      isModerator: true,
+      connectionId: CONNECTION_ID,
+    });
+    mockDynamoDB.send.mockResolvedValueOnce({}); // conditional REMOVE connectionId
+    mockDynamoDB.send.mockResolvedValueOnce({}); // decrement connectionCount
+    mockDynamoDB.send.mockResolvedValueOnce({}); // SET moderatorVacantAt
+
+    // Room still has another live participant (broadcast fetch, called twice:
+    // once for the vacancy check, once for the broadcast).
+    mockCacheManager.getParticipantsWithCache.mockResolvedValue([
+      liveParticipant(OTHER_ID, false),
+      liveParticipant(PARTICIPANT_ID, true), // row still exists, mapping removed
+    ]);
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(200);
+
+    // No immediate reassignment: the role is parked as a vacancy for the
+    // ~60 s reconnect grace instead.
+    const vacancy = updateInputs().find((input) =>
+      input.UpdateExpression?.startsWith('SET moderatorVacantAt')
+    );
+    expect(vacancy).toBeDefined();
+    expect(vacancy!.ExpressionAttributeValues).toBeDefined();
+
+    const { broadcastToRoom } = await import('../../src/utils/broadcast.js');
+    expect(broadcastToRoom).toHaveBeenCalled();
+  });
+
+  it('should not mark a vacancy when the moderator was the last live connection', async () => {
+    mockRowByConnection();
+    mockRowRead({
+      roomId: ROOM_ID,
+      participantId: PARTICIPANT_ID,
+      isModerator: true,
+      connectionId: CONNECTION_ID,
+    });
+    mockDynamoDB.send.mockResolvedValueOnce({}); // conditional REMOVE connectionId
+    mockDynamoDB.send.mockResolvedValueOnce({}); // decrement connectionCount
+
+    // No other live connection remains.
+    mockCacheManager.getParticipantsWithCache.mockResolvedValue([
+      { ...liveParticipant(PARTICIPANT_ID, true), connectionId: 'REST' },
+    ]);
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(200);
+    const vacancyUpdates = updateInputs().filter((input) =>
+      input.UpdateExpression?.startsWith('SET moderatorVacantAt')
+    );
+    expect(vacancyUpdates).toHaveLength(0);
+  });
+
+  it('should broadcast only present participants after the disconnect', async () => {
+    mockRowByConnection();
+    mockRowRead({
+      roomId: ROOM_ID,
+      participantId: PARTICIPANT_ID,
+      isModerator: false,
+      connectionId: CONNECTION_ID,
+    });
+    mockDynamoDB.send.mockResolvedValueOnce({}); // conditional REMOVE connectionId
+    mockDynamoDB.send.mockResolvedValueOnce({}); // decrement connectionCount
+
+    // One live participant, one ghost (stale REST row) — the ghost must not
+    // be broadcast.
+    mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
+      liveParticipant(OTHER_ID, false),
+      {
+        id: PARTICIPANT_ID,
+        roomId: ROOM_ID,
+        name: 'Ghost',
+        connectionId: 'REST',
+        lastSeenAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+        isModerator: false,
+      },
+    ]);
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(200);
+    const { broadcastToRoom } = await import('../../src/utils/broadcast.js');
+    const participantListCalls = (broadcastToRoom as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call) => (call[2] as { type: string }).type === 'participantList'
+    );
+    expect(participantListCalls).toHaveLength(1);
+    const payload = (
+      participantListCalls[0][2] as {
+        payload: { participants: Array<{ id: string }> };
+      }
+    ).payload;
+    expect(payload.participants).toHaveLength(1);
+    expect(payload.participants[0].id).toBe(OTHER_ID);
   });
 
   it('should handle DynamoDB query error and return 500', async () => {
@@ -145,24 +371,14 @@ describe('websocket-disconnect handler', () => {
     expect(body.payload.error).toBe('Internal server error');
   });
 
-  it('should handle DynamoDB update error and return 500', async () => {
-    const roomId = '11111111-2222-4333-8444-555555555555';
-    const participantId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
-
-    // Mock participant query by connectionId
-    mockDynamoDB.send.mockResolvedValueOnce({
-      Items: [
-        {
-          roomId,
-          participantId,
-          name: 'Test User',
-          isModerator: false,
-          connectionId: 'test-connection-id',
-        },
-      ],
+  it('should handle a non-conditional update error and return 500', async () => {
+    mockRowByConnection();
+    mockRowRead({
+      roomId: ROOM_ID,
+      participantId: PARTICIPANT_ID,
+      isModerator: false,
+      connectionId: CONNECTION_ID,
     });
-
-    // Mock participant update to throw error
     mockDynamoDB.send.mockRejectedValueOnce(new Error('DynamoDB update error'));
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
@@ -174,45 +390,22 @@ describe('websocket-disconnect handler', () => {
   });
 
   it('should handle broadcast error but still return success', async () => {
-    const roomId = '11111111-2222-4333-8444-555555555555';
-    const participantId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    mockRowByConnection();
+    mockRowRead({ roomId: ROOM_ID, participantId: PARTICIPANT_ID, isModerator: false });
+    mockDynamoDB.send.mockResolvedValueOnce({}); // conditional REMOVE connectionId
+    mockDynamoDB.send.mockResolvedValueOnce({}); // decrement connectionCount
 
-    // Mock participant query by connectionId
-    mockDynamoDB.send.mockResolvedValueOnce({
-      Items: [
-        {
-          roomId,
-          participantId,
-          name: 'Test User',
-          isModerator: false,
-          connectionId: 'test-connection-id',
-        },
-      ],
-    });
-
-    // Mock room connection count decrement (UpdateCommand)
-    mockDynamoDB.send.mockResolvedValueOnce({});
-
-    // Mock participant update
-    mockDynamoDB.send.mockResolvedValueOnce({});
-
-    // Mock participants cache
     mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
-      {
-        id: participantId,
-        name: 'Test User',
-        connectionId: null,
-        isModerator: false,
-      },
+      liveParticipant(OTHER_ID, false),
     ]);
 
-    // Mock broadcast to throw error (handler should still return success)
     const { broadcastToRoom } = await import('../../src/utils/broadcast.js');
-    (broadcastToRoom as vi.Mock).mockRejectedValueOnce(new Error('Broadcast error'));
+    (broadcastToRoom as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('Broadcast error')
+    );
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
 
-    // Handler should still return 200 even if broadcast fails
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body);
     expect(body.type).toBe('disconnected');

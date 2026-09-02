@@ -112,6 +112,11 @@ describe('join-room handler', () => {
     // Mock participant creation (PutCommand)
     mockDynamoDB.send.mockResolvedValueOnce({});
 
+    // Mock moderator vacancy check (consistent read on room META — no vacancy)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {},
+    });
+
     // Mock ACTIVE coordination item query (no active round)
     mockDynamoDB.send.mockResolvedValueOnce({
       Item: null,
@@ -211,6 +216,11 @@ describe('join-room handler', () => {
     // Mock participant update (lastSeenAt)
     mockDynamoDB.send.mockResolvedValueOnce({});
 
+    // Mock moderator vacancy check (consistent read on room META — no vacancy)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {},
+    });
+
     // Mock ACTIVE coordination item query (no active round)
     mockDynamoDB.send.mockResolvedValueOnce({
       Item: null,
@@ -238,7 +248,9 @@ describe('join-room handler', () => {
     expect(body.participantId).toBe('12345678-1234-1234-8234-123456789abc');
     expect(body.isNewParticipant).toBe(false);
     expect(body.participants).toHaveLength(1);
-    expect(mockCacheManager.invalidateParticipants).not.toHaveBeenCalled();
+    // The existing participant's row is refreshed (lastSeenAt/expiresAt) on
+    // every join/poll, so the cache is invalidated even on rejoin.
+    expect(mockCacheManager.invalidateParticipants).toHaveBeenCalledWith('room-123');
   });
 
   it('should return 404 for invalid room code', async () => {

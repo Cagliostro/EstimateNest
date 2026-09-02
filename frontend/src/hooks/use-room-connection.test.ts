@@ -121,6 +121,9 @@ describe('useRoomConnection', () => {
     mockStores.roomStoreState.setRoom.mockClear();
     mockStores.roomStoreState.setParticipants.mockClear();
     mockStores.roomStoreState.setCurrentRound.mockClear();
+    // The hook treats a falsy return as a dropped (stale) update; the mock
+    // must accept updates by default or every roundUpdate is dropped.
+    mockStores.roomStoreState.setCurrentRound.mockReturnValue(true);
     mockStores.roomStoreState.setVotes.mockClear();
     mockStores.roomStoreState.clearRoom.mockClear();
     mockStores.roomStoreState.startCountdown.mockClear();
@@ -232,6 +235,9 @@ describe('useRoomConnection', () => {
 
     expect(mockApiClient.joinRoom).toHaveBeenCalledWith('TEST', 'Test User', undefined, undefined);
     expect(mockStores.connectionStoreState.setConnecting).toHaveBeenCalled();
+    // Joining a room must drop any previous room's state (cross-room leak guard).
+    expect(mockStores.roomStoreState.clearRoom).toHaveBeenCalled();
+    expect(mockStores.participantStoreState.clearParticipant).toHaveBeenCalled();
     expect(mockStores.participantStoreState.setParticipant).toHaveBeenCalledWith(
       'test-participant-id',
       'Test User',
@@ -320,5 +326,64 @@ describe('useRoomConnection', () => {
 
     expect(mockServiceInstance.sendVote).toHaveBeenCalledTimes(2);
     expect(mockServiceInstance.sendVote).toHaveBeenCalledWith(8, '');
+  });
+
+  it('applies votes and reveal only when setCurrentRound accepts the roundUpdate', () => {
+    renderHook(() => useRoomConnection());
+
+    const mockServiceInstance = mockWebSocketService.getInstance();
+    const handler = (mockServiceInstance as any).addMessageHandler.mock.calls[0][0]; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    const round = {
+      id: 'round-1',
+      roomId: 'test-room-id',
+      startedAt: '2026-09-02T12:00:00.000Z',
+      isRevealed: true,
+      scheduledRevealAt: undefined,
+    } as Round;
+    const votes = [
+      {
+        id: 'vote-1',
+        roundId: 'round-1',
+        participantId: 'p1',
+        value: 5,
+        votedAt: '2026-09-02T12:00:01.000Z',
+      },
+    ] as Vote[];
+
+    act(() => {
+      handler({ type: 'roundUpdate', payload: { round, votes } });
+    });
+
+    expect(mockStores.roomStoreState.setCurrentRound).toHaveBeenCalledWith(round);
+    expect(mockStores.roomStoreState.setVotes).toHaveBeenCalledWith(votes);
+    expect(mockStores.roomStoreState.revealVotes).toHaveBeenCalled();
+    expect(mockStores.roomStoreState.stopCountdown).toHaveBeenCalled();
+  });
+
+  it('skips vote and reveal handling when setCurrentRound drops the update', () => {
+    mockStores.roomStoreState.setCurrentRound.mockReturnValue(false);
+
+    renderHook(() => useRoomConnection());
+
+    const mockServiceInstance = mockWebSocketService.getInstance();
+    const handler = (mockServiceInstance as any).addMessageHandler.mock.calls[0][0]; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    const round = {
+      id: 'round-1',
+      roomId: 'test-room-id',
+      startedAt: '2026-09-02T12:00:00.000Z',
+      isRevealed: true,
+      scheduledRevealAt: undefined,
+    } as Round;
+
+    act(() => {
+      handler({ type: 'roundUpdate', payload: { round, votes: [] } });
+    });
+
+    // A dropped (stale) update must not overwrite votes or re-trigger reveal
+    expect(mockStores.roomStoreState.setVotes).not.toHaveBeenCalled();
+    expect(mockStores.roomStoreState.revealVotes).not.toHaveBeenCalled();
+    expect(mockStores.roomStoreState.stopCountdown).not.toHaveBeenCalled();
   });
 });
