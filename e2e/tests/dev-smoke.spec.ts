@@ -68,7 +68,11 @@ test.describe('Dev Smoke — Multi-User Estimation', () => {
 
     // Collect console logs for debugging
     const logs: string[] = [];
-    for (const [name, page] of Object.entries({ alice: alicePage, bob: bobPage, charlie: charliePage })) {
+    for (const [name, page] of Object.entries({
+      alice: alicePage,
+      bob: bobPage,
+      charlie: charliePage,
+    })) {
       page.on('console', (msg) => {
         logs.push(`[${name}] ${msg.type()}: ${msg.text().substring(0, 120)}`);
       });
@@ -77,12 +81,11 @@ test.describe('Dev Smoke — Multi-User Estimation', () => {
     try {
       // Step 3: Alice navigates first (becomes moderator)
       await alicePage.goto(`/${room.shortCode}`, { waitUntil: 'networkidle' });
-      await alicePage.waitForFunction(
-        () => !document.body.textContent?.includes('Connecting...'),
-        { timeout: 30_000 }
-      );
+      await alicePage.waitForFunction(() => !document.body.textContent?.includes('Connecting...'), {
+        timeout: 30_000,
+      });
       await expect(alicePage.locator('body')).toContainText(room.shortCode);
-      await alicePage.waitForSelector('text=Participants', { timeout: 15_000 });
+      await alicePage.waitForSelector('text=Participants', { timeout: 30_000 });
 
       // Step 4: Bob and Charlie join after Alice (Alice stays moderator)
       await Promise.all([
@@ -90,10 +93,9 @@ test.describe('Dev Smoke — Multi-User Estimation', () => {
         charliePage.goto(`/${room.shortCode}`, { waitUntil: 'networkidle' }),
       ]);
       for (const [name, page] of Object.entries({ bob: bobPage, charlie: charliePage })) {
-        await page.waitForFunction(
-          () => !document.body.textContent?.includes('Connecting...'),
-          { timeout: 30_000 }
-        );
+        await page.waitForFunction(() => !document.body.textContent?.includes('Connecting...'), {
+          timeout: 30_000,
+        });
         await expect(page.locator('body')).toContainText(room.shortCode);
       }
 

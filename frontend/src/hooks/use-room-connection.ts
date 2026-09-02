@@ -71,7 +71,13 @@ export function useRoomConnection() {
           isRevealed: message.payload.round.isRevealed,
           participantIds: message.payload.votes.map((v) => v.participantId),
         });
-        useRoomStore.getState().setCurrentRound(message.payload.round);
+        // A dropped update (stale vote broadcast after reveal, or an older
+        // round after a new one started) must not overwrite votes either —
+        // the payload carries the stale pre-reveal snapshot.
+        if (!useRoomStore.getState().setCurrentRound(message.payload.round)) {
+          console.warn(`[EstimateNest] [${currentHookId}] Dropped stale roundUpdate`);
+          break;
+        }
         useRoomStore.getState().setVotes(message.payload.votes);
         if (message.payload.round.isRevealed) {
           console.log(`[EstimateNest] [${currentHookId}] Calling revealVotes`);

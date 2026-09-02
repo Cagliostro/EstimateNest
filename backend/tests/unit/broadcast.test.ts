@@ -259,7 +259,7 @@ describe('broadcast utility', () => {
       // Original fan-out: stale-conn + good-conn; roster refresh: good-conn only
       expect(mockSend).toHaveBeenCalledTimes(3);
       // Should have attempted to clean up stale connection
-      expect(mockDocClientSend).toHaveBeenCalledTimes(1);
+      expect(mockDocClientSend).toHaveBeenCalledTimes(2); // mapping removal + count balance
       expect(mockCacheManager.invalidateParticipants).toHaveBeenCalledWith(roomId);
       // The remaining client is told the roster shrank (no ghost participant)
       const refresh = mockSend.mock.calls[2][0].input;
@@ -271,6 +271,57 @@ describe('broadcast utility', () => {
       // Bounded: exactly one refresh (its prefetch + the nested broadcast's
       // own fetch), no further fan-outs after the refresh sends succeed
       expect(mockCacheManager.getParticipantsWithCache).toHaveBeenCalledTimes(3);
+
+      // The mapping removal is guarded against the handshake race: only
+      // mappings older than the connect grace may be stripped.
+      const cleanupCall = mockUpdateCommand.mock.calls.find((call) =>
+        (call[0] as { UpdateExpression?: string }).UpdateExpression?.startsWith(
+          'REMOVE connectionId'
+        )
+      );
+      expect(cleanupCall).toBeDefined();
+      const cleanupInput = cleanupCall![0] as {
+        ConditionExpression?: string;
+        ExpressionAttributeValues?: Record<string, string>;
+      };
+      expect(cleanupInput.ConditionExpression).toBe(
+        'connectionId = :cid AND lastSeenAt < :graceCutoff'
+      );
+      expect(cleanupInput.ExpressionAttributeValues?.[':graceCutoff']).toBeDefined();
+    });
+
+    it('should not strip a fresh mapping (connect handshake race)', async () => {
+      const participants = [
+        {
+          id: 'p1',
+          roomId,
+          participantId: 'part1',
+          connectionId: 'fresh-conn',
+          name: 'Alice',
+          avatarSeed: 'seed1',
+          joinedAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+          isModerator: false,
+        },
+      ];
+      mockCacheManager.getParticipantsWithCache.mockResolvedValue(participants);
+
+      // A 410 for a connection whose $connect just wrote the mapping: the
+      // conditional REMOVE fails the grace check — nothing may be stripped.
+      const goneError = { $metadata: { httpStatusCode: 410 } };
+      mockSend.mockRejectedValueOnce(goneError);
+      const ccf = new Error('ConditionalCheckFailedException');
+      ccf.name = 'ConditionalCheckFailedException';
+      mockDocClientSend.mockRejectedValueOnce(ccf);
+
+      await broadcastToRoom(mockEvent, roomId, message);
+
+      // Only the failed conditional REMOVE hit DynamoDB: no count balance, no
+      // cache invalidation, no roster refresh.
+      expect(mockDocClientSend).toHaveBeenCalledTimes(1);
+      expect(mockCacheManager.invalidateParticipants).not.toHaveBeenCalled();
+      expect(mockCacheManager.getParticipantsWithCache).toHaveBeenCalledTimes(1);
+      expect(mockSend).toHaveBeenCalledTimes(1);
     });
 
     it('should clean up stale connections (403 status)', async () => {
@@ -298,7 +349,7 @@ describe('broadcast utility', () => {
 
       await broadcastToRoom(mockEvent, roomId, message);
 
-      expect(mockDocClientSend).toHaveBeenCalledTimes(1);
+      expect(mockDocClientSend).toHaveBeenCalledTimes(2); // mapping removal + count balance
       expect(mockCacheManager.invalidateParticipants).toHaveBeenCalledWith(roomId);
       expect(mockSend).toHaveBeenCalledTimes(1); // original send only, nothing left to refresh to
     });

@@ -13,6 +13,14 @@ import { filterPresent } from './participants';
 
 const docClient = getDocClient();
 const cacheManager = getCacheManager();
+
+// A 410 also hits connections whose $connect is still completing the
+// handshake: the row's connectionId is written before the handler returns
+// and a concurrent fan-out can race that window. Stripping the mapping then
+// orphans the participant (connected, but invisible). Mappings younger than
+// this grace are left alone — a genuinely dead connection is cleaned by its
+// own $disconnect.
+const CONNECTION_CLEANUP_GRACE_MS = 15_000;
 /**
  * Broadcast a WebSocket message to all participants in a room.
  * @param event The Lambda event (to extract domainName and stage)
@@ -91,9 +99,11 @@ export async function broadcastToRoom(
         participant.participantId
       ) {
         try {
-          // Remove connectionId only if it still maps the dead connection — a
-          // racing reconnect may have mapped this row to a live connection and
-          // must not be stripped (mapping-nuke race).
+          // Remove connectionId only if it still maps the dead connection and
+          // the mapping is older than the connect grace: a racing reconnect
+          // may have mapped this row to a live connection (mapping-nuke race)
+          // and a fresh mapping may belong to a connection whose handshake is
+          // still completing (orphaning race) — both must stay.
           await docClient.send(
             new UpdateCommand({
               TableName: process.env.PARTICIPANTS_TABLE!,
@@ -102,21 +112,39 @@ export async function broadcastToRoom(
                 participantId: participant.participantId,
               },
               UpdateExpression: 'REMOVE connectionId SET lastSeenAt = :now',
-              ConditionExpression: 'connectionId = :cid',
+              ConditionExpression: 'connectionId = :cid AND lastSeenAt < :graceCutoff',
               ExpressionAttributeValues: {
                 ':cid': participant.connectionId,
                 ':now': new Date().toISOString(),
+                ':graceCutoff': new Date(Date.now() - CONNECTION_CLEANUP_GRACE_MS).toISOString(),
               },
             })
           );
           logger.info('Cleaned up stale connection', { roomId: participant.roomId });
+          // Whoever removes a connection mapping balances the room's
+          // connection count: the pending $disconnect for this dead
+          // connection no-ops against the now-empty mapping (see
+          // websocket-disconnect), so the count must be balanced here.
+          await docClient.send(
+            new UpdateCommand({
+              TableName: process.env.ROOMS_TABLE!,
+              Key: { id: participant.roomId, sk: 'META' },
+              UpdateExpression: 'ADD connectionCount :dec',
+              ExpressionAttributeValues: { ':dec': -1 },
+            })
+          );
           // Invalidate participant cache since participant connection changed
           cacheManager.invalidateParticipants(participant.roomId);
           cleanedStaleConnection = true;
         } catch (cleanupError) {
-          // ConditionalCheckFailed: the row maps a newer live connection now —
-          // nothing to clean up. Logged below to avoid noise.
-          if ((cleanupError as Error).name !== 'ConditionalCheckFailedException') {
+          if ((cleanupError as Error).name === 'ConditionalCheckFailedException') {
+            // The row maps a newer live connection (mapping-nuke guard) or the
+            // mapping is younger than the connect grace (handshake race) — in
+            // both cases the mapping must be left alone.
+            logger.info('Skipped stale-connection cleanup', {
+              roomId: participant.roomId,
+            });
+          } else {
             logger.error('Failed to clean up stale connection', { error: cleanupError });
           }
         }

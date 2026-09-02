@@ -43,7 +43,7 @@ interface RoomState {
   setParticipants: (participants: Participant[]) => void;
   addParticipant: (participant: Participant) => void;
   removeParticipant: (participantId: string) => void;
-  setCurrentRound: (round: Round) => void;
+  setCurrentRound: (round: Round) => boolean;
   addVote: (vote: Vote) => void;
   setVotes: (votes: Vote[]) => void;
   revealVotes: () => void;
@@ -54,7 +54,7 @@ interface RoomState {
   clearRoom: () => void;
 }
 
-export const useRoomStore = create<RoomState>((set) => ({
+export const useRoomStore = create<RoomState>((set, get) => ({
   roomId: null,
   shortCode: null,
   autoRevealEnabled: true,
@@ -104,29 +104,49 @@ export const useRoomStore = create<RoomState>((set) => ({
       participants: state.participants.filter((p) => p.id !== participantId),
     })),
 
-  setCurrentRound: (round) =>
-    set((state) => {
-      // A reveal is terminal per round. Vote broadcasts come from concurrent
-      // voter Lambda invocations whose gateway delivery order is not
-      // guaranteed, so a pre-reveal "N votes, not revealed" update can land
-      // AFTER the reveal update. Applying it would regress the UI back to a
-      // voting state — drop unrevealed updates for an already-revealed round.
-      const currentRoundAlreadyRevealed =
-        state.currentRound?.id != null &&
-        state.currentRound?.id === round?.id &&
-        (state.isRevealed || !!state.currentRound?.isRevealed);
-      if (round?.isRevealed === false && currentRoundAlreadyRevealed) {
-        console.warn('[RoomStore] Dropping stale roundUpdate for revealed round', {
-          roundId: round.id,
-        });
-        return state;
-      }
-      return {
-        currentRound: round,
-        votes: round?.id === state.currentRound?.id ? state.votes : [],
-        isRevealed: round?.isRevealed || false,
-      };
-    }),
+  // Returns true when the update was applied. Dropped updates must also skip
+  // the follow-up vote/reveal handling in the caller, or a stale votes
+  // snapshot would overwrite the revealed state.
+  setCurrentRound: (round) => {
+    const state = get();
+    const current = state.currentRound;
+    const sameRound = current?.id != null && current.id === round?.id;
+    const currentRevealed = state.isRevealed || !!current?.isRevealed;
+
+    // A reveal is terminal per round. Vote broadcasts come from concurrent
+    // voter Lambda invocations whose gateway delivery order is not
+    // guaranteed, so a pre-reveal "N votes, not revealed" update can land
+    // AFTER the reveal update. Applying it would regress the UI back to a
+    // voting state — drop unrevealed updates for an already-revealed round.
+    if (sameRound && round?.isRevealed === false && currentRevealed) {
+      console.warn('[RoomStore] Dropping stale roundUpdate for revealed round', {
+        roundId: round.id,
+      });
+      return false;
+    }
+
+    // A roundUpdate for an OLDER round (a vote broadcast that raced a
+    // newRound) must not regress the store back to the previous round.
+    if (
+      !sameRound &&
+      current &&
+      round?.startedAt &&
+      new Date(round.startedAt).getTime() < new Date(current.startedAt).getTime()
+    ) {
+      console.warn('[RoomStore] Dropping stale roundUpdate for older round', {
+        roundId: round.id,
+        currentRoundId: current.id,
+      });
+      return false;
+    }
+
+    set({
+      currentRound: round,
+      votes: sameRound ? state.votes : [],
+      isRevealed: round?.isRevealed || false,
+    });
+    return true;
+  },
 
   addVote: (vote) =>
     set((state) => ({

@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { handleModeratorVacancy, MODERATOR_HANDOFF_GRACE_MS } from '../../src/utils/moderator.js';
 import {
-  handleModeratorVacancy,
-  MODERATOR_HANDOFF_GRACE_MS,
-} from '../../src/utils/moderator.js';
-import { TransactionCanceledException, ConditionalCheckFailedException } from '@aws-sdk/lib-dynamodb';
+  TransactionCanceledException,
+  ConditionalCheckFailedException,
+} from '@aws-sdk/lib-dynamodb';
 
 const { mockDocClient, mockCacheManager } = vi.hoisted(() => {
   return {
@@ -168,9 +168,13 @@ describe('handleModeratorVacancy', () => {
 
     const result = await handleModeratorVacancy(ROOM_ID, CONNECTING_ID);
 
-    expect(result).toEqual({ handled: true, reason: 'promoted' });
+    expect(result).toEqual({ handled: true, reason: 'promoted', promotedParticipantId: oldestId });
     const transact = transactInputs()[0].TransactItems as Array<{
-      Update: { UpdateExpression: string; Key: { participantId?: string } };
+      Update: {
+        UpdateExpression: string;
+        ConditionExpression?: string;
+        Key: { participantId?: string };
+      };
     }>;
     // Vacancy removal + promotion of the oldest + demotion of the moderator,
     // all in one transaction.
@@ -178,8 +182,14 @@ describe('handleModeratorVacancy', () => {
     expect(transact[0].Update.UpdateExpression).toBe('REMOVE moderatorVacantAt');
     expect(transact[1].Update.Key.participantId).toBe(oldestId);
     expect(transact[1].Update.UpdateExpression).toBe('SET isModerator = :true');
+    // Commit-time guards: the candidate must still be online, the
+    // ex-moderator must still be offline (REST marker counts as offline).
+    expect(transact[1].Update.ConditionExpression).toBe('attribute_exists(connectionId)');
     expect(transact[2].Update.Key.participantId).toBe(MODERATOR_ID);
     expect(transact[2].Update.UpdateExpression).toBe('SET isModerator = :false');
+    expect(transact[2].Update.ConditionExpression).toBe(
+      'attribute_not_exists(connectionId) OR connectionId = :rest'
+    );
   });
 
   it('promotes without demoting when no moderator row exists', async () => {
@@ -194,7 +204,7 @@ describe('handleModeratorVacancy', () => {
 
     const result = await handleModeratorVacancy(ROOM_ID, CONNECTING_ID);
 
-    expect(result).toEqual({ handled: true, reason: 'promoted' });
+    expect(result).toEqual({ handled: true, reason: 'promoted', promotedParticipantId: oldestId });
     const transact = transactInputs()[0].TransactItems as Array<{ Update: unknown }>;
     expect(transact).toHaveLength(2);
   });

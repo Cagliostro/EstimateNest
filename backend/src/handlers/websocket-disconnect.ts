@@ -75,9 +75,33 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     }
     const { roomId, participantId } = participant;
 
+    // The consistent read above is the authority: act only when the row still
+    // maps THIS connection. A different mapping means a racing reconnect
+    // replaced it — balance this connection's count, but leave the live row
+    // alone. No mapping at all means this event was already processed (API
+    // Gateway redelivery) or a broadcast cleanup removed it — whoever removed
+    // the mapping balanced the count, so a decrement here would double it.
+    if (participant.connectionId !== connectionId) {
+      // A REST marker means the WS mapping was already removed (earlier
+      // delivery or broadcast cleanup) and whoever removed it balanced the
+      // count — only a racing WS reconnect (different live connectionId)
+      // still needs THIS connection's count balanced.
+      if (participant.connectionId && participant.connectionId !== 'REST') {
+        logger.info('Ignoring stale disconnect (connectionId already replaced)', {
+          roomId,
+          participantId,
+        });
+        await decrementConnectionCount(roomId);
+      }
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ type: 'disconnected', payload: { message: 'Disconnected' } }),
+      };
+    }
+
     // Remove connectionId only if it still maps to THIS connection. A stale
-    // disconnect (GSI eventual consistency) must not strip the mapping of a
-    // newer live connection.
+    // disconnect (racing reconnect in the read→update window) must not strip
+    // the mapping of a newer live connection.
     try {
       await docClient.send(
         new UpdateCommand({
@@ -93,9 +117,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       );
     } catch (error) {
       if (error instanceof ConditionalCheckFailedException) {
-        // Stale disconnect (mapping replaced by a racing reconnect): this
-        // connection's $connect was counted, so balance the room count, but
-        // leave the row — it maps a live connection — and skip the broadcast.
+        // Mapping replaced in the read→update window: this connection's
+        // $connect was counted, so balance the room count, but leave the
+        // row — it maps a live connection — and skip the broadcast.
         logger.info('Ignoring stale disconnect (connectionId already replaced)', {
           roomId,
           participantId,

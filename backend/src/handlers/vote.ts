@@ -24,6 +24,7 @@ import {
 import { broadcastToRoom, sendToConnection } from '../utils/broadcast';
 import { getCacheManager } from '../utils/cache';
 import { filterPresent } from '../utils/participants';
+import { handleModeratorVacancy, ModeratorVacancyResult } from '../utils/moderator';
 
 // Helper to create properly typed WebSocket responses
 function createResponse(type: string, payload: Record<string, unknown>): string {
@@ -36,6 +37,75 @@ function createErrorResponse(message: string, code?: string): string {
 
 function createSuccessResponse(message: string): string {
   return createResponse('ack', { message });
+}
+
+/**
+ * ConnectionIdIndex is eventually consistent: a message sent immediately
+ * after $connect can miss the brand-new mapping. A miss here would 500 the
+ * message and API Gateway closes the connection, feeding reconnect storms
+ * (observed in dev: a join raced a concurrent fan-out that had already seen
+ * the fresh mapping). Retry briefly before giving up.
+ */
+async function findParticipantByConnectionId(
+  connectionId: string
+): Promise<Participant | undefined> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const queryResult = await docClient.send(
+      new QueryCommand({
+        TableName: PARTICIPANTS_TABLE,
+        IndexName: 'ConnectionIdIndex',
+        KeyConditionExpression: 'connectionId = :cid',
+        ExpressionAttributeValues: {
+          ':cid': connectionId,
+        },
+        Limit: 1,
+      })
+    );
+    if (queryResult.Items?.[0]) {
+      return queryResult.Items[0] as Participant;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolve a pending moderator handoff from a moderator-gated message path.
+ * In a steady-state room (nobody connects or joins) the lazy promotion would
+ * otherwise never fire, leaving the room without a moderator forever after
+ * the previous one left — newRound/reveal would stay blocked. On promotion
+ * the fresh roster is broadcast so clients learn the new moderator.
+ */
+async function resolveVacancyForMessage(
+  event: APIGatewayProxyEvent,
+  roomId: string,
+  participantId: string
+): Promise<ModeratorVacancyResult> {
+  const logger = createLogger();
+  let vacancy: ModeratorVacancyResult;
+  try {
+    vacancy = await handleModeratorVacancy(roomId, participantId);
+  } catch (error) {
+    logger.warn('Moderator vacancy resolution failed', { roomId, error });
+    return { handled: false, reason: 'no-vacancy' };
+  }
+  if (vacancy.handled) {
+    logger.info('Moderator vacancy resolved via message', { roomId, reason: vacancy.reason });
+  }
+  if (vacancy.reason === 'promoted') {
+    try {
+      const participants = filterPresent(await cacheManager.getParticipantsWithCache(roomId));
+      await broadcastToRoom(event, roomId, {
+        type: 'participantList',
+        payload: { participants },
+      });
+    } catch (error) {
+      logger.warn('Post-promotion roster broadcast failed', { roomId, error });
+    }
+  }
+  return vacancy;
 }
 
 /**
@@ -252,19 +322,7 @@ async function handleVote(
   }
 
   // Find participant by connectionId
-  const queryResult = await docClient.send(
-    new QueryCommand({
-      TableName: PARTICIPANTS_TABLE,
-      IndexName: 'ConnectionIdIndex',
-      KeyConditionExpression: 'connectionId = :cid',
-      ExpressionAttributeValues: {
-        ':cid': connectionId,
-      },
-      Limit: 1,
-    })
-  );
-
-  const participant = queryResult.Items?.[0];
+  const participant = await findParticipantByConnectionId(connectionId);
   if (!participant) {
     throw new Error('Participant not found');
   }
@@ -394,9 +452,8 @@ async function handleVote(
       logger.info('Vote transaction successful', { roundId, attempt: txAttempt });
       break;
     } catch (transactionError) {
-      const reasons = (
-        transactionError as { CancellationReasons?: { Code?: string }[] }
-      ).CancellationReasons;
+      const reasons = (transactionError as { CancellationReasons?: { Code?: string }[] })
+        .CancellationReasons;
       const isConflict = (reasons ?? []).some((reason) => reason.Code === 'TransactionConflict');
       if (isConflict && txAttempt < MAX_TX_ATTEMPTS) {
         const delayMs = Math.min(TX_RETRY_BASE_DELAY_MS * Math.pow(2, txAttempt - 1), 400);
@@ -661,6 +718,11 @@ async function handleReveal(
 
   const { roomId } = participant;
 
+  // Same steady-state-promotion rationale as handleNewRound: without this,
+  // a moderator-less room can never reveal manually (unless
+  // allowAllParticipantsToReveal) until someone reconnects.
+  const vacancy = await resolveVacancyForMessage(event, roomId, participant.participantId);
+
   // Get the round first to check for scheduled auto-reveal
   const roundResult = await docClient.send(
     new GetCommand({
@@ -690,7 +752,12 @@ async function handleReveal(
     isModerator: participant.isModerator,
     isAutoReveal,
   });
-  if (!participant.isModerator && !room.allowAllParticipantsToReveal && !isAutoReveal) {
+  if (
+    !participant.isModerator &&
+    !room.allowAllParticipantsToReveal &&
+    !isAutoReveal &&
+    !(vacancy.reason === 'promoted' && vacancy.promotedParticipantId === participant.participantId)
+  ) {
     throw new Error('Only moderators can reveal votes');
   }
   // Map DynamoDB attributes to Round interface
@@ -770,19 +837,7 @@ async function handleJoin(
   const { connectionId } = event.requestContext;
 
   // Find participant by connectionId
-  const queryResult = await docClient.send(
-    new QueryCommand({
-      TableName: PARTICIPANTS_TABLE,
-      IndexName: 'ConnectionIdIndex',
-      KeyConditionExpression: 'connectionId = :cid',
-      ExpressionAttributeValues: {
-        ':cid': connectionId,
-      },
-      Limit: 1,
-    })
-  );
-
-  const participant = queryResult.Items?.[0] as Participant | undefined;
+  const participant = await findParticipantByConnectionId(connectionId);
   if (!participant) {
     throw new Error('Participant not found');
   }
@@ -840,19 +895,7 @@ async function handleUpdateParticipant(
   }
 
   // Find participant by connectionId
-  const queryResult = await docClient.send(
-    new QueryCommand({
-      TableName: PARTICIPANTS_TABLE,
-      IndexName: 'ConnectionIdIndex',
-      KeyConditionExpression: 'connectionId = :cid',
-      ExpressionAttributeValues: {
-        ':cid': connectionId,
-      },
-      Limit: 1,
-    })
-  );
-
-  const participant = queryResult.Items?.[0] as Participant | undefined;
+  const participant = await findParticipantByConnectionId(connectionId);
   if (!participant) {
     logger.error('Participant not found for connectionId');
     throw new Error('Participant not found');
@@ -940,7 +983,21 @@ async function handleNewRound(
     throw new Error('Participant not found');
   }
 
-  if (!participant.isModerator) {
+  // A pending moderator handoff must resolve here too: in a steady-state
+  // room (no new connects or joins) the promotion otherwise never fires and
+  // newRound stays blocked forever after the moderator left. The GSI read
+  // above may be stale for isModerator, so a sender promoted just now is
+  // recognized via the vacancy result.
+  const vacancy = await resolveVacancyForMessage(
+    event,
+    participant.roomId,
+    participant.participantId
+  );
+
+  if (
+    !participant.isModerator &&
+    !(vacancy.reason === 'promoted' && vacancy.promotedParticipantId === participant.participantId)
+  ) {
     throw new Error('Only moderators can start a new round');
   }
 

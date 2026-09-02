@@ -25,7 +25,7 @@ export const MODERATOR_HANDOFF_GRACE_MS = 60_000;
 export type ModeratorVacancyResult =
   | { handled: false; reason: 'no-vacancy' }
   | { handled: true; reason: 'moderator-present' }
-  | { handled: true; reason: 'promoted' }
+  | { handled: true; reason: 'promoted'; promotedParticipantId: string }
   | { handled: false; reason: 'no-candidates' };
 
 /**
@@ -99,6 +99,10 @@ export async function handleModeratorVacancy(
               TableName: PARTICIPANTS_TABLE,
               Key: { roomId, participantId: newModerator.id },
               UpdateExpression: 'SET isModerator = :true',
+              // The candidate must still be online at commit time — promoting a
+              // participant who disconnected in the read→commit window would
+              // leave the room with an offline moderator and no vacancy.
+              ConditionExpression: 'attribute_exists(connectionId)',
               ExpressionAttributeValues: { ':true': true },
             },
           },
@@ -109,7 +113,15 @@ export async function handleModeratorVacancy(
                     TableName: PARTICIPANTS_TABLE,
                     Key: { roomId, participantId: moderator.id },
                     UpdateExpression: 'SET isModerator = :false',
-                    ExpressionAttributeValues: { ':false': false },
+                    // Demote only while the ex-moderator is offline: a racing
+                    // reconnect must keep the role (the vacancy stays set for
+                    // the next resolution). A REST marker does not count as
+                    // online — without this escape hatch a stale REST join
+                    // (polling client that never reconnects its WebSocket)
+                    // would block the vacancy forever.
+                    ConditionExpression:
+                      'attribute_not_exists(connectionId) OR connectionId = :rest',
+                    ExpressionAttributeValues: { ':false': false, ':rest': 'REST' },
                   },
                 },
               ]
@@ -125,7 +137,7 @@ export async function handleModeratorVacancy(
     throw error;
   }
   cacheManager.invalidateParticipants(roomId);
-  return { handled: true, reason: 'promoted' };
+  return { handled: true, reason: 'promoted', promotedParticipantId: newModerator.id };
 }
 
 async function clearVacancy(roomId: string, observedVacantAt: string): Promise<boolean> {
