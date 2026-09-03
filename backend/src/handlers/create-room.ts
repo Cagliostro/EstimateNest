@@ -106,7 +106,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       } catch (error) {
         if ((error as Error).name === 'ConditionalCheckFailedException') {
           if (attempt === 4) {
-            throw new Error('Failed to generate unique room code after 5 attempts');
+            throw new Error('Failed to generate unique room code after 5 attempts', {
+              cause: error,
+            });
           }
           continue;
         }
