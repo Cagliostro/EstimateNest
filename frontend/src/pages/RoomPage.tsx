@@ -45,7 +45,13 @@ export default function RoomPage() {
   } = useRoomConnection();
 
   // Local state
-  const [selectedValue, setSelectedValue] = useState<number | string | null>(null);
+  // Round-keyed so a selection from a previous round never bleeds into a new one.
+  const [selectedValue, setSelectedValue] = useState<{
+    roundId: string | null;
+    value: number | string | null;
+  }>({ roundId: null, value: null });
+  const selectedValueForRound =
+    selectedValue.roundId === (currentRound?.id ?? null) ? selectedValue.value : null;
   const [isRevealing, setIsRevealing] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   const [newName, setNewName] = useState('');
@@ -164,11 +170,6 @@ export default function RoomPage() {
     }
   }, [roomCode, connectionState, currentRound?.id, currentRound?.isRevealed, setRoundHistory]);
 
-  // Reset selected value when round changes (new round started)
-  useEffect(() => {
-    setSelectedValue(null);
-  }, [currentRound?.id]);
-
   // Handle page leave
   useEffect(() => {
     return () => {
@@ -192,7 +193,7 @@ export default function RoomPage() {
   const handleVote = (value: number | string) => {
     if (!participantId || !currentRound) return;
 
-    setSelectedValue(value);
+    setSelectedValue({ roundId: currentRound?.id ?? null, value });
     try {
       sendVote(value);
     } catch (error) {
@@ -596,7 +597,7 @@ export default function RoomPage() {
                             onClick={() => handleVote(value)}
                             disabled={hasVoted || connectionState !== 'connected'}
                             className={`bg-primary-100 dark:bg-primary-900 hover:bg-primary-200 dark:hover:bg-primary-800 text-primary-800 dark:text-primary-200 font-bold py-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                              selectedValue === value
+                              selectedValueForRound === value
                                 ? 'ring-4 ring-primary-400 dark:ring-primary-600'
                                 : ''
                             }`}

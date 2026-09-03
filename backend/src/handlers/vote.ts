@@ -254,7 +254,8 @@ async function getOrCreateActiveRound(
         logger.warn('Active item missing activeRoundId, retrying', { roomId });
         if (retryCount >= MAX_RETRIES) {
           throw new Error(
-            `Max retries (${MAX_RETRIES}) exceeded while trying to create active round`
+            `Max retries (${MAX_RETRIES}) exceeded while trying to create active round`,
+            { cause: error }
           );
         }
         return getOrCreateActiveRound(roomId, retryCount + 1);
@@ -282,7 +283,9 @@ async function getOrCreateActiveRound(
           })
         );
         if (retryCount >= MAX_RETRIES) {
-          throw new Error(`Max retries (${MAX_RETRIES}) exceeded while cleaning up missing round`);
+          throw new Error(`Max retries (${MAX_RETRIES}) exceeded while cleaning up missing round`, {
+            cause: error,
+          });
         }
         return getOrCreateActiveRound(roomId, retryCount + 1);
       }
