@@ -53,6 +53,13 @@ infrastructure/.env
 # E2E test artifacts
 e2e/test-results/
 
+# Project-local Claude rules stay untracked by decision (BK-006, 2026-09-04)
+/CLAUDE.md
+.claude/
+
+# Playwright root output (legacy, kept on disk but ignored — BK-006)
+/test-results/
+
 # Design files (binary)
 EstimateNest UI Design.make
 tmp-design/
