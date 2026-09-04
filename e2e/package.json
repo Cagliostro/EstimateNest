@@ -9,7 +9,8 @@
     "test:ui": "playwright test --ui",
     "test:smoke": "playwright test --grep smoke",
     "lint": "tsc --noEmit",
-    "postinstall": "npx playwright install chromium"
+    "postinstall": "npx playwright install chromium",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@estimatenest/shared": "file:../packages/shared"

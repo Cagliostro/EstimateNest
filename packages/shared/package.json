@@ -8,7 +8,8 @@
   "scripts": {
     "build": "tsc",
     "lint": "eslint . --ext ts --report-unused-disable-directives --max-warnings 0",
-    "test": "echo 'No tests in shared package' && exit 0"
+    "test": "echo 'No tests in shared package' && exit 0",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",

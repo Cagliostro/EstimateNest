@@ -10,7 +10,8 @@
     "bootstrap": "cdk bootstrap",
     "lint": "eslint . --ext ts --report-unused-disable-directives --max-warnings 0",
     "build": "tsc",
-    "test": "echo 'No tests in infrastructure' && exit 0"
+    "test": "echo 'No tests in infrastructure' && exit 0",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.124.0",

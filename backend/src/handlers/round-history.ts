@@ -130,7 +130,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         headers,
         body: JSON.stringify({
           error: 'Invalid room code format',
-          details: error.errors,
+          details: error.issues,
         }),
       };
     }

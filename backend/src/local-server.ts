@@ -23,7 +23,7 @@ app.use((req, res, next) => {
 const rooms = new Map<string, Room>();
 // connectionId may be absent (disconnect removes it, like the Lambda REMOVE),
 // despite the shared type declaring it required.
-type LocalParticipant = Participant & { connectionId?: string };
+type LocalParticipant = Omit<Participant, 'connectionId'> & { connectionId?: string };
 const participants = new Map<string, LocalParticipant>();
 const connections = new Map<string, WSWebSocket>(); // connectionId -> WebSocket
 const participantByConnection = new Map<string, string>(); // connectionId -> participantId
@@ -44,8 +44,10 @@ function isPresent(p: LocalParticipant): boolean {
   return connections.has(p.connectionId);
 }
 
-function filterPresent(list: LocalParticipant[]): LocalParticipant[] {
-  return list.filter(isPresent);
+function filterPresent(list: LocalParticipant[]): Participant[] {
+  // isPresent guarantees a connectionId, so the survivors satisfy the
+  // shared Participant type (used in broadcast payloads).
+  return list.filter(isPresent) as Participant[];
 }
 
 function resolveModeratorVacancy(roomId: string, connectingParticipantId: string): void {
@@ -577,7 +579,9 @@ function broadcastToRoom(roomId: string, message: WebSocketMessage) {
   const roomParticipants = Array.from(participants.values()).filter((p) => p.roomId === roomId);
 
   roomParticipants.forEach((participant) => {
-    const connection = connections.get(participant.connectionId);
+    const connection = participant.connectionId
+      ? connections.get(participant.connectionId)
+      : undefined;
     if (connection && connection.readyState === connection.OPEN) {
       connection.send(JSON.stringify(message));
     }

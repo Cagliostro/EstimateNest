@@ -19,24 +19,33 @@ export const handler = async (
   _context: Context
 ): Promise<APIGatewayProxyResult> => {
   const logger = createLogger();
-  const { connectionId } = event.requestContext;
-  const { roomId, participantId } = event.queryStringParameters || {};
+  // $connect events always carry a connectionId; API Gateway types it optional
+  // because $disconnect events do, but this handler only sees $connect.
+  const connectionId = event.requestContext.connectionId!;
+  const { roomId: rawRoomId, participantId: rawParticipantId } =
+    event.queryStringParameters || {};
 
-  // Validate roomId and participantId format
+  // Validate roomId and participantId format — the parsed result is the
+  // typed source of truth for the rest of the handler.
+  let params: { roomId: string; participantId: string };
   try {
-    validateWebSocketConnectionParams({ roomId, participantId });
+    params = validateWebSocketConnectionParams({
+      roomId: rawRoomId,
+      participantId: rawParticipantId,
+    });
   } catch (error) {
     if (error instanceof ZodError) {
       return {
         statusCode: 400,
         body: JSON.stringify({
           type: 'error',
-          payload: { error: 'Invalid roomId or participantId format', details: error.errors },
+          payload: { error: 'Invalid roomId or participantId format', details: error.issues },
         }),
       };
     }
     throw error;
   }
+  const { roomId, participantId } = params;
 
   try {
     logger.info('WebSocket connect requestContext', {
@@ -56,7 +65,7 @@ export const handler = async (
         }),
       };
     }
-    const room = roomData as Room;
+    const room = roomData as unknown as Room;
     const maxParticipants = room.maxParticipants || 50;
 
     // Atomic connection count check and increment on room item
@@ -158,7 +167,7 @@ export const handler = async (
         statusCode: 400,
         body: JSON.stringify({
           type: 'error',
-          payload: { error: 'Invalid input format', details: error.errors },
+          payload: { error: 'Invalid input format', details: error.issues },
         }),
       };
     }

@@ -10,7 +10,8 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "test": "vitest run",
     "test:ui": "vitest --ui",
-    "test:coverage": "vitest --coverage"
+    "test:coverage": "vitest --coverage",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@dicebear/collection": "^7.0.4",

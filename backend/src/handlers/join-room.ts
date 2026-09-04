@@ -86,9 +86,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       logger.error('Request validation failed', { error });
 
       if (error instanceof ZodError || (error as Error).name === 'ZodError') {
-        const zodError = error as { errors?: Array<{ path: string[]; message: string }> };
-        const details = zodError.errors
-          ? zodError.errors.map((e) => `${e.path.join('.')}: ${e.message}`)
+        // Zod v4 exposes issues (errors was removed in v4)
+        const zodError = error as { issues?: Array<{ path: Array<string | number>; message: string }> };
+        const details = zodError.issues
+          ? zodError.issues.map((e) => `${e.path.join('.')}: ${e.message}`)
           : ['Validation failed'];
         return {
           statusCode: 400,
@@ -524,9 +525,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     const headers = corsHeaders(event);
 
     if (error instanceof ZodError || (error as Error).name === 'ZodError') {
-      const zodError = error as { errors?: Array<{ path: string[]; message: string }> };
-      const details = zodError.errors
-        ? zodError.errors.map((e) => `${e.path.join('.')}: ${e.message}`)
+      // Zod v4 exposes issues (errors was removed in v4)
+      const zodError = error as { issues?: Array<{ path: Array<string | number>; message: string }> };
+      const details = zodError.issues
+        ? zodError.issues.map((e) => `${e.path.join('.')}: ${e.message}`)
         : ['Validation failed'];
       return {
         statusCode: 400,

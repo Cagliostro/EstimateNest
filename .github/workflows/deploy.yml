@@ -61,6 +61,12 @@ jobs:
           export VITE_ROBOTS="noindex,nofollow"
           npm run build
 
+      # Typecheck after build: the workspace tsconfigs resolve
+      # @estimatenest/shared to its built dist/, so a stale dist would
+      # produce false positives (and false negatives on shared changes).
+      - name: Typecheck
+        run: npm run typecheck
+
       - name: Test
         run: npm run test
 

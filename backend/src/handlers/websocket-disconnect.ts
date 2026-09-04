@@ -2,7 +2,6 @@ import {
   QueryCommand,
   GetCommand,
   UpdateCommand,
-  ConditionalCheckFailedException,
 } from '@aws-sdk/lib-dynamodb';
 import { getDocClient } from '../utils/dynamodb';
 import { createLogger } from '../utils/logger';
@@ -116,7 +115,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         })
       );
     } catch (error) {
-      if (error instanceof ConditionalCheckFailedException) {
+      if ((error as Error).name === 'ConditionalCheckFailedException') {
         // Mapping replaced in the read→update window: this connection's
         // $connect was counted, so balance the room count, but leave the
         // row — it maps a live connection — and skip the broadcast.
