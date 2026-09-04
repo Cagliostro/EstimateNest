@@ -96,6 +96,14 @@ test.describe('scenarios', () => {
 
       // Verify new name visible in participant list area
       await expect(user.page.locator('body')).toContainText('Bob');
+
+      // BK-001: the rename must survive a reload — identity is only
+      // persisted at join time, so without the fix the join-time name
+      // ('Anonymous') would reappear after the reload.
+      await user.page.reload({ waitUntil: 'networkidle' });
+      await user.waitForReady();
+      await expect(user.page.locator('body')).toContainText('Bob');
+      await expect(user.page.locator('main ul li')).toHaveCount(1);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       await BrowserUser.dumpAll([user], outputDir, msg);

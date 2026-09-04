@@ -57,6 +57,14 @@ export function useRoomConnection() {
             useParticipantStore
               .getState()
               .setParticipant(currentParticipantId, name, avatarSeed, isModerator);
+
+            // Identity is otherwise only persisted at join time — a rename
+            // would be lost on reload (BK-001). The broadcast is the
+            // server-confirmed source of truth.
+            const { shortCode } = useRoomStore.getState();
+            if (shortCode) {
+              saveIdentity(shortCode, { participantId: currentParticipantId, name });
+            }
           }
         }
         break;
