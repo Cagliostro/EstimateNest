@@ -20,7 +20,9 @@ export default defineConfig({
     timeout: 20_000,
   },
   use: {
-    baseURL: 'https://dev.estimatenest.net',
+    // SMOKE_FRONTEND_URL lets the advanced scenarios run against the local
+    // dev servers (http://localhost:5173); the default is deployed dev.
+    baseURL: process.env.SMOKE_FRONTEND_URL ?? 'https://dev.estimatenest.net',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
