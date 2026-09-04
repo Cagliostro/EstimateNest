@@ -168,6 +168,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           body: JSON.stringify({ error: 'Incorrect password', code: 'INCORRECT_PASSWORD' }),
         };
       }
+      // Verified: a fresh joiner with the correct password is past the gate
+      // and may participate in the moderator claim below.
+      passwordValid = true;
     }
 
     // Determine participant ID (provided for polling, or new)
@@ -266,7 +269,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       name = providedName;
       avatarSeed = createAvatarSeed(name);
       isModerator = false;
-      if (!room.moderatorPassword) {
+      // Anyone past the password gate may claim; CAS on moderatorAssigned keeps it one-time per room.
+      if (passwordValid) {
         try {
           await docClient.send(
             new UpdateCommand({
@@ -314,7 +318,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       name = providedName;
       avatarSeed = createAvatarSeed(name);
       isModerator = false;
-      if (!room.moderatorPassword) {
+      // Anyone past the password gate may claim; CAS on moderatorAssigned keeps it one-time per room.
+      if (passwordValid) {
         try {
           await docClient.send(
             new UpdateCommand({

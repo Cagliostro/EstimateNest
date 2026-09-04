@@ -100,7 +100,12 @@ export default function HomePage() {
 
       const name = participantName.trim() || 'Anonymous';
       try {
-        await joinRoom(result.shortCode, name, undefined, result.participantId);
+        await joinRoom(
+          result.shortCode,
+          name,
+          moderatorPassword.trim() || undefined,
+          result.participantId
+        );
         navigate(`/${result.shortCode}`);
       } catch (joinError) {
         console.error('Failed to join room after creation:', joinError);
@@ -117,7 +122,12 @@ export default function HomePage() {
 
     const name = participantName.trim() || 'Anonymous';
     try {
-      await joinRoom(createdRoom.shortCode, name, undefined, createdRoom.participantId);
+      await joinRoom(
+        createdRoom.shortCode,
+        name,
+        moderatorPassword.trim() || undefined,
+        createdRoom.participantId
+      );
       navigate(`/${createdRoom.shortCode}`);
     } catch (error) {
       console.error('Failed to join created room:', error);

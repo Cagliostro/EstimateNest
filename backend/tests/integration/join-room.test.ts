@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { handler } from '../../src/handlers/join-room.js';
+import { hashPassword } from '../../src/utils/password.js';
 import { APIGatewayProxyEvent } from 'aws-lambda';
 
 // Create mock DynamoDB client at module level using vi.hoisted to ensure it's available
@@ -251,6 +252,233 @@ describe('join-room handler', () => {
     // The existing participant's row is refreshed (lastSeenAt/expiresAt) on
     // every join/poll, so the cache is invalidated even on rejoin.
     expect(mockCacheManager.invalidateParticipants).toHaveBeenCalledWith('room-123');
+  });
+
+  it('should claim moderator for first participant with correct password', async () => {
+    mockEvent.queryStringParameters = { moderatorPassword: 'secret-123' };
+
+    // Mock room code lookup
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        shortCode: 'ABCDEF',
+        roomId: 'room-123',
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      },
+    });
+
+    // Mock room fetch (password-protected, never claimed)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        id: 'room-123',
+        shortCode: 'ABCDEF',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+        moderatorPassword: hashPassword('secret-123'),
+        moderatorAssigned: false,
+        allowAllParticipantsToReveal: false,
+        deck: {
+          id: 'fibonacci',
+          name: 'Fibonacci',
+          values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'],
+        },
+        autoRevealEnabled: true,
+        autoRevealCountdownSeconds: 3,
+        maxParticipants: 50,
+      },
+    });
+
+    // Mock participants cache (empty room)
+    mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([]);
+
+    // Mock moderator claim CAS (succeeds)
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock participant creation (PutCommand)
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock moderator vacancy check (consistent read on room META — no vacancy)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {},
+    });
+
+    // Mock ACTIVE coordination item query (no active round)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: null,
+    });
+
+    // Mock rounds query (no rounds)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [],
+    });
+
+    // Mock latest rounds GSI query (fallback, no rounds)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [],
+    });
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.isNewParticipant).toBe(true);
+    expect(body.participants[0].isModerator).toBe(true); // BK-002: password-verified first joiner claims
+  });
+
+  it('should not claim moderator for second participant when moderator already assigned', async () => {
+    mockEvent.queryStringParameters = { moderatorPassword: 'secret-123' };
+
+    // Mock room code lookup
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        shortCode: 'ABCDEF',
+        roomId: 'room-123',
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      },
+    });
+
+    // Mock room fetch (password-protected, moderator already claimed)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        id: 'room-123',
+        shortCode: 'ABCDEF',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+        moderatorPassword: hashPassword('secret-123'),
+        moderatorAssigned: true,
+        allowAllParticipantsToReveal: false,
+        deck: {
+          id: 'fibonacci',
+          name: 'Fibonacci',
+          values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'],
+        },
+        autoRevealEnabled: true,
+        autoRevealCountdownSeconds: 3,
+        maxParticipants: 50,
+      },
+    });
+
+    // Mock participants cache (empty room)
+    mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([]);
+
+    // Mock moderator claim CAS (fails — already claimed)
+    mockDynamoDB.send.mockRejectedValueOnce(
+      Object.assign(new Error('ConditionalCheckFailedException'), {
+        name: 'ConditionalCheckFailedException',
+      })
+    );
+
+    // Mock participant creation (PutCommand)
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    // Mock moderator vacancy check (consistent read on room META — no vacancy)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {},
+    });
+
+    // Mock ACTIVE coordination item query (no active round)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: null,
+    });
+
+    // Mock rounds query (no rounds)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [],
+    });
+
+    // Mock latest rounds GSI query (fallback, no rounds)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [],
+    });
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.isNewParticipant).toBe(true);
+    expect(body.participants[0].isModerator).toBe(false);
+  });
+
+  it('should return 403 INCORRECT_PASSWORD for wrong password', async () => {
+    mockEvent.queryStringParameters = { moderatorPassword: 'wrong-password' };
+
+    // Mock room code lookup
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        shortCode: 'ABCDEF',
+        roomId: 'room-123',
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      },
+    });
+
+    // Mock room fetch (password-protected)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        id: 'room-123',
+        shortCode: 'ABCDEF',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+        moderatorPassword: hashPassword('secret-123'),
+        allowAllParticipantsToReveal: false,
+        deck: {
+          id: 'fibonacci',
+          name: 'Fibonacci',
+          values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'],
+        },
+        autoRevealEnabled: true,
+        autoRevealCountdownSeconds: 3,
+        maxParticipants: 50,
+      },
+    });
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(403);
+    const body = JSON.parse(response.body);
+    expect(body.code).toBe('INCORRECT_PASSWORD');
+    // No claim attempt and no participant creation after the failed password check
+    expect(mockDynamoDB.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('should return 403 PASSWORD_REQUIRED when password is missing', async () => {
+    // No moderatorPassword query param
+    mockEvent.queryStringParameters = {};
+
+    // Mock room code lookup
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        shortCode: 'ABCDEF',
+        roomId: 'room-123',
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      },
+    });
+
+    // Mock room fetch (password-protected)
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        id: 'room-123',
+        shortCode: 'ABCDEF',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+        moderatorPassword: hashPassword('secret-123'),
+        allowAllParticipantsToReveal: false,
+        deck: {
+          id: 'fibonacci',
+          name: 'Fibonacci',
+          values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'],
+        },
+        autoRevealEnabled: true,
+        autoRevealCountdownSeconds: 3,
+        maxParticipants: 50,
+      },
+    });
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(403);
+    const body = JSON.parse(response.body);
+    expect(body.code).toBe('PASSWORD_REQUIRED');
+    // No claim attempt and no participant creation after the missing password
+    expect(mockDynamoDB.send).toHaveBeenCalledTimes(2);
   });
 
   it('should return 404 for invalid room code', async () => {

@@ -90,7 +90,7 @@ function createAvatarSeed(name?: string): string {
 // Create room
 app.post('/rooms', (req, res) => {
   try {
-    const { deck = 'fibonacci', allowAllParticipantsToReveal } = req.body;
+    const { deck = 'fibonacci', allowAllParticipantsToReveal, moderatorPassword } = req.body;
     const roomId = uuidv4();
     const shortCode = generateShortCode();
     const now = new Date().toISOString();
@@ -103,6 +103,8 @@ app.post('/rooms', (req, res) => {
       expiresAt,
       allowAllParticipantsToReveal: allowAllParticipantsToReveal ?? false,
       deck: getDeckById(deck),
+      // Plaintext in the in-memory mock — prod stores a scrypt hash (dev only)
+      moderatorPassword: moderatorPassword?.trim() || undefined,
     };
 
     rooms.set(roomId, room);
@@ -126,12 +128,32 @@ app.post('/rooms', (req, res) => {
 app.get('/rooms/:code', (req, res) => {
   try {
     const { code } = req.params;
-    const { name, participantId } = req.query;
+    const { name, participantId, moderatorPassword } = req.query;
 
     // Find room by short code
     const room = Array.from(rooms.values()).find((r) => r.shortCode === code.toUpperCase());
     if (!room) {
       return res.status(404).json({ error: 'Room not found' });
+    }
+
+    // Password gate — mirrors join-room.ts: an existing participant row is
+    // auto-authorized (reload/reconnect), everyone else needs the password.
+    let passwordValid = !room.moderatorPassword;
+    if (room.moderatorPassword && typeof participantId === 'string') {
+      const existingRow = participants.get(participantId);
+      if (existingRow && existingRow.roomId === room.id) passwordValid = true;
+    }
+    if (!passwordValid) {
+      if (typeof moderatorPassword !== 'string' || !moderatorPassword) {
+        return res
+          .status(403)
+          .json({ error: 'Password required to join this room', code: 'PASSWORD_REQUIRED' });
+      }
+      if (moderatorPassword !== room.moderatorPassword) {
+        return res
+          .status(403)
+          .json({ error: 'Incorrect password', code: 'INCORRECT_PASSWORD' });
+      }
     }
 
     let finalParticipantId: string;
@@ -239,7 +261,7 @@ app.get('/rooms/:code', (req, res) => {
         maxParticipants: room.maxParticipants,
         autoRevealEnabled: true,
         autoRevealCountdownSeconds: 3,
-        hasPassword: false,
+        hasPassword: !!room.moderatorPassword,
       },
     });
   } catch (error) {

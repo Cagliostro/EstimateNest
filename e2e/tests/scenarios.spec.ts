@@ -232,4 +232,79 @@ test.describe('scenarios', () => {
       await ctx.close();
     }
   });
+
+  test('password-protected room: creator becomes moderator, guest joins via dialog', async ({
+    browser,
+  }) => {
+    const outputDir = testOutputDir('password-room');
+    const hostCtx = await browser.newContext();
+    const guestCtx = await browser.newContext();
+
+    const host = await BrowserUser.create(hostCtx, 'Host');
+    const guest = await BrowserUser.create(guestCtx, 'Guest');
+
+    try {
+      // BK-002: creator creates a password-protected room via the HomePage UI.
+      // The auto-join must carry the password so the creator lands in the room
+      // as the first verified participant — and therefore as moderator.
+      await host.navigate('/');
+      await host.page.locator('#creatorName').fill('Host');
+      await host.page.locator('button', { hasText: 'Room Settings' }).click();
+      await host.page.locator('#moderatorPassword').fill('secret-123');
+      await host.page.locator('button', { hasText: 'Create Room' }).click();
+      await host.waitForReady();
+
+      // The host is in the room with the moderator crown
+      const hostItem = host.page.locator('main ul li').filter({ hasText: 'Host' });
+      await expect(hostItem).toContainText('👑', { timeout: 10_000 });
+
+      const roomCode = new URL(host.page.url()).pathname.slice(1);
+      expect(roomCode).toBeTruthy();
+
+      // Guest joins via the HomePage join form — no password sent yet
+      await guest.navigate('/');
+      await guest.page.locator('#roomCode').fill(roomCode);
+      await guest.page.locator('#participantName').fill('Guest');
+      await guest.page.locator('button', { hasText: 'Join Room' }).click();
+
+      // Password dialog appears
+      const dialog = guest.page.getByRole('dialog');
+      await expect(dialog).toContainText('This room requires a password');
+
+      // Wrong password shows an error and keeps the dialog open
+      await dialog.getByPlaceholder('Room password').fill('wrong-password');
+      await dialog.getByRole('button', { name: 'Join' }).click();
+      await expect(dialog).toContainText('Incorrect password');
+
+      // Correct password joins the room as a regular member
+      await dialog.getByPlaceholder('Room password').fill('secret-123');
+      await dialog.getByRole('button', { name: 'Join' }).click();
+      await guest.waitForReady();
+
+      // Single moderator: the host keeps the crown, the guest stays a member
+      await expect(guest.page.locator('body')).toContainText('Guest');
+      const guestCrown = guest.page.locator('main ul li').filter({ hasText: 'Host' });
+      await expect(guestCrown).toContainText('👑');
+      const guestItem = guest.page.locator('main ul li').filter({ hasText: 'Guest' });
+      await expect(guestItem).not.toContainText('👑');
+
+      // Full cycle: moderator-only controls on the host, member can vote
+      await host.startNewRound();
+      await host.castVote(5);
+      await guest.castVote(8);
+      await host.page.waitForTimeout(500);
+      await host.revealRound();
+      await host.page.waitForTimeout(500);
+
+      await expect(host.page.locator('body')).toContainText('Revealed!');
+      await expect(host.page.locator('body')).toContainText('6.5');
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      await BrowserUser.dumpAll([host, guest], outputDir, msg);
+      throw error;
+    } finally {
+      await hostCtx.close();
+      await guestCtx.close();
+    }
+  });
 });
