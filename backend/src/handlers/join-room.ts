@@ -26,6 +26,17 @@ const ROUNDS_TABLE = process.env.ROUNDS_TABLE!;
 const VOTES_TABLE = process.env.VOTES_TABLE!;
 const DEFAULT_TTL_SECONDS = 14 * 24 * 60 * 60;
 
+// Every response — including error paths — needs CORS headers, otherwise the
+// browser blocks them and the client sees a network error instead of the
+// status code (e.g. the 403 PASSWORD_REQUIRED that opens the join dialog).
+function corsHeaders(event: APIGatewayProxyEvent): Record<string, string> {
+  const origin = event.headers.origin || event.headers.Origin;
+  return {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': origin || '*',
+  };
+}
+
 // Helper function to create participant record
 async function createParticipantRecord(
   roomId: string,
@@ -81,6 +92,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           : ['Validation failed'];
         return {
           statusCode: 400,
+          headers: corsHeaders(event),
           body: JSON.stringify({
             error: 'Invalid request parameters',
             details,
@@ -105,6 +117,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (!codeResult.Item) {
       return {
         statusCode: 404,
+        headers: corsHeaders(event),
         body: JSON.stringify({ error: 'Room not found' }),
       };
     }
@@ -115,6 +128,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (expiresAtMs < Date.now()) {
       return {
         statusCode: 410,
+        headers: corsHeaders(event),
         body: JSON.stringify({ error: 'Room has expired' }),
       };
     }
@@ -129,6 +143,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (!roomResult.Item) {
       return {
         statusCode: 404,
+        headers: corsHeaders(event),
         body: JSON.stringify({ error: 'Room not found' }),
       };
     }
@@ -156,6 +171,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       if (!validatedData.moderatorPassword) {
         return {
           statusCode: 403,
+          headers: corsHeaders(event),
           body: JSON.stringify({
             error: 'Password required to join this room',
             code: 'PASSWORD_REQUIRED',
@@ -165,6 +181,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       if (!verifyPassword(validatedData.moderatorPassword, room.moderatorPassword!)) {
         return {
           statusCode: 403,
+          headers: corsHeaders(event),
           body: JSON.stringify({ error: 'Incorrect password', code: 'INCORRECT_PASSWORD' }),
         };
       }
@@ -480,16 +497,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       isModerator: p.isModerator,
     }));
 
-    // CORS headers
-    const origin = event.headers.origin || event.headers.Origin;
-    const headers = {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': origin || '*',
-    };
-
     return {
       statusCode: 200,
-      headers,
+      headers: corsHeaders(event),
       body: JSON.stringify({
         roomId,
         participantId,
@@ -511,12 +521,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     };
   } catch (error) {
     logger.error('Join room error', { error });
-    // CORS headers for error response
-    const origin = event.headers.origin || event.headers.Origin;
-    const headers = {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': origin || '*',
-    };
+    const headers = corsHeaders(event);
 
     if (error instanceof ZodError || (error as Error).name === 'ZodError') {
       const zodError = error as { errors?: Array<{ path: string[]; message: string }> };

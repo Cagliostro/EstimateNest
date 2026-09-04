@@ -435,6 +435,9 @@ describe('join-room handler', () => {
     expect(response.statusCode).toBe(403);
     const body = JSON.parse(response.body);
     expect(body.code).toBe('INCORRECT_PASSWORD');
+    // Error responses carry CORS headers — without them the browser blocks the
+    // 403 and the client sees a network error instead of the dialog (BK-002).
+    expect(response.headers?.['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
     // No claim attempt and no participant creation after the failed password check
     expect(mockDynamoDB.send).toHaveBeenCalledTimes(2);
   });
@@ -477,6 +480,9 @@ describe('join-room handler', () => {
     expect(response.statusCode).toBe(403);
     const body = JSON.parse(response.body);
     expect(body.code).toBe('PASSWORD_REQUIRED');
+    // Error responses carry CORS headers — without them the browser blocks the
+    // 403 and the client sees a network error instead of the dialog (BK-002).
+    expect(response.headers?.['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
     // No claim attempt and no participant creation after the missing password
     expect(mockDynamoDB.send).toHaveBeenCalledTimes(2);
   });
