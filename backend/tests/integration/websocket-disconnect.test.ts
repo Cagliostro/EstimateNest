@@ -292,7 +292,7 @@ describe('websocket-disconnect handler', () => {
     expect(broadcastToRoom).toHaveBeenCalled();
   });
 
-  it('should not mark a vacancy when the moderator was the last live connection', async () => {
+  it('should mark a vacancy when the moderator was the last live connection', async () => {
     mockRowByConnection();
     mockRowRead({
       roomId: ROOM_ID,
@@ -302,8 +302,9 @@ describe('websocket-disconnect handler', () => {
     });
     mockDynamoDB.send.mockResolvedValueOnce({}); // conditional REMOVE connectionId
     mockDynamoDB.send.mockResolvedValueOnce({}); // decrement connectionCount
+    mockDynamoDB.send.mockResolvedValueOnce({}); // SET moderatorVacantAt
 
-    // No other live connection remains.
+    // No other live connection remains — only the departed moderator's row.
     mockCacheManager.getParticipantsWithCache.mockResolvedValue([
       { ...liveParticipant(PARTICIPANT_ID, true), connectionId: 'REST' },
     ]);
@@ -311,10 +312,13 @@ describe('websocket-disconnect handler', () => {
     const response = await handler(mockEvent as APIGatewayProxyEvent);
 
     expect(response.statusCode).toBe(200);
-    const vacancyUpdates = updateInputs().filter((input) =>
+    // Without the vacancy a room whose moderator leaves as the last live
+    // connection would stay permanently without a moderator (BK-011): the
+    // next join must find a vacancy to resolve after the grace window.
+    const vacancy = updateInputs().find((input) =>
       input.UpdateExpression?.startsWith('SET moderatorVacantAt')
     );
-    expect(vacancyUpdates).toHaveLength(0);
+    expect(vacancy).toBeDefined();
   });
 
   it('should broadcast only present participants after the disconnect', async () => {

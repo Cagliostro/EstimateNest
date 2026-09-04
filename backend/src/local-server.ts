@@ -354,18 +354,12 @@ wss.on('connection', (ws, req) => {
       participants.set(participantId, participant);
 
       // Moderator: mark a vacancy instead of reassigning immediately — a
-      // quick reconnect (page reload) must keep the role. Only when other
-      // live connections remain (mirrors websocket-disconnect.ts).
+      // quick reconnect (page reload) must keep the role. Always mark it,
+      // even as the last live connection, so a later join resolves it via
+      // resolveModeratorVacancy (mirrors websocket-disconnect.ts).
       if (participant.isModerator) {
-        const otherLive = Array.from(participants.values()).filter(
-          (p) => p.roomId === roomId && p.id !== participantId && connections.has(p.connectionId ?? '')
-        );
-        if (otherLive.length > 0) {
-          moderatorVacantAt.set(roomId, new Date().toISOString());
-          console.log('Moderator disconnected — vacancy marked', { roomId });
-        } else {
-          console.log('Moderator disconnected with no reassignment candidates', { roomId });
-        }
+        moderatorVacantAt.set(roomId, new Date().toISOString());
+        console.log('Moderator disconnected — vacancy marked', { roomId });
       }
     }
 
