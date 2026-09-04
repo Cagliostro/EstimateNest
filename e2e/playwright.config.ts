@@ -5,6 +5,10 @@ const testResultsDir = path.join(__dirname, 'test-results');
 
 export default defineConfig({
   testDir: './tests',
+  // seo.spec.ts runs against the production preview (:4173, playwright.seo.config.ts)
+  // and dev-smoke.spec.ts against the deployed dev environment
+  // (playwright.dev-smoke.config.ts) — both via their own root scripts.
+  testIgnore: ['seo.spec.ts', 'dev-smoke.spec.ts'],
   globalSetup: './global-setup.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
