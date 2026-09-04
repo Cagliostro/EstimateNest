@@ -1,6 +1,7 @@
 import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { getDocClient } from '../utils/dynamodb';
 import { createLogger } from '../utils/logger';
+import { corsHeaders } from '../utils/cors';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -25,17 +26,6 @@ const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 const ROUNDS_TABLE = process.env.ROUNDS_TABLE!;
 const VOTES_TABLE = process.env.VOTES_TABLE!;
 const DEFAULT_TTL_SECONDS = 14 * 24 * 60 * 60;
-
-// Every response — including error paths — needs CORS headers, otherwise the
-// browser blocks them and the client sees a network error instead of the
-// status code (e.g. the 403 PASSWORD_REQUIRED that opens the join dialog).
-function corsHeaders(event: APIGatewayProxyEvent): Record<string, string> {
-  const origin = event.headers.origin || event.headers.Origin;
-  return {
-    'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': origin || '*',
-  };
-}
 
 // Helper function to create participant record
 async function createParticipantRecord(

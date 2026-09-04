@@ -122,6 +122,7 @@ describe('round-history handler', () => {
     const response = await handler(mockEvent as APIGatewayProxyEvent);
 
     expect(response.statusCode).toBe(200);
+    expect(response.headers['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
     const body = JSON.parse(response.body);
     expect(body).toHaveLength(2);
 
@@ -165,6 +166,7 @@ describe('round-history handler', () => {
     const response = await handler(mockEvent as APIGatewayProxyEvent);
 
     expect(response.statusCode).toBe(404);
+    expect(response.headers['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
     const body = JSON.parse(response.body);
     expect(body.error).toBe('Room not found');
   });
@@ -182,6 +184,7 @@ describe('round-history handler', () => {
     const response = await handler(mockEvent as APIGatewayProxyEvent);
 
     expect(response.statusCode).toBe(410);
+    expect(response.headers['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
     const body = JSON.parse(response.body);
     expect(body.error).toBe('Room has expired');
   });

@@ -1,6 +1,7 @@
 import { PutCommand } from '@aws-sdk/lib-dynamodb';
 import { getDocClient } from '../utils/dynamodb';
 import { createLogger } from '../utils/logger';
+import { corsHeaders } from '../utils/cors';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -28,11 +29,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       validatedBody = validateCreateRoomRequest(rawBody);
     } catch (error) {
       logger.error('Request validation failed', { error });
-      const origin = event.headers.origin || event.headers.Origin;
-      const headers = {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': origin || '*',
-      };
 
       if (error instanceof ZodError || (error as Error).name === 'ZodError') {
         // Zod v4 exposes issues (errors was removed in v4)
@@ -42,7 +38,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           : ['Validation failed'];
         return {
           statusCode: 400,
-          headers,
+          headers: corsHeaders(event),
           body: JSON.stringify({
             error: 'Invalid request parameters',
             details,
@@ -72,13 +68,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     try {
       resolvedDeck = parseDeckInput(deck);
     } catch (parseError) {
-      const origin = event.headers.origin || event.headers.Origin;
       return {
         statusCode: 400,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': origin || '*',
-        },
+        headers: corsHeaders(event),
         body: JSON.stringify({
           error: parseError instanceof Error ? parseError.message : 'Invalid deck value',
         }),
@@ -151,15 +143,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     // via GET /rooms/{code} becomes the first participant and moderator.
     // This avoids phantom participants that never connect via WebSocket.
 
-    const origin = event.headers.origin || event.headers.Origin;
-    const headers = {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': origin || '*',
-    };
-
     return {
       statusCode: 201,
-      headers,
+      headers: corsHeaders(event),
       body: JSON.stringify({
         roomId,
         shortCode,
@@ -170,14 +156,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     };
   } catch (error) {
     logger.error('Create room error', { error });
-    const origin = event.headers.origin || event.headers.Origin;
-    const headers = {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': origin || '*',
-    };
     return {
       statusCode: 500,
-      headers,
+      headers: corsHeaders(event),
       body: JSON.stringify({ error: 'Internal server error' }),
     };
   }
