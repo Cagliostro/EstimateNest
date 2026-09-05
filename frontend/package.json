@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dicebear/collection": "^7.0.4",
+    "@dicebear/collection": "^9.4.2",
     "@dicebear/core": "^7.0.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
