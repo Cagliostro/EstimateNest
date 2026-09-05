@@ -724,11 +724,22 @@ export class EstimateNestStack extends cdk.Stack {
     // Security headers policy for CloudFront
     const securityHeadersPolicy = cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS;
 
-    // Cache policy for static assets
-    const cachePolicy = new cloudfront.CachePolicy(this, 'StaticCachePolicy', {
+    // Content-hashed build assets (Vite): immutable per filename, cache long.
+    const assetsCachePolicy = new cloudfront.CachePolicy(this, 'AssetsCachePolicy', {
       defaultTtl: cdk.Duration.days(365),
       minTtl: cdk.Duration.days(1),
       maxTtl: cdk.Duration.days(365),
+      enableAcceptEncodingGzip: true,
+      enableAcceptEncodingBrotli: true,
+    });
+
+    // index.html and SPA routes must never be cached: after a deploy, cached
+    // HTML would reference chunks the sync already deleted ("Failed to fetch
+    // dynamically imported module" prod incident 2026-09-05, BK-015).
+    const htmlNoCachePolicy = new cloudfront.CachePolicy(this, 'HtmlNoCachePolicy', {
+      defaultTtl: cdk.Duration.seconds(0),
+      minTtl: cdk.Duration.seconds(0),
+      maxTtl: cdk.Duration.seconds(0),
       enableAcceptEncodingGzip: true,
       enableAcceptEncodingBrotli: true,
     });
@@ -738,25 +749,42 @@ export class EstimateNestStack extends cdk.Stack {
       ? acm.Certificate.fromCertificateArn(this, 'DistributionCert', props.certificateArn)
       : undefined;
 
+    const frontendOrigin = cloudfrontOrigins.S3BucketOrigin.withOriginAccessControl(frontendBucket);
+
     let distributionProps: cloudfront.DistributionProps = {
       defaultRootObject: 'index.html',
       defaultBehavior: {
-        origin: cloudfrontOrigins.S3BucketOrigin.withOriginAccessControl(frontendBucket),
+        origin: frontendOrigin,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         responseHeadersPolicy: securityHeadersPolicy,
-        cachePolicy: cachePolicy,
+        cachePolicy: htmlNoCachePolicy,
       },
+      additionalBehaviors: {
+        // Hashed build assets win over the no-cache default.
+        '/assets/*': {
+          origin: frontendOrigin,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          responseHeadersPolicy: securityHeadersPolicy,
+          cachePolicy: assetsCachePolicy,
+        },
+      },
+      // SPA fallback responses (200 index.html for missing paths) are error
+      // responses to CloudFront: cache them as short as possible so a stale
+      // reference heals itself within seconds, not minutes.
       errorResponses: [
         {
           httpStatus: 403,
           responseHttpStatus: 200,
           responsePagePath: '/index.html',
+          ttl: cdk.Duration.seconds(10),
         },
         {
           httpStatus: 404,
           responseHttpStatus: 200,
           responsePagePath: '/index.html',
+          ttl: cdk.Duration.seconds(10),
         },
       ],
       domainNames: props.domainName ? [props.domainName] : undefined,
