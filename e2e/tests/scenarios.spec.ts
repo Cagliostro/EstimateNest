@@ -241,6 +241,68 @@ test.describe('scenarios', () => {
     }
   });
 
+  test('BK-016: leaving participants stay gone from the moderator roster', async ({ browser }) => {
+    const outputDir = testOutputDir('leave-ghosting');
+    const hostCtx = await browser.newContext();
+    const guest1Ctx = await browser.newContext();
+    const guest2Ctx = await browser.newContext();
+
+    const host = await BrowserUser.create(hostCtx, 'Host');
+    const guest1 = await BrowserUser.create(guest1Ctx, 'Guest1');
+    const guest2 = await BrowserUser.create(guest2Ctx, 'Guest2');
+
+    try {
+      // User scenario: moderator + two participants, round voted and revealed.
+      const { roomCode } = await host.createRoom();
+      expect(roomCode).toBeTruthy();
+
+      await host.navigate(`/${roomCode}`);
+      await host.waitForReady();
+      await guest1.navigate(`/${roomCode}`);
+      await guest1.waitForReady();
+      await guest2.navigate(`/${roomCode}`);
+      await guest2.waitForReady();
+
+      // All three are in the roster.
+      await expect(host.page.locator('main ul li')).toHaveCount(3, { timeout: 10_000 });
+
+      await host.startNewRound();
+      await host.castVote(5);
+      await guest1.castVote(8);
+      await guest2.castVote(13);
+      await host.page.waitForTimeout(500);
+      await host.revealRound();
+      await host.page.waitForTimeout(500);
+      await expect(host.page.locator('body')).toContainText('Revealed!');
+
+      // Both participants leave during the results view.
+      await guest1.page.locator('button', { hasText: 'Leave Room' }).click();
+      await guest1.page.waitForURL('**/');
+      await guest2.page.locator('button', { hasText: 'Leave Room' }).click();
+      await guest2.page.waitForURL('**/');
+
+      // The disconnects land: the moderator roster drops to the moderator alone.
+      await expect(host.page.locator('main ul li')).toHaveCount(1, { timeout: 10_000 });
+
+      // BK-016: it must STAY at one. Before the fix, the abandoned
+      // WebSocketClient reconnected with the same room/participant ids ~1 s
+      // after the leave (onclose → attemptReconnect, backoff 1 s · 1.5^n),
+      // so the leavers re-appeared in the moderator's roster moments later.
+      // Waiting past the full backoff window (max attempt ~5 s) proves the
+      // orphaned clients are really dead.
+      await host.page.waitForTimeout(8_000);
+      await expect(host.page.locator('main ul li')).toHaveCount(1);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      await BrowserUser.dumpAll([host, guest1, guest2], outputDir, msg);
+      throw error;
+    } finally {
+      await hostCtx.close();
+      await guest1Ctx.close();
+      await guest2Ctx.close();
+    }
+  });
+
   test('password-protected room: creator becomes moderator, guest joins via dialog', async ({
     browser,
   }) => {

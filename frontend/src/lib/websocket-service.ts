@@ -81,11 +81,11 @@ export class WebSocketService {
       return;
     }
 
-    // Disconnect existing client and prevent it from reconnecting
+    // Disconnect existing client and abandon it. disconnect() permanently
+    // disables reconnect on that client (BK-016), so a stale socket replaced
+    // here can never rejoin under its old room/participant identity.
     if (this.client) {
-      this.client.disconnect(); // triggers onclose → attemptReconnect
-      // Prevent the old client from reconnecting after we abandon it
-      this.client.stopReconnect();
+      this.client.disconnect();
       this.client = null;
     }
 

@@ -166,16 +166,21 @@ export class WebSocketClient {
       if (this.shouldReconnect) {
         this.attemptReconnect();
       } else {
-        this.log('Not attempting reconnect due to rate limit');
+        this.log('Not attempting reconnect (reconnect disabled)');
       }
     };
   }
 
   /**
-   * Disconnect from the WebSocket server
+   * Disconnect from the WebSocket server. A deliberate disconnect must never
+   * resurrect itself: the async onclose → attemptReconnect would otherwise
+   * rejoin the abandoned client under the same room/participant ids, making
+   * leaving participants reappear in the roster (BK-016). Reconnect is opt-in
+   * via connect(), which resets shouldReconnect to true.
    */
   disconnect(): void {
     this.log('WebSocketClient.disconnect called');
+    this.shouldReconnect = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -188,18 +193,6 @@ export class WebSocketClient {
     }
 
     this.setState('disconnected');
-  }
-
-  /**
-   * Permanently stop all reconnect attempts.
-   * Call this before abandoning a client to prevent orphan reconnects.
-   */
-  stopReconnect(): void {
-    this.shouldReconnect = false;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
   }
 
   /**
