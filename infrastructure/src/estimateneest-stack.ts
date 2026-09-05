@@ -735,13 +735,12 @@ export class EstimateNestStack extends cdk.Stack {
 
     // index.html and SPA routes must never be cached: after a deploy, cached
     // HTML would reference chunks the sync already deleted ("Failed to fetch
-    // dynamically imported module" prod incident 2026-09-05, BK-015).
+    // dynamically imported module" prod incident 2026-09-05, BK-015). Note:
+    // accept-encoding flags are invalid on a caching-disabled policy.
     const htmlNoCachePolicy = new cloudfront.CachePolicy(this, 'HtmlNoCachePolicy', {
       defaultTtl: cdk.Duration.seconds(0),
       minTtl: cdk.Duration.seconds(0),
       maxTtl: cdk.Duration.seconds(0),
-      enableAcceptEncodingGzip: true,
-      enableAcceptEncodingBrotli: true,
     });
 
     // Import certificate for CloudFront custom domain
