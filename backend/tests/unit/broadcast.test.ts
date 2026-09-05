@@ -29,16 +29,34 @@ const {
 });
 
 // Mock dependencies - these are hoisted by vitest and run before imports
+// Vitest 5 mocks are no longer constructible via `new`, but broadcast.ts
+// constructs SDK commands inline (`client.send(new PostToConnectionCommand(...))`).
+// Use real classes that record construction on the hoisted vi.fns, so the
+// `.mock.calls` assertions keep working.
 vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
-  ApiGatewayManagementApiClient: vi.fn(() => ({ send: mockSend })),
-  PostToConnectionCommand: mockPostToConnectionCommand,
+  ApiGatewayManagementApiClient: class {
+    send = mockSend;
+  },
+  PostToConnectionCommand: class {
+    input: Record<string, unknown>;
+    constructor(params: Record<string, unknown>) {
+      mockPostToConnectionCommand(params);
+      this.input = params;
+    }
+  },
 }));
 
 vi.mock('@aws-sdk/lib-dynamodb', () => ({
   DynamoDBDocumentClient: {
     from: vi.fn(() => ({ send: mockDocClientSend })),
   },
-  UpdateCommand: mockUpdateCommand,
+  UpdateCommand: class {
+    input: Record<string, unknown>;
+    constructor(params: Record<string, unknown>) {
+      mockUpdateCommand(params);
+      this.input = params;
+    }
+  },
 }));
 
 vi.mock('../../src/utils/cache', () => ({
