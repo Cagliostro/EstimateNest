@@ -1,10 +1,4 @@
-import {
-  TransactionCanceledException,
-  ConditionalCheckFailedException,
-  TransactWriteCommand,
-  UpdateCommand,
-  GetCommand,
-} from '@aws-sdk/lib-dynamodb';
+import { TransactWriteCommand, UpdateCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { getDocClient } from './dynamodb';
 import { getCacheManager } from './cache';
 import { filterPresent, isPresent } from './participants';
@@ -130,8 +124,8 @@ export async function handleModeratorVacancy(
       })
     );
   } catch (error) {
-    if (error instanceof TransactionCanceledException) {
-      // Lost the race to another connect — vacancy already resolved there.
+    // Lost the race to another connect — vacancy already resolved there.
+    if ((error as Error).name === 'TransactionCanceledException') {
       return { handled: false, reason: 'no-vacancy' };
     }
     throw error;
@@ -153,7 +147,7 @@ async function clearVacancy(roomId: string, observedVacantAt: string): Promise<b
     );
     return true;
   } catch (error) {
-    if (error instanceof ConditionalCheckFailedException) {
+    if ((error as Error).name === 'ConditionalCheckFailedException') {
       return false;
     }
     throw error;

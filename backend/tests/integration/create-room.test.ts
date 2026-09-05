@@ -39,6 +39,7 @@ describe('create-room handler', () => {
     const response = await handler(mockEvent as APIGatewayProxyEvent);
 
     expect(response.statusCode).toBe(201);
+    expect(response.headers['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
     const body = JSON.parse(response.body);
     expect(body.roomId).toBeDefined();
     expect(body.shortCode).toBeDefined();
@@ -86,6 +87,7 @@ describe('create-room handler', () => {
     const response = await handler(mockEvent as APIGatewayProxyEvent);
 
     expect(response.statusCode).toBe(400);
+    expect(response.headers['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
     const body = JSON.parse(response.body);
     expect(body.error).toContain('between 2 and 15');
   });
@@ -98,6 +100,7 @@ describe('create-room handler', () => {
     const response = await handler(mockEvent as APIGatewayProxyEvent);
 
     expect(response.statusCode).toBe(400);
+    expect(response.headers['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
     const body = JSON.parse(response.body);
     expect(body.error).toBe('Invalid request parameters');
   });

@@ -77,7 +77,7 @@ async function broadcastRoundRevealed(
         isStaleConnection &&
         participant.connectionId &&
         participant.roomId &&
-        participant.participantId
+        participant.id
       ) {
         try {
           // Remove connectionId from the participant record
@@ -86,7 +86,7 @@ async function broadcastRoundRevealed(
               TableName: PARTICIPANTS_TABLE,
               Key: {
                 roomId: participant.roomId,
-                participantId: participant.participantId,
+                participantId: participant.id,
               },
               UpdateExpression: 'REMOVE connectionId SET lastSeenAt = :now',
               ExpressionAttributeValues: {
@@ -172,7 +172,7 @@ export const handler = async (): Promise<void> => {
           },
         })
       );
-      const votes = votesResult.Items || [];
+      const votes = (votesResult.Items || []) as unknown as Vote[];
 
       // Fetch participants to broadcast (need connectionIds)
       const participantsResult = await docClient.send(
@@ -184,7 +184,7 @@ export const handler = async (): Promise<void> => {
           },
         })
       );
-      const participants = participantsResult.Items || [];
+      const participants = (participantsResult.Items || []) as unknown as Participant[];
 
       // Create Round object for broadcasting
       const roundData: Round = {

@@ -1,6 +1,7 @@
 import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { getDocClient } from '../utils/dynamodb';
 import { createLogger } from '../utils/logger';
+import { corsHeaders } from '../utils/cors';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import {
   Room,
@@ -34,11 +35,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       validatedBody = validateUpdateRoomRequest(rawBody);
     } catch (error) {
       logger.error('Request validation failed', { error });
-      const origin = event.headers.origin || event.headers.Origin;
-      const headers = {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': origin || '*',
-      };
 
       if (error instanceof ZodError || (error as Error).name === 'ZodError') {
         const zodError = error as {
@@ -51,7 +47,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           : ['Validation failed'];
         return {
           statusCode: 400,
-          headers,
+          headers: corsHeaders(event),
           body: JSON.stringify({
             error: 'Invalid request parameters',
             details,
@@ -83,6 +79,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (!codeResult.Item) {
       return {
         statusCode: 404,
+        headers: corsHeaders(event),
         body: JSON.stringify({ error: 'Room not found' }),
       };
     }
@@ -94,6 +91,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (!requestParticipantId) {
       return {
         statusCode: 400,
+        headers: corsHeaders(event),
         body: JSON.stringify({ error: 'participantId is required' }),
       };
     }
@@ -108,6 +106,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (!participant || !participant.isModerator) {
       return {
         statusCode: 403,
+        headers: corsHeaders(event),
         body: JSON.stringify({ error: 'Only moderators can update room settings' }),
       };
     }
@@ -158,13 +157,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       try {
         resolvedDeck = parseDeckInput(deck);
       } catch (parseError) {
-        const origin = event.headers.origin || event.headers.Origin;
         return {
           statusCode: 400,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': origin || '*',
-          },
+          headers: corsHeaders(event),
           body: JSON.stringify({
             error: parseError instanceof Error ? parseError.message : 'Invalid deck value',
           }),
@@ -178,6 +173,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (setExpressions.length === 0 && removeExpressions.length === 0) {
       return {
         statusCode: 400,
+        headers: corsHeaders(event),
         body: JSON.stringify({ error: 'No valid fields to update' }),
       };
     }
@@ -211,16 +207,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     );
     const updatedRoom = updatedRoomResult.Item as Room;
 
-    // CORS headers
-    const origin = event.headers.origin || event.headers.Origin;
-    const headers = {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': origin || '*',
-    };
-
     return {
       statusCode: 200,
-      headers,
+      headers: corsHeaders(event),
       body: JSON.stringify({
         room: {
           id: updatedRoom.id,
@@ -234,11 +223,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     };
   } catch (error) {
     logger.error('Update room error', { error });
-    const origin = event.headers.origin || event.headers.Origin;
-    const headers = {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': origin || '*',
-    };
 
     if (error instanceof ZodError || (error as Error).name === 'ZodError') {
       const zodError = error as {
@@ -251,7 +235,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         : ['Validation failed'];
       return {
         statusCode: 400,
-        headers,
+        headers: corsHeaders(event),
         body: JSON.stringify({
           error: 'Invalid request parameters',
           details,
@@ -261,7 +245,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     return {
       statusCode: 500,
-      headers,
+      headers: corsHeaders(event),
       body: JSON.stringify({ error: 'Internal server error' }),
     };
   }

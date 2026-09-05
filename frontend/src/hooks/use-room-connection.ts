@@ -13,10 +13,8 @@ export interface UseRoomConnectionOptions {
 }
 
 export function useRoomConnection() {
-  const hookIdRef = useRef(Math.random().toString(36).substr(2, 9));
-  const hookId = hookIdRef.current;
-  const serviceRef = useRef(WebSocketService.getInstance());
-  const service = serviceRef.current;
+  const [hookId] = useState(() => Math.random().toString(36).substr(2, 9));
+  const [service] = useState(() => WebSocketService.getInstance());
 
   console.log(`[EstimateNest] [${hookId}] useRoomConnection hook created`);
 
@@ -35,7 +33,7 @@ export function useRoomConnection() {
    * Handle incoming WebSocket messages
    */
   const handleWebSocketMessage = useCallback((message: WebSocketMessage) => {
-    const currentHookId = hookIdRef.current;
+    const currentHookId = hookId;
     switch (message.type) {
       case 'participantList': {
         console.log(`[EstimateNest] [${currentHookId}] participantList received:`, {
@@ -59,6 +57,14 @@ export function useRoomConnection() {
             useParticipantStore
               .getState()
               .setParticipant(currentParticipantId, name, avatarSeed, isModerator);
+
+            // Identity is otherwise only persisted at join time — a rename
+            // would be lost on reload (BK-001). The broadcast is the
+            // server-confirmed source of truth.
+            const { shortCode } = useRoomStore.getState();
+            if (shortCode) {
+              saveIdentity(shortCode, { participantId: currentParticipantId, name });
+            }
           }
         }
         break;
@@ -135,7 +141,7 @@ export function useRoomConnection() {
         break;
       }
     }
-  }, []);
+  }, [hookId]);
 
   /**
    * Stop polling
@@ -217,7 +223,7 @@ export function useRoomConnection() {
    */
   const joinRoom = useCallback(
     async (roomCode: string, name: string, moderatorPassword?: string, participantId?: string) => {
-      const currentHookId = hookIdRef.current;
+      const currentHookId = hookId;
       try {
         console.log(`[EstimateNest] [${currentHookId}] Joining room:`, roomCode, 'as', name);
 
@@ -314,7 +320,7 @@ export function useRoomConnection() {
         throw error;
       }
     },
-    [service, stopPolling]
+    [service, stopPolling, hookId]
   );
 
   /**
@@ -339,7 +345,7 @@ export function useRoomConnection() {
    */
   const sendVote = useCallback(
     (value: number | string) => {
-      const currentHookId = hookIdRef.current;
+      const currentHookId = hookId;
       if (isSendingVoteRef.current) {
         console.log(
           `[EstimateNest] [${currentHookId}] Vote already being sent, skipping duplicate`
@@ -352,6 +358,9 @@ export function useRoomConnection() {
         throw new Error('Not connected');
       }
 
+      // Imperative duplicate-send lock: ref write is the point of this guard,
+      // not reactive state.
+      // eslint-disable-next-line react-hooks/immutability
       isSendingVoteRef.current = true;
       try {
         // Get current round ID from store
@@ -374,14 +383,14 @@ export function useRoomConnection() {
         timeoutRef.current = null;
       }, 1000);
     },
-    [service]
+    [service, hookId]
   );
 
   /**
    * Reveal votes (moderator only)
    */
   const revealVotes = useCallback(() => {
-    const currentHookId = hookIdRef.current;
+    const currentHookId = hookId;
     console.log(`[EstimateNest] [${currentHookId}] revealVotes called`);
     if (!service.isConnected()) {
       throw new Error('Not connected');
@@ -394,21 +403,21 @@ export function useRoomConnection() {
     }
 
     service.revealVotes(currentRound.id);
-  }, [service]);
+  }, [service, hookId]);
 
   /**
    * Update participant name
    */
   const updateParticipant = useCallback(
     (name: string) => {
-      const currentHookId = hookIdRef.current;
+      const currentHookId = hookId;
       console.log(`[EstimateNest] [${currentHookId}] updateParticipant called, name:`, name);
       if (!service.isConnected()) {
         throw new Error('Not connected');
       }
       service.updateParticipant(name);
     },
-    [service]
+    [service, hookId]
   );
 
   /**
@@ -416,14 +425,14 @@ export function useRoomConnection() {
    */
   const createNewRound = useCallback(
     (title?: string, description?: string) => {
-      const currentHookId = hookIdRef.current;
+      const currentHookId = hookId;
       console.log(`[EstimateNest] [${currentHookId}] createNewRound called, title:`, title);
       if (!service.isConnected()) {
         throw new Error('Not connected');
       }
       service.createNewRound(title, description);
     },
-    [service]
+    [service, hookId]
   );
 
   /**
@@ -431,14 +440,14 @@ export function useRoomConnection() {
    */
   const updateRound = useCallback(
     (roundId: string, title?: string, description?: string) => {
-      const currentHookId = hookIdRef.current;
+      const currentHookId = hookId;
       console.log(`[EstimateNest] [${currentHookId}] updateRound called, roundId:`, roundId);
       if (!service.isConnected()) {
         throw new Error('Not connected');
       }
       service.updateRound(roundId, title, description);
     },
-    [service]
+    [service, hookId]
   );
 
   // Track if handlers are already registered to prevent duplicates during re-renders
@@ -446,7 +455,7 @@ export function useRoomConnection() {
 
   // Register message handler on mount and unregister on unmount
   useEffect(() => {
-    const currentHookId = hookIdRef.current;
+    const currentHookId = hookId;
     if (handlersRegisteredRef.current) {
       console.log(`[EstimateNest] [${currentHookId}] Handlers already registered, skipping`);
       return;
@@ -468,14 +477,14 @@ export function useRoomConnection() {
       // The WebSocketClient's internal reconnect handles disconnections.
       // Individual hook cleanup only removes its own handler + polling.
     };
-  }, [handleWebSocketMessage, service, stopPolling]);
+  }, [handleWebSocketMessage, service, stopPolling, hookId]);
 
   // Track if state change callback is already registered
   const stateCallbackRegisteredRef = useRef(false);
 
   // Sync connection state with store
   useEffect(() => {
-    const currentHookId = hookIdRef.current;
+    const currentHookId = hookId;
     if (stateCallbackRegisteredRef.current) {
       console.log(
         `[EstimateNest] [${currentHookId}] State change callback already registered, skipping`
@@ -512,7 +521,7 @@ export function useRoomConnection() {
       service.removeStateChangeCallback(handleStateChange);
       stateCallbackRegisteredRef.current = false;
     };
-  }, [service]);
+  }, [service, hookId]);
 
   // Cleanup timeout on unmount
   useEffect(() => {

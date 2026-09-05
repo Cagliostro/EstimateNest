@@ -133,7 +133,7 @@ export type WebSocketMessage =
   | { type: 'join'; payload?: { roomCode?: string; name?: string; avatarSeed?: string } }
   | { type: 'updateParticipant'; payload: { name: string } }
   | { type: 'leave'; payload: { participantId: string } }
-  | { type: 'vote'; payload: { roundId: string; value: number | string } }
+  | { type: 'vote'; payload: { roundId?: string; value: number | string } }
   | { type: 'reveal'; payload: { roundId: string } }
   | { type: 'newRound'; payload: { title?: string; description?: string } }
   | { type: 'updateRound'; payload: { roundId: string; title?: string; description?: string } }
@@ -142,7 +142,7 @@ export type WebSocketMessage =
   | { type: 'participantUpdated'; payload: { success: boolean; name: string } }
   | { type: 'autoRevealCountdown'; payload: { countdownSeconds: number } }
   | { type: 'error'; payload: { message: string; code?: string } }
-  | { type: 'ack'; payload: { message: string } };
+  | { type: 'ack'; payload: { message: string; roundId?: string } };
 
 // ====================
 // Utilities

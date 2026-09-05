@@ -139,7 +139,7 @@ async function checkRateLimit(
     })
   );
 
-  if (countResult.Count >= limit) {
+  if ((countResult.Count ?? 0) >= limit) {
     return false;
   }
 
@@ -254,7 +254,8 @@ async function getOrCreateActiveRound(
         logger.warn('Active item missing activeRoundId, retrying', { roomId });
         if (retryCount >= MAX_RETRIES) {
           throw new Error(
-            `Max retries (${MAX_RETRIES}) exceeded while trying to create active round`
+            `Max retries (${MAX_RETRIES}) exceeded while trying to create active round`,
+            { cause: error }
           );
         }
         return getOrCreateActiveRound(roomId, retryCount + 1);
@@ -282,7 +283,9 @@ async function getOrCreateActiveRound(
           })
         );
         if (retryCount >= MAX_RETRIES) {
-          throw new Error(`Max retries (${MAX_RETRIES}) exceeded while cleaning up missing round`);
+          throw new Error(`Max retries (${MAX_RETRIES}) exceeded while cleaning up missing round`, {
+            cause: error,
+          });
         }
         return getOrCreateActiveRound(roomId, retryCount + 1);
       }
@@ -314,7 +317,7 @@ async function handleVote(
 ) {
   const logger = createLogger();
   logger.info('Vote handler start');
-  const { connectionId } = event.requestContext;
+  const connectionId = event.requestContext.connectionId!;
   const { roundId: requestedRoundId = '', value } = message.payload;
 
   if (value === undefined) {
@@ -331,14 +334,14 @@ async function handleVote(
     isModerator: participant.isModerator,
   });
 
-  const { roomId, participantId } = participant;
+  const { roomId, id: participantId } = participant;
 
   // Validate vote value against room's deck
   const roomRecord = await getRoomWithCache(roomId);
   if (!roomRecord) {
     throw new Error('Room not found');
   }
-  const room = roomRecord as Room;
+  const room = roomRecord as unknown as Room;
   if (!room.deck.values.includes(value)) {
     throw new Error(`Invalid vote value. Allowed values: ${room.deck.values.join(', ')}`);
   }
@@ -721,7 +724,7 @@ async function handleReveal(
   // Same steady-state-promotion rationale as handleNewRound: without this,
   // a moderator-less room can never reveal manually (unless
   // allowAllParticipantsToReveal) until someone reconnects.
-  const vacancy = await resolveVacancyForMessage(event, roomId, participant.participantId);
+  const vacancy = await resolveVacancyForMessage(event, roomId, participant.id);
 
   // Get the round first to check for scheduled auto-reveal
   const roundResult = await docClient.send(
@@ -756,7 +759,7 @@ async function handleReveal(
     !participant.isModerator &&
     !room.allowAllParticipantsToReveal &&
     !isAutoReveal &&
-    !(vacancy.reason === 'promoted' && vacancy.promotedParticipantId === participant.participantId)
+    !(vacancy.reason === 'promoted' && vacancy.promotedParticipantId === participant.id)
   ) {
     throw new Error('Only moderators can reveal votes');
   }
@@ -834,7 +837,7 @@ async function handleJoin(
   event: APIGatewayProxyEvent,
   _message: WebSocketMessage & { type: 'join' }
 ) {
-  const { connectionId } = event.requestContext;
+  const connectionId = event.requestContext.connectionId!;
 
   // Find participant by connectionId
   const participant = await findParticipantByConnectionId(connectionId);
@@ -886,7 +889,7 @@ async function handleUpdateParticipant(
   message: WebSocketMessage & { type: 'updateParticipant' }
 ) {
   const logger = createLogger();
-  const { connectionId } = event.requestContext;
+  const connectionId = event.requestContext.connectionId!;
   const { name } = message.payload;
 
   if (!name || typeof name !== 'string') {
@@ -902,7 +905,7 @@ async function handleUpdateParticipant(
   }
 
   logger.info('Found participant for update', { roomId: participant.roomId });
-  const { roomId, participantId } = participant;
+  const { roomId, id: participantId } = participant;
   const avatarSeed = createAvatarSeed(name);
 
   // Update participant name and avatarSeed
@@ -988,15 +991,11 @@ async function handleNewRound(
   // newRound stays blocked forever after the moderator left. The GSI read
   // above may be stale for isModerator, so a sender promoted just now is
   // recognized via the vacancy result.
-  const vacancy = await resolveVacancyForMessage(
-    event,
-    participant.roomId,
-    participant.participantId
-  );
+  const vacancy = await resolveVacancyForMessage(event, participant.roomId, participant.id);
 
   if (
     !participant.isModerator &&
-    !(vacancy.reason === 'promoted' && vacancy.promotedParticipantId === participant.participantId)
+    !(vacancy.reason === 'promoted' && vacancy.promotedParticipantId === participant.id)
   ) {
     throw new Error('Only moderators can start a new round');
   }
@@ -1294,7 +1293,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
   message = validatedMessage;
 
   // Rate limiting: 20 messages per second per connection per message type
-  const connectionId = event.requestContext.connectionId;
+  const connectionId = event.requestContext.connectionId!;
   const allowed = await checkRateLimit(connectionId, message.type);
   if (!allowed) {
     return {

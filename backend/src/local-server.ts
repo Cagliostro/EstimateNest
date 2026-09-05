@@ -23,7 +23,7 @@ app.use((req, res, next) => {
 const rooms = new Map<string, Room>();
 // connectionId may be absent (disconnect removes it, like the Lambda REMOVE),
 // despite the shared type declaring it required.
-type LocalParticipant = Participant & { connectionId?: string };
+type LocalParticipant = Omit<Participant, 'connectionId'> & { connectionId?: string };
 const participants = new Map<string, LocalParticipant>();
 const connections = new Map<string, WSWebSocket>(); // connectionId -> WebSocket
 const participantByConnection = new Map<string, string>(); // connectionId -> participantId
@@ -44,8 +44,10 @@ function isPresent(p: LocalParticipant): boolean {
   return connections.has(p.connectionId);
 }
 
-function filterPresent(list: LocalParticipant[]): LocalParticipant[] {
-  return list.filter(isPresent);
+function filterPresent(list: LocalParticipant[]): Participant[] {
+  // isPresent guarantees a connectionId, so the survivors satisfy the
+  // shared Participant type (used in broadcast payloads).
+  return list.filter(isPresent) as Participant[];
 }
 
 function resolveModeratorVacancy(roomId: string, connectingParticipantId: string): void {
@@ -90,7 +92,7 @@ function createAvatarSeed(name?: string): string {
 // Create room
 app.post('/rooms', (req, res) => {
   try {
-    const { deck = 'fibonacci', allowAllParticipantsToReveal } = req.body;
+    const { deck = 'fibonacci', allowAllParticipantsToReveal, moderatorPassword } = req.body;
     const roomId = uuidv4();
     const shortCode = generateShortCode();
     const now = new Date().toISOString();
@@ -103,6 +105,8 @@ app.post('/rooms', (req, res) => {
       expiresAt,
       allowAllParticipantsToReveal: allowAllParticipantsToReveal ?? false,
       deck: getDeckById(deck),
+      // Plaintext in the in-memory mock — prod stores a scrypt hash (dev only)
+      moderatorPassword: moderatorPassword?.trim() || undefined,
     };
 
     rooms.set(roomId, room);
@@ -126,12 +130,32 @@ app.post('/rooms', (req, res) => {
 app.get('/rooms/:code', (req, res) => {
   try {
     const { code } = req.params;
-    const { name, participantId } = req.query;
+    const { name, participantId, moderatorPassword } = req.query;
 
     // Find room by short code
     const room = Array.from(rooms.values()).find((r) => r.shortCode === code.toUpperCase());
     if (!room) {
       return res.status(404).json({ error: 'Room not found' });
+    }
+
+    // Password gate — mirrors join-room.ts: an existing participant row is
+    // auto-authorized (reload/reconnect), everyone else needs the password.
+    let passwordValid = !room.moderatorPassword;
+    if (room.moderatorPassword && typeof participantId === 'string') {
+      const existingRow = participants.get(participantId);
+      if (existingRow && existingRow.roomId === room.id) passwordValid = true;
+    }
+    if (!passwordValid) {
+      if (typeof moderatorPassword !== 'string' || !moderatorPassword) {
+        return res
+          .status(403)
+          .json({ error: 'Password required to join this room', code: 'PASSWORD_REQUIRED' });
+      }
+      if (moderatorPassword !== room.moderatorPassword) {
+        return res
+          .status(403)
+          .json({ error: 'Incorrect password', code: 'INCORRECT_PASSWORD' });
+      }
     }
 
     let finalParticipantId: string;
@@ -239,7 +263,7 @@ app.get('/rooms/:code', (req, res) => {
         maxParticipants: room.maxParticipants,
         autoRevealEnabled: true,
         autoRevealCountdownSeconds: 3,
-        hasPassword: false,
+        hasPassword: !!room.moderatorPassword,
       },
     });
   } catch (error) {
@@ -330,18 +354,12 @@ wss.on('connection', (ws, req) => {
       participants.set(participantId, participant);
 
       // Moderator: mark a vacancy instead of reassigning immediately — a
-      // quick reconnect (page reload) must keep the role. Only when other
-      // live connections remain (mirrors websocket-disconnect.ts).
+      // quick reconnect (page reload) must keep the role. Always mark it,
+      // even as the last live connection, so a later join resolves it via
+      // resolveModeratorVacancy (mirrors websocket-disconnect.ts).
       if (participant.isModerator) {
-        const otherLive = Array.from(participants.values()).filter(
-          (p) => p.roomId === roomId && p.id !== participantId && connections.has(p.connectionId ?? '')
-        );
-        if (otherLive.length > 0) {
-          moderatorVacantAt.set(roomId, new Date().toISOString());
-          console.log('Moderator disconnected — vacancy marked', { roomId });
-        } else {
-          console.log('Moderator disconnected with no reassignment candidates', { roomId });
-        }
+        moderatorVacantAt.set(roomId, new Date().toISOString());
+        console.log('Moderator disconnected — vacancy marked', { roomId });
       }
     }
 
@@ -555,7 +573,9 @@ function broadcastToRoom(roomId: string, message: WebSocketMessage) {
   const roomParticipants = Array.from(participants.values()).filter((p) => p.roomId === roomId);
 
   roomParticipants.forEach((participant) => {
-    const connection = connections.get(participant.connectionId);
+    const connection = participant.connectionId
+      ? connections.get(participant.connectionId)
+      : undefined;
     if (connection && connection.readyState === connection.OPEN) {
       connection.send(JSON.stringify(message));
     }

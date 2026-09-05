@@ -38,7 +38,7 @@ export async function broadcastToRoom(
   isRosterRefresh = false
 ): Promise<void> {
   const logger = createLogger();
-  const { domainName, stage, apiId } = event.requestContext;
+  const { domainName = '', stage, apiId } = event.requestContext;
   // Determine region from domainName (if execute-api domain) or from environment
   let region = process.env.AWS_REGION || 'eu-central-1';
   if (domainName.includes('.execute-api.')) {
@@ -96,7 +96,7 @@ export async function broadcastToRoom(
         isStaleConnection &&
         participant.connectionId &&
         participant.roomId &&
-        participant.participantId
+        participant.id
       ) {
         try {
           // Remove connectionId only if it still maps the dead connection and
@@ -109,7 +109,7 @@ export async function broadcastToRoom(
               TableName: process.env.PARTICIPANTS_TABLE!,
               Key: {
                 roomId: participant.roomId,
-                participantId: participant.participantId,
+                participantId: participant.id,
               },
               UpdateExpression: 'REMOVE connectionId SET lastSeenAt = :now',
               ConditionExpression: 'connectionId = :cid AND lastSeenAt < :graceCutoff',
@@ -188,7 +188,7 @@ export async function sendToConnection(
   message: WebSocketMessage
 ): Promise<void> {
   const logger = createLogger();
-  const { domainName, stage, apiId } = event.requestContext;
+  const { domainName = '', stage, apiId } = event.requestContext;
   // Determine region from domainName (if execute-api domain) or from environment
   let region = process.env.AWS_REGION || 'eu-central-1';
   if (domainName.includes('.execute-api.')) {

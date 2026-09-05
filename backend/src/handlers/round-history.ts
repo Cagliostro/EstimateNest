@@ -1,6 +1,7 @@
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { getDocClient } from '../utils/dynamodb';
 import { createLogger } from '../utils/logger';
+import { corsHeaders } from '../utils/cors';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { Round, Vote, validateRoomCodePath } from '@estimatenest/shared';
 import { ZodError } from 'zod';
@@ -36,6 +37,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (!codeResult.Item) {
       return {
         statusCode: 404,
+        headers: corsHeaders(event),
         body: JSON.stringify({ error: 'Room not found' }),
       };
     }
@@ -46,6 +48,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (expiresAtMs < Date.now()) {
       return {
         statusCode: 410,
+        headers: corsHeaders(event),
         body: JSON.stringify({ error: 'Room has expired' }),
       };
     }
@@ -102,42 +105,29 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       });
     }
 
-    // CORS headers
-    const origin = event.headers.origin || event.headers.Origin;
-    const headers = {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': origin || '*',
-    };
-
     return {
       statusCode: 200,
-      headers,
+      headers: corsHeaders(event),
       body: JSON.stringify(history),
     };
   } catch (error) {
     logger.error('Round history error', { error });
-    // CORS headers for error response
-    const origin = event.headers.origin || event.headers.Origin;
-    const headers = {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': origin || '*',
-    };
 
     // Handle validation errors
     if (error instanceof ZodError) {
       return {
         statusCode: 400,
-        headers,
+        headers: corsHeaders(event),
         body: JSON.stringify({
           error: 'Invalid room code format',
-          details: error.errors,
+          details: error.issues,
         }),
       };
     }
 
     return {
       statusCode: 500,
-      headers,
+      headers: corsHeaders(event),
       body: JSON.stringify({ error: 'Internal server error' }),
     };
   }

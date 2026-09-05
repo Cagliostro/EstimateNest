@@ -1,6 +1,7 @@
 import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { getDocClient } from '../utils/dynamodb';
 import { createLogger } from '../utils/logger';
+import { corsHeaders } from '../utils/cors';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -75,12 +76,14 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       logger.error('Request validation failed', { error });
 
       if (error instanceof ZodError || (error as Error).name === 'ZodError') {
-        const zodError = error as { errors?: Array<{ path: string[]; message: string }> };
-        const details = zodError.errors
-          ? zodError.errors.map((e) => `${e.path.join('.')}: ${e.message}`)
+        // Zod v4 exposes issues (errors was removed in v4)
+        const zodError = error as { issues?: Array<{ path: Array<string | number>; message: string }> };
+        const details = zodError.issues
+          ? zodError.issues.map((e) => `${e.path.join('.')}: ${e.message}`)
           : ['Validation failed'];
         return {
           statusCode: 400,
+          headers: corsHeaders(event),
           body: JSON.stringify({
             error: 'Invalid request parameters',
             details,
@@ -105,6 +108,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (!codeResult.Item) {
       return {
         statusCode: 404,
+        headers: corsHeaders(event),
         body: JSON.stringify({ error: 'Room not found' }),
       };
     }
@@ -115,6 +119,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (expiresAtMs < Date.now()) {
       return {
         statusCode: 410,
+        headers: corsHeaders(event),
         body: JSON.stringify({ error: 'Room has expired' }),
       };
     }
@@ -129,6 +134,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (!roomResult.Item) {
       return {
         statusCode: 404,
+        headers: corsHeaders(event),
         body: JSON.stringify({ error: 'Room not found' }),
       };
     }
@@ -156,6 +162,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       if (!validatedData.moderatorPassword) {
         return {
           statusCode: 403,
+          headers: corsHeaders(event),
           body: JSON.stringify({
             error: 'Password required to join this room',
             code: 'PASSWORD_REQUIRED',
@@ -165,9 +172,13 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       if (!verifyPassword(validatedData.moderatorPassword, room.moderatorPassword!)) {
         return {
           statusCode: 403,
+          headers: corsHeaders(event),
           body: JSON.stringify({ error: 'Incorrect password', code: 'INCORRECT_PASSWORD' }),
         };
       }
+      // Verified: a fresh joiner with the correct password is past the gate
+      // and may participate in the moderator claim below.
+      passwordValid = true;
     }
 
     // Determine participant ID (provided for polling, or new)
@@ -266,7 +277,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       name = providedName;
       avatarSeed = createAvatarSeed(name);
       isModerator = false;
-      if (!room.moderatorPassword) {
+      // Anyone past the password gate may claim; CAS on moderatorAssigned keeps it one-time per room.
+      if (passwordValid) {
         try {
           await docClient.send(
             new UpdateCommand({
@@ -314,7 +326,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       name = providedName;
       avatarSeed = createAvatarSeed(name);
       isModerator = false;
-      if (!room.moderatorPassword) {
+      // Anyone past the password gate may claim; CAS on moderatorAssigned keeps it one-time per room.
+      if (passwordValid) {
         try {
           await docClient.send(
             new UpdateCommand({
@@ -475,16 +488,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       isModerator: p.isModerator,
     }));
 
-    // CORS headers
-    const origin = event.headers.origin || event.headers.Origin;
-    const headers = {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': origin || '*',
-    };
-
     return {
       statusCode: 200,
-      headers,
+      headers: corsHeaders(event),
       body: JSON.stringify({
         roomId,
         participantId,
@@ -506,17 +512,13 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     };
   } catch (error) {
     logger.error('Join room error', { error });
-    // CORS headers for error response
-    const origin = event.headers.origin || event.headers.Origin;
-    const headers = {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': origin || '*',
-    };
+    const headers = corsHeaders(event);
 
     if (error instanceof ZodError || (error as Error).name === 'ZodError') {
-      const zodError = error as { errors?: Array<{ path: string[]; message: string }> };
-      const details = zodError.errors
-        ? zodError.errors.map((e) => `${e.path.join('.')}: ${e.message}`)
+      // Zod v4 exposes issues (errors was removed in v4)
+      const zodError = error as { issues?: Array<{ path: Array<string | number>; message: string }> };
+      const details = zodError.issues
+        ? zodError.issues.map((e) => `${e.path.join('.')}: ${e.message}`)
         : ['Validation failed'];
       return {
         statusCode: 400,

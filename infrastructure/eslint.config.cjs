@@ -5,7 +5,7 @@ const globals = require('globals');
 
 module.exports = [
   {
-    ignores: ['dist', 'eslint.config.cjs', 'cdk.out'],
+    ignores: ['dist', 'eslint.config.cjs', 'cdk.out', 'json/**'],
   },
   js.configs.recommended,
   {

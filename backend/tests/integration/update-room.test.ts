@@ -96,6 +96,7 @@ describe('update-room handler', () => {
     const response = await handler(mockEvent as APIGatewayProxyEvent);
 
     expect(response.statusCode).toBe(200);
+    expect(response.headers['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
     const body = JSON.parse(response.body);
     expect(body.room.id).toBe('room-123');
     expect(body.room.shortCode).toBe('ABCDEF');
@@ -176,6 +177,7 @@ describe('update-room handler', () => {
     const response = await handler(mockEvent as APIGatewayProxyEvent);
 
     expect(response.statusCode).toBe(403);
+    expect(response.headers['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
     const body = JSON.parse(response.body);
     expect(body.error).toBe('Only moderators can update room settings');
   });
@@ -197,6 +199,7 @@ describe('update-room handler', () => {
     const response = await handler(mockEvent as APIGatewayProxyEvent);
 
     expect(response.statusCode).toBe(403);
+    expect(response.headers['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
     const body = JSON.parse(response.body);
     expect(body.error).toBe('Only moderators can update room settings');
   });
@@ -208,6 +211,7 @@ describe('update-room handler', () => {
     const response = await handler(mockEvent as APIGatewayProxyEvent);
 
     expect(response.statusCode).toBe(404);
+    expect(response.headers['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
     const body = JSON.parse(response.body);
     expect(body.error).toBe('Room not found');
   });
@@ -286,6 +290,7 @@ describe('update-room handler', () => {
     const response = await handler(mockEvent as APIGatewayProxyEvent);
 
     expect(response.statusCode).toBe(400);
+    expect(response.headers['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
     const body = JSON.parse(response.body);
     expect(body.error).toBe('No valid fields to update');
   });

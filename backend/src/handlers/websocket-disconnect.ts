@@ -2,7 +2,6 @@ import {
   QueryCommand,
   GetCommand,
   UpdateCommand,
-  ConditionalCheckFailedException,
 } from '@aws-sdk/lib-dynamodb';
 import { getDocClient } from '../utils/dynamodb';
 import { createLogger } from '../utils/logger';
@@ -116,7 +115,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         })
       );
     } catch (error) {
-      if (error instanceof ConditionalCheckFailedException) {
+      if ((error as Error).name === 'ConditionalCheckFailedException') {
         // Mapping replaced in the read→update window: this connection's
         // $connect was counted, so balance the room count, but leave the
         // row — it maps a live connection — and skip the broadcast.
@@ -139,29 +138,23 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     // If the moderator left, mark a vacancy instead of reassigning
     // immediately: a quick reconnect (page reload) must keep the role.
+    // Always mark it, even when no one else is connected — otherwise a room
+    // whose moderator leaves as the last live participant would stay
+    // permanently without a moderator (no later join would find a vacancy
+    // to resolve). The vacancy is resolved lazily by the next connect/join
+    // or moderator-gated message via handleModeratorVacancy.
     if (participant.isModerator) {
-      const allParticipants = await cacheManager.getParticipantsWithCache(roomId);
-      const otherConnectedParticipants = allParticipants.filter(
-        (p) => p.id !== participantId && p.connectionId && p.connectionId !== 'REST'
+      await docClient.send(
+        new UpdateCommand({
+          TableName: ROOMS_TABLE,
+          Key: { id: roomId, sk: 'META' },
+          UpdateExpression: 'SET moderatorVacantAt = :now',
+          ExpressionAttributeValues: {
+            ':now': new Date().toISOString(),
+          },
+        })
       );
-
-      if (otherConnectedParticipants.length > 0) {
-        await docClient.send(
-          new UpdateCommand({
-            TableName: ROOMS_TABLE,
-            Key: { id: roomId, sk: 'META' },
-            UpdateExpression: 'SET moderatorVacantAt = :now',
-            ExpressionAttributeValues: {
-              ':now': new Date().toISOString(),
-            },
-          })
-        );
-        logger.info('Moderator disconnected — vacancy marked for lazy handoff', { roomId });
-      } else {
-        // No other connected participants — keep disconnected participant as moderator
-        // They may reconnect later
-        logger.info('Moderator disconnected with no reassignment candidates', { roomId });
-      }
+      logger.info('Moderator disconnected — vacancy marked for lazy handoff', { roomId });
     }
 
     // Fetch all participants in the room (cached, invalidated above)

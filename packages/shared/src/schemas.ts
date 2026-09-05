@@ -161,6 +161,7 @@ export const ackMessageSchema = z.object({
   type: z.literal('ack'),
   payload: z.object({
     message: z.string(),
+    roundId: z.string().optional(),
   }),
 });
 
