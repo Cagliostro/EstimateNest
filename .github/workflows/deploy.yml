@@ -26,7 +26,7 @@ jobs:
       SHARP_BINARY_HOST: https://github.com/lovell/sharp/releases/download
       SHARP_LIBVIPS_BINARY_HOST: https://github.com/lovell/sharp-libvips/releases/download
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
 
       - name: Setup Node.js
         uses: actions/setup-node@v6.3.0
@@ -87,7 +87,7 @@ jobs:
       SHARP_LIBVIPS_BINARY_HOST: https://github.com/lovell/sharp-libvips/releases/download
 
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
 
       - name: Setup Node.js
         uses: actions/setup-node@v6.3.0
