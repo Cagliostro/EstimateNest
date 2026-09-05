@@ -16,7 +16,7 @@
     "@estimatenest/shared": "file:../packages/shared"
   },
   "devDependencies": {
-    "@playwright/test": "^1.52.0",
+    "@playwright/test": "^1.62.1",
     "@types/node": "^20.11.24",
     "typescript": "^5.4.5"
   }
