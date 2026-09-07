@@ -17,6 +17,7 @@ import { getCacheManager } from '../utils/cache';
 import { verifyPassword } from '../utils/password';
 import { filterPresent } from '../utils/participants';
 import { handleModeratorVacancy } from '../utils/moderator';
+import { mapRoundItem, resolveExpiresAt } from '../utils/rounds';
 
 const docClient = getDocClient();
 const cacheManager = getCacheManager();
@@ -25,7 +26,6 @@ const ROOMS_TABLE = process.env.ROOMS_TABLE!;
 const PARTICIPANTS_TABLE = process.env.PARTICIPANTS_TABLE!;
 const ROUNDS_TABLE = process.env.ROUNDS_TABLE!;
 const VOTES_TABLE = process.env.VOTES_TABLE!;
-const DEFAULT_TTL_SECONDS = 14 * 24 * 60 * 60;
 
 // Helper function to create participant record
 async function createParticipantRecord(
@@ -142,10 +142,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     // Participant rows must expire with the room (TTL in epoch seconds) —
     // without expiresAt a row whose client never returns lives forever.
-    const participantExpiresAt =
-      typeof room.expiresAt === 'number'
-        ? room.expiresAt
-        : Math.floor(Date.now() / 1000) + DEFAULT_TTL_SECONDS;
+    // Non-numeric legacy values (ISO strings silently disable TTL) fall back.
+    const participantExpiresAt = resolveExpiresAt(room.expiresAt);
 
     // Check password if room has one
     let passwordValid = !room.moderatorPassword;
@@ -450,16 +448,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     if (roundItem) {
       // Map DynamoDB attributes to Round interface
-      round = {
-        id: roundItem.roundId || roundItem.id,
-        roomId: roundItem.roomId,
-        title: roundItem.title,
-        description: roundItem.description,
-        startedAt: roundItem.startedAt,
-        revealedAt: roundItem.revealedAt,
-        isRevealed: roundItem.isRevealed,
-        scheduledRevealAt: roundItem.scheduledRevealAt || undefined,
-      };
+      round = mapRoundItem(roundItem as Record<string, unknown>);
       const votesResult = await docClient.send(
         new QueryCommand({
           TableName: VOTES_TABLE,

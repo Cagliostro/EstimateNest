@@ -147,9 +147,7 @@ describe('vote handler', () => {
     // Mock transaction write
     mockDynamoDB.send.mockResolvedValueOnce({});
 
-    // Mock votes query for broadcast - will be called multiple times due to retry logic
-    // Mock 4 attempts in the loop (MAX_ATTEMPTS) and 1 final attempt
-    // Return a vote item matching the participant
+    // Mock the single consistent votes query for broadcast
     const voteItem = {
       id: 'vote-id-123',
       roundId: 'round-id-123', // dummy, will be ignored
@@ -157,11 +155,11 @@ describe('vote handler', () => {
       value: 5,
       createdAt: new Date().toISOString(),
     };
-    for (let i = 0; i < 5; i++) {
-      mockDynamoDB.send.mockResolvedValueOnce({
-        Items: [voteItem],
-      });
-    }
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [voteItem],
+    });
+    // The single voter completes the round: schedule the auto-reveal
+    mockDynamoDB.send.mockResolvedValueOnce({});
 
     // Mock participants cache (for auto-reveal check)
     mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
@@ -195,14 +193,6 @@ describe('vote handler', () => {
         autoRevealCountdownSeconds: 3,
         maxParticipants: 50,
       };
-    });
-
-    // Mock room cache (for auto-reveal settings check)
-    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
-      id: roomId,
-      autoRevealEnabled: true,
-      autoRevealCountdownSeconds: 3,
-      allowAllParticipantsToReveal: false,
     });
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
@@ -256,14 +246,6 @@ describe('vote handler', () => {
       },
     });
 
-    // Mock room cache (for auto-reveal settings check)
-    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
-      id: roomId,
-      autoRevealEnabled: true,
-      autoRevealCountdownSeconds: 3,
-      allowAllParticipantsToReveal: false,
-    });
-
     // Mock transaction write throwing ConditionalCheckFailedException
     const conditionalError = new Error('Conditional check failed');
     (conditionalError as Error & { name: string }).name = 'ConditionalCheckFailedException';
@@ -278,6 +260,147 @@ describe('vote handler', () => {
     expect(body.payload.code).toBe('DUPLICATE_VOTE');
     // Verify cache invalidation was called when new round created
     expect(mockCacheManager.invalidateActiveRound).toHaveBeenCalledWith(roomId);
+  });
+
+  it('rejects a vote racing a reveal (transactional round guard)', async () => {
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+    const roundId = 'round-abc';
+
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 }); // rate limit count
+    mockDynamoDB.send.mockResolvedValueOnce({}); // rate limit record
+    mockDynamoDB.send.mockResolvedValueOnce({
+      // participant lookup by connectionId
+      Items: [
+        {
+          participantId,
+          roomId,
+          isModerator: false,
+          connectionId: 'test-connection-id',
+        },
+      ],
+    });
+    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
+      // deck validation read
+      id: roomId,
+      deck: { id: 'fibonacci', name: 'Fibonacci', values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'] },
+    });
+    mockDynamoDB.send.mockResolvedValueOnce({
+      // the round read (unrevealed at read time)
+      Item: {
+        roomId,
+        roundId,
+        startedAt: new Date().toISOString(),
+        isRevealed: false,
+      },
+    });
+
+    // A reveal commits between the round read and this transaction: the
+    // round-guard condition fails on the transaction's second item.
+    const txError = new Error('Transaction cancelled') as Error & {
+      name: string;
+      CancellationReasons: { Code: string }[];
+    };
+    txError.name = 'TransactionCanceledException';
+    txError.CancellationReasons = [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }];
+    mockDynamoDB.send.mockRejectedValueOnce(txError);
+
+    const event = {
+      ...mockEvent,
+      body: JSON.stringify({ type: 'vote', payload: { roundId, value: 5 } }),
+    };
+    const response = await handler(event as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(400);
+    const body = JSON.parse(response.body);
+    expect(body.payload.code).toBe('ROUND_ALREADY_REVEALED');
+    // The guard failure must not be retried as a transaction conflict
+    expect(mockDynamoDB.send).toHaveBeenCalledTimes(5);
+  });
+
+  it('heals an orphaned ACTIVE item pointing at a revealed round', async () => {
+    const participantId = 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee';
+    const roomId = '11111111-2222-3333-8444-555555555555';
+
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 }); // rate limit count
+    mockDynamoDB.send.mockResolvedValueOnce({}); // rate limit record
+    mockDynamoDB.send.mockResolvedValueOnce({
+      // participant lookup by connectionId
+      Items: [
+        {
+          participantId,
+          roomId,
+          isModerator: false,
+          connectionId: 'test-connection-id',
+        },
+      ],
+    });
+    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
+      // deck validation read; also the auto-reveal settings source (disabled
+      // so no scheduling update runs)
+      id: roomId,
+      deck: { id: 'fibonacci', name: 'Fibonacci', values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'] },
+      autoRevealEnabled: false,
+    });
+    mockCacheManager.getActiveRoundWithCache.mockResolvedValueOnce(null); // first claim attempt
+
+    // The ACTIVE slot is taken (claim CAS fails)
+    const ccf = new Error('Conditional check failed');
+    (ccf as Error & { name: string }).name = 'ConditionalCheckFailedException';
+    mockDynamoDB.send.mockRejectedValueOnce(ccf);
+    // The ACTIVE coordination item points at a revealed round (orphaned by a
+    // pre-fix auto-reveal), and the round item confirms it is revealed
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: { roomId, roundId: 'ACTIVE', activeRoundId: 'revealed-round-id' },
+    });
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Item: {
+        roomId,
+        roundId: 'revealed-round-id',
+        id: 'revealed-round-id',
+        startedAt: new Date().toISOString(),
+        isRevealed: true,
+      },
+    });
+    mockDynamoDB.send.mockResolvedValueOnce({}); // ACTIVE delete
+
+    // Recursive attempt now claims the slot and creates a fresh round
+    mockCacheManager.getActiveRoundWithCache.mockResolvedValueOnce(null);
+    mockDynamoDB.send.mockResolvedValueOnce({}); // conditional ACTIVE put
+    mockDynamoDB.send.mockResolvedValueOnce({}); // round put
+
+    mockDynamoDB.send.mockResolvedValueOnce({}); // vote transaction
+    mockDynamoDB.send.mockResolvedValueOnce({
+      // votes query for the broadcast
+      Items: [
+        {
+          id: 'vote-id-123',
+          roundId: 'fresh-round-id',
+          participantId,
+          value: 5,
+        },
+      ],
+    });
+    mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
+      {
+        participantId,
+        id: participantId,
+        roomId,
+        connectionId: 'test-connection-id',
+        isModerator: false,
+        name: 'Test User',
+        avatarSeed: 'test',
+        joinedAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+      },
+    ]);
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    // The healing chain ran (delete + second claim) and the vote succeeded
+    expect(response.statusCode).toBe(200);
+    expect(mockCacheManager.getActiveRoundWithCache).toHaveBeenCalledTimes(2);
+    expect(mockCacheManager.invalidateActiveRound).toHaveBeenCalled();
   });
 
   it('should return 404 when participant not found', async () => {

@@ -5,6 +5,7 @@ import { corsHeaders } from '../utils/cors';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { Round, Vote, validateRoomCodePath } from '@estimatenest/shared';
 import { ZodError } from 'zod';
+import { mapRoundItem } from '../utils/rounds';
 
 const docClient = getDocClient();
 
@@ -67,7 +68,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       })
     );
 
-    const rounds = (roundsResult.Items as Round[]) || [];
+    const rounds = ((roundsResult.Items as Record<string, unknown>[]) || []).map(mapRoundItem);
 
     // Fetch votes for all rounds in parallel (N queries but concurrent)
     const votePromises = rounds.map((round) =>

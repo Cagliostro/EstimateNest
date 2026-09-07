@@ -31,7 +31,11 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
   const { connectionId } = event.requestContext;
 
   try {
-    // Find participant by connectionId using GSI
+    // Deliberately not using findParticipantByConnectionId
+    // (utils/participants): here a GSI miss is the normal success path (a
+    // stale connection has no row to clean) so the retry loop would only
+    // delay teardown, and the row is re-read consistently below anyway —
+    // that read, not this one, is the authority for what gets cleaned.
     const queryResult = await docClient.send(
       new QueryCommand({
         TableName: PARTICIPANTS_TABLE,
