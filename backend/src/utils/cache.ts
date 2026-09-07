@@ -1,6 +1,7 @@
 import { DynamoDBDocumentClient, QueryCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { getDocClient } from './dynamodb';
 import { Participant, Round } from '@estimatenest/shared';
+import { mapRoundItem } from './rounds';
 
 // Cache configuration
 const PARTICIPANT_CACHE_TTL_MS = 3 * 1000; // 3 seconds
@@ -98,18 +99,7 @@ export class CacheManager {
     let round: Round | null = null;
 
     if (items.length > 0) {
-      const item = items[0];
-      // Map DynamoDB attributes to Round interface
-      round = {
-        id: item.roundId || item.id,
-        roomId: item.roomId,
-        title: item.title,
-        description: item.description,
-        startedAt: item.startedAt,
-        revealedAt: item.revealedAt,
-        isRevealed: item.isRevealed,
-        scheduledRevealAt: item.scheduledRevealAt,
-      };
+      round = mapRoundItem(items[0] as Record<string, unknown>);
     }
 
     this.activeRoundCache.set(roomId, { round, timestamp: now });

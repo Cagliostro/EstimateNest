@@ -133,6 +133,7 @@ describe('scheduled auto-reveal handler', () => {
     mockDocClientSend
       .mockResolvedValueOnce({ Items: [roundItem] }) // Scan
       .mockResolvedValueOnce({}) // Reveal update
+      .mockResolvedValueOnce({}) // ACTIVE delete
       .mockResolvedValueOnce({ Items: [voteItem] }) // Votes query
       .mockResolvedValueOnce({ Items: participantRows }); // Participants query
 
@@ -145,10 +146,16 @@ describe('scheduled auto-reveal handler', () => {
     };
     expect(revealInput.UpdateExpression).toContain('SET isRevealed = :true');
     expect(revealInput.UpdateExpression).toContain('REMOVE scheduledRevealAt');
+    expect(revealInput.UpdateExpression).toContain('expiresAt = :exp');
 
     expect(mockCacheManager.invalidateActiveRound).toHaveBeenCalledWith(roomId);
 
-    expect(mockDocClientSend).toHaveBeenCalledTimes(4); // scan, reveal, votes, participants
+    // The revealed round must no longer act as the active round
+    expect(mockDeleteCommand).toHaveBeenCalledTimes(1);
+    const deleteInput = mockDeleteCommand.mock.calls[0][0] as { Key?: Record<string, string> };
+    expect(deleteInput.Key).toEqual({ roomId, roundId: 'ACTIVE' });
+
+    expect(mockDocClientSend).toHaveBeenCalledTimes(5); // scan, reveal, delete, votes, participants
 
     expect(mockSend).toHaveBeenCalledTimes(2); // conn1 + conn2
     const firstData = JSON.parse(mockSend.mock.calls[0][0].input.Data);
@@ -173,6 +180,7 @@ describe('scheduled auto-reveal handler', () => {
     mockDocClientSend
       .mockResolvedValueOnce({ Items: [roundItem] }) // Scan
       .mockResolvedValueOnce({}) // Reveal update
+      .mockResolvedValueOnce({}) // ACTIVE delete
       .mockResolvedValueOnce({ Items: [voteItem] }) // Votes query
       .mockResolvedValueOnce({ Items: participantRows }); // Participants query
 
@@ -208,7 +216,7 @@ describe('scheduled auto-reveal handler', () => {
     );
     expect(cleanupInput.ExpressionAttributeValues?.[':graceCutoff']).toBeDefined();
 
-    expect(mockDocClientSend).toHaveBeenCalledTimes(6); // scan, reveal, votes, participants, REMOVE, balance
+    expect(mockDocClientSend).toHaveBeenCalledTimes(7); // scan, reveal, delete, votes, participants, REMOVE, balance
     expect(mockCacheManager.invalidateParticipants).toHaveBeenCalledWith(roomId);
   });
 
@@ -216,6 +224,7 @@ describe('scheduled auto-reveal handler', () => {
     mockDocClientSend
       .mockResolvedValueOnce({ Items: [roundItem] }) // Scan
       .mockResolvedValueOnce({}) // Reveal update
+      .mockResolvedValueOnce({}) // ACTIVE delete
       .mockResolvedValueOnce({ Items: [voteItem] }) // Votes query
       .mockResolvedValueOnce({ Items: participantRows }) // Participants query
       .mockRejectedValueOnce(ccfError()); // the mapping REMOVE
@@ -225,7 +234,7 @@ describe('scheduled auto-reveal handler', () => {
     await handler();
 
     // No count balance after the failed REMOVE, no cache invalidation, no refresh
-    expect(mockDocClientSend).toHaveBeenCalledTimes(5); // scan, reveal, votes, participants, failed REMOVE
+    expect(mockDocClientSend).toHaveBeenCalledTimes(6); // scan, reveal, delete, votes, participants, failed REMOVE
     expect(mockCacheManager.invalidateParticipants).not.toHaveBeenCalled();
     expect(mockSend).toHaveBeenCalledTimes(2); // roundUpdate only, no roster refresh
   });
@@ -234,6 +243,7 @@ describe('scheduled auto-reveal handler', () => {
     mockDocClientSend
       .mockResolvedValueOnce({ Items: [roundItem] }) // Scan
       .mockResolvedValueOnce({}) // Reveal update
+      .mockResolvedValueOnce({}) // ACTIVE delete
       .mockResolvedValueOnce({ Items: [voteItem] }) // Votes query
       .mockResolvedValueOnce({ Items: participantRows }); // Participants query
 

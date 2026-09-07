@@ -25,6 +25,7 @@ import { broadcastToRoom, sendToConnection } from '../utils/broadcast';
 import { getCacheManager } from '../utils/cache';
 import { filterPresent } from '../utils/participants';
 import { handleModeratorVacancy, ModeratorVacancyResult } from '../utils/moderator';
+import { mapRoundItem, resolveExpiresAt } from '../utils/rounds';
 
 // Helper to create properly typed WebSocket responses
 function createResponse(type: string, payload: Record<string, unknown>): string {
@@ -178,6 +179,7 @@ async function getRoomWithCache(roomId: string): Promise<Record<string, unknown>
  */
 async function getOrCreateActiveRound(
   roomId: string,
+  expiresAt?: number,
   retryCount = 0
 ): Promise<{ roundId: string; round: Round }> {
   const logger = createLogger();
@@ -186,8 +188,16 @@ async function getOrCreateActiveRound(
   // Try cache first
   const cachedRound = await cacheManager.getActiveRoundWithCache(roomId);
   if (cachedRound) {
-    logger.info('Found cached round', { roundId: cachedRound.id });
-    return { roundId: cachedRound.id, round: cachedRound };
+    if (cachedRound.isRevealed) {
+      // A revealed round must never act as the active round: a concurrent
+      // reveal can land inside the cache window (2s), leaving a stale
+      // "active" round cached. Drop the entry and create a fresh round.
+      logger.warn('Cached active round is revealed, discarding', { roundId: cachedRound.id });
+      cacheManager.invalidateActiveRound(roomId);
+    } else {
+      logger.info('Found cached round', { roundId: cachedRound.id });
+      return { roundId: cachedRound.id, round: cachedRound };
+    }
   }
   logger.info('No cached round, creating new one');
 
@@ -211,6 +221,7 @@ async function getOrCreateActiveRound(
           roundId: 'ACTIVE',
           activeRoundId: newRoundId,
           updatedAt: now,
+          expiresAt: resolveExpiresAt(expiresAt),
         },
         ConditionExpression: 'attribute_not_exists(roundId) OR #activeRoundId = :null',
         ExpressionAttributeNames: {
@@ -229,6 +240,7 @@ async function getOrCreateActiveRound(
         Item: {
           ...newRound,
           roundId: newRoundId,
+          expiresAt: resolveExpiresAt(expiresAt),
         },
       })
     );
@@ -258,7 +270,7 @@ async function getOrCreateActiveRound(
             { cause: error }
           );
         }
-        return getOrCreateActiveRound(roomId, retryCount + 1);
+        return getOrCreateActiveRound(roomId, expiresAt, retryCount + 1);
       }
 
       const existingRoundId = activeItem.activeRoundId;
@@ -287,20 +299,34 @@ async function getOrCreateActiveRound(
             cause: error,
           });
         }
-        return getOrCreateActiveRound(roomId, retryCount + 1);
+        return getOrCreateActiveRound(roomId, expiresAt, retryCount + 1);
+      }
+
+      // A revealed round is never active: an ACTIVE item pointing at one is
+      // orphaned (the auto-reveal path used to skip the ACTIVE delete).
+      // Clear it and let the next claim win.
+      if (item.isRevealed) {
+        logger.warn('Active round already revealed, cleaning up ACTIVE item', {
+          roomId,
+          existingRoundId,
+        });
+        await docClient.send(
+          new DeleteCommand({
+            TableName: ROUNDS_TABLE,
+            Key: { roomId, roundId: 'ACTIVE' },
+          })
+        );
+        if (retryCount >= MAX_RETRIES) {
+          throw new Error(
+            `Max retries (${MAX_RETRIES}) exceeded while cleaning up revealed round`,
+            { cause: error }
+          );
+        }
+        return getOrCreateActiveRound(roomId, expiresAt, retryCount + 1);
       }
 
       // Map DynamoDB attributes to Round interface
-      const round: Round = {
-        id: item.roundId || item.id,
-        roomId: item.roomId,
-        title: item.title,
-        description: item.description,
-        startedAt: item.startedAt,
-        revealedAt: item.revealedAt,
-        isRevealed: item.isRevealed,
-        scheduledRevealAt: item.scheduledRevealAt || undefined,
-      };
+      const round = mapRoundItem(item as Record<string, unknown>);
 
       logger.info('Found existing round created by another participant', {
         roundId: existingRoundId,
@@ -342,6 +368,9 @@ async function handleVote(
     throw new Error('Room not found');
   }
   const room = roomRecord as unknown as Room;
+  // Rows written during this round inherit the room's expiry (epoch seconds);
+  // the room read is already cached, so no extra call.
+  const roomExpiresAt = resolveExpiresAt(room.expiresAt);
   if (!room.deck.values.includes(value)) {
     throw new Error(`Invalid vote value. Allowed values: ${room.deck.values.join(', ')}`);
   }
@@ -362,22 +391,13 @@ async function handleVote(
       throw new Error('Round not found');
     }
     // Map DynamoDB attributes to Round interface
-    round = {
-      id: item.roundId || item.id,
-      roomId: item.roomId,
-      title: item.title,
-      description: item.description,
-      startedAt: item.startedAt,
-      revealedAt: item.revealedAt,
-      isRevealed: item.isRevealed,
-      scheduledRevealAt: item.scheduledRevealAt || undefined,
-    };
+    round = mapRoundItem(item as Record<string, unknown>);
     if (round.isRevealed) {
       throw new Error('Round is already revealed');
     }
   } else {
     logger.info('No roundId provided, finding or creating active round');
-    const activeRoundResult = await getOrCreateActiveRound(roomId);
+    const activeRoundResult = await getOrCreateActiveRound(roomId, roomExpiresAt);
     round = activeRoundResult.round;
     roundId = activeRoundResult.roundId;
   }
@@ -428,6 +448,7 @@ async function handleVote(
                   ...vote,
                   roomId,
                   idempotencyKey,
+                  expiresAt: roomExpiresAt,
                 },
                 ConditionExpression:
                   'attribute_not_exists(idempotencyKey) OR idempotencyKey <> :key',
@@ -440,12 +461,19 @@ async function handleVote(
               Update: {
                 TableName: ROUNDS_TABLE,
                 Key: { roomId, roundId },
-                UpdateExpression: 'SET #updated = :now',
+                // Guard against a reveal racing the vote: the round item was
+                // read before the transaction, so without the condition a vote
+                // landing after the reveal's own transaction would be accepted
+                // silently (round state changed since the read).
+                UpdateExpression: 'SET #updated = :now, expiresAt = :exp',
+                ConditionExpression: 'isRevealed = :false',
                 ExpressionAttributeNames: {
                   '#updated': 'updatedAt',
                 },
                 ExpressionAttributeValues: {
                   ':now': votedAt,
+                  ':exp': roomExpiresAt,
+                  ':false': false,
                 },
               },
             },
@@ -457,6 +485,12 @@ async function handleVote(
     } catch (transactionError) {
       const reasons = (transactionError as { CancellationReasons?: { Code?: string }[] })
         .CancellationReasons;
+      // The round-guard condition sits on the second transaction item: a
+      // conditional failure there means a reveal won the race. Final — the
+      // outer handler maps the message to a 400 ROUND_ALREADY_REVEALED.
+      if (reasons?.[1]?.Code === 'ConditionalCheckFailed') {
+        throw new Error('Round is already revealed', { cause: transactionError });
+      }
       const isConflict = (reasons ?? []).some((reason) => reason.Code === 'TransactionConflict');
       if (isConflict && txAttempt < MAX_TX_ATTEMPTS) {
         const delayMs = Math.min(TX_RETRY_BASE_DELAY_MS * Math.pow(2, txAttempt - 1), 400);
@@ -764,16 +798,7 @@ async function handleReveal(
     throw new Error('Only moderators can reveal votes');
   }
   // Map DynamoDB attributes to Round interface
-  const round = {
-    id: item.roundId || item.id,
-    roomId: item.roomId,
-    title: item.title,
-    description: item.description,
-    startedAt: item.startedAt,
-    revealedAt: item.revealedAt,
-    isRevealed: item.isRevealed,
-    scheduledRevealAt: item.scheduledRevealAt || undefined,
-  };
+  const round = mapRoundItem(item as Record<string, unknown>);
 
   if (round.isRevealed) {
     throw new Error('Round is already revealed');
@@ -786,10 +811,12 @@ async function handleReveal(
     new UpdateCommand({
       TableName: ROUNDS_TABLE,
       Key: { roomId, roundId },
-      UpdateExpression: 'SET isRevealed = :true, revealedAt = :revealedAt REMOVE scheduledRevealAt',
+      UpdateExpression:
+        'SET isRevealed = :true, revealedAt = :revealedAt, expiresAt = :exp REMOVE scheduledRevealAt',
       ExpressionAttributeValues: {
         ':true': true,
         ':revealedAt': revealedAt,
+        ':exp': resolveExpiresAt(item.expiresAt),
       },
     })
   );
@@ -1032,10 +1059,11 @@ async function handleNewRound(
           TableName: ROUNDS_TABLE,
           Key: { roomId, roundId: existingRoundId },
           UpdateExpression:
-            'SET isRevealed = :true, revealedAt = :revealedAt REMOVE scheduledRevealAt',
+            'SET isRevealed = :true, revealedAt = :revealedAt, expiresAt = :exp REMOVE scheduledRevealAt',
           ExpressionAttributeValues: {
             ':true': true,
             ':revealedAt': revealedAt,
+            ':exp': resolveExpiresAt(existingItem.expiresAt),
           },
         },
       };
@@ -1059,16 +1087,12 @@ async function handleNewRound(
       );
       const existingVotes = (existingVotesResult.Items as Vote[]) || [];
 
-      const existingRound: Round = {
-        id: existingRoundId,
-        roomId: existingItem.roomId,
-        title: existingItem.title,
-        description: existingItem.description,
-        startedAt: existingItem.startedAt,
-        revealedAt,
+      const existingRound = mapRoundItem({
+        ...existingItem,
         isRevealed: true,
+        revealedAt,
         scheduledRevealAt: undefined,
-      };
+      });
 
       await broadcastToRoom(event, roomId, {
         type: 'roundUpdate',
@@ -1091,6 +1115,9 @@ async function handleNewRound(
     isRevealed: false,
     scheduledRevealAt: undefined,
   };
+  // Inherit the expiry of the oldest still-active round when one exists (rows
+  // written during the room's life share the room expiry), else fresh TTL.
+  const newRoundExpiresAt = resolveExpiresAt(activeRoundsResult.Items?.[0]?.expiresAt);
 
   await docClient.send(
     new PutCommand({
@@ -1098,6 +1125,7 @@ async function handleNewRound(
       Item: {
         ...round,
         roundId,
+        expiresAt: newRoundExpiresAt,
       },
     })
   );
@@ -1111,6 +1139,7 @@ async function handleNewRound(
         roundId: 'ACTIVE',
         activeRoundId: roundId,
         updatedAt: now,
+        expiresAt: newRoundExpiresAt,
       },
     })
   );
@@ -1223,16 +1252,7 @@ async function handleUpdateRound(
     })
   );
   const updatedItem = updatedRoundResult.Item!;
-  const round: Round = {
-    id: updatedItem.roundId || updatedItem.id,
-    roomId: updatedItem.roomId,
-    title: updatedItem.title,
-    description: updatedItem.description,
-    startedAt: updatedItem.startedAt,
-    revealedAt: updatedItem.revealedAt,
-    isRevealed: updatedItem.isRevealed,
-    scheduledRevealAt: updatedItem.scheduledRevealAt || undefined,
-  };
+  const round = mapRoundItem(updatedItem as Record<string, unknown>);
 
   const votesResult = await docClient.send(
     new QueryCommand({

@@ -1,9 +1,10 @@
-import { ScanCommand, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { ScanCommand, UpdateCommand, QueryCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { getDocClient } from '../utils/dynamodb';
 import { createLogger } from '../utils/logger';
 import { getCacheManager } from '../utils/cache';
 import { filterPresent } from '../utils/participants';
 import { getManagementClient, sendFanOut } from '../utils/ws-fanout';
+import { mapRoundItem, resolveExpiresAt } from '../utils/rounds';
 import { WebSocketMessage, Round, Vote, Participant } from '@estimatenest/shared';
 
 const docClient = getDocClient();
@@ -124,16 +125,28 @@ export const handler = async (): Promise<void> => {
         new UpdateCommand({
           TableName: ROUNDS_TABLE,
           Key: { roomId, roundId },
-          UpdateExpression: 'SET isRevealed = :true, revealedAt = :now REMOVE scheduledRevealAt',
+          UpdateExpression:
+            'SET isRevealed = :true, revealedAt = :now, expiresAt = :exp REMOVE scheduledRevealAt',
           ExpressionAttributeValues: {
             ':true': true,
             ':now': now,
+            ':exp': resolveExpiresAt(roundItem.expiresAt),
           },
         })
       );
 
       // Invalidate cache
       cacheManager.invalidateActiveRound(roomId);
+
+      // Delete the ACTIVE coordination item: the round is no longer active and
+      // a stale ACTIVE pointing at a revealed round must never resurface as
+      // "the active round" (parity with the manual reveal path).
+      await docClient.send(
+        new DeleteCommand({
+          TableName: ROUNDS_TABLE,
+          Key: { roomId, roundId: 'ACTIVE' },
+        })
+      );
 
       // Fetch votes for this round
       const votesResult = await docClient.send(
@@ -159,17 +172,14 @@ export const handler = async (): Promise<void> => {
       );
       const participants = (participantsResult.Items || []) as unknown as Participant[];
 
-      // Create Round object for broadcasting
-      const roundData: Round = {
-        id: roundId,
-        roomId,
-        title: roundItem.title,
-        description: roundItem.description,
-        startedAt: roundItem.startedAt,
-        revealedAt: now,
+      // Create Round object for broadcasting (hard override before mapping:
+      // the scheduled reveal just committed these fields)
+      const roundData = mapRoundItem({
+        ...roundItem,
         isRevealed: true,
+        revealedAt: now,
         scheduledRevealAt: undefined,
-      };
+      });
 
       // Broadcast round update to all participants
       await broadcastRoundRevealed(roundData, votes, participants);
