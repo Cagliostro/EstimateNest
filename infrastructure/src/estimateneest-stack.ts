@@ -467,7 +467,9 @@ export class EstimateNestStack extends cdk.Stack {
     roundsTable.grantReadWriteData(scheduledAutoRevealHandler);
     votesTable.grantReadData(scheduledAutoRevealHandler);
     participantsTable.grantReadWriteData(scheduledAutoRevealHandler);
-    roomsTable.grantReadData(scheduledAutoRevealHandler);
+    // Write access: the hardened fan-out decrements the room's connectionCount
+    // when it removes a stale connection mapping (ws-fanout.ts)
+    roomsTable.grantWriteData(scheduledAutoRevealHandler);
     // Allow posting to WebSocket connections
     scheduledAutoRevealHandler.addToRolePolicy(
       new iam.PolicyStatement({

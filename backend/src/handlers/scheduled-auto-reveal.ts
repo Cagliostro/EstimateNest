@@ -1,12 +1,9 @@
 import { ScanCommand, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { getDocClient } from '../utils/dynamodb';
 import { createLogger } from '../utils/logger';
-import {
-  ApiGatewayManagementApiClient,
-  PostToConnectionCommand,
-  ApiGatewayManagementApiServiceException,
-} from '@aws-sdk/client-apigatewaymanagementapi';
 import { getCacheManager } from '../utils/cache';
+import { filterPresent } from '../utils/participants';
+import { getManagementClient, sendFanOut } from '../utils/ws-fanout';
 import { WebSocketMessage, Round, Vote, Participant } from '@estimatenest/shared';
 
 const docClient = getDocClient();
@@ -33,78 +30,54 @@ function getWebSocketApiEndpoint(): string {
 }
 
 /**
- * Broadcast a roundUpdate message to all participants in a room.
+ * Broadcast a roundUpdate message to all participants in a room. Reuses the
+ * hardened fan-out shared with broadcastToRoom: stale connections (410/403)
+ * are cleaned under the connect-grace guard, the room's connection count is
+ * balanced, and the remaining clients get one roster refresh so no ghost
+ * lingers after a cleanup.
  */
 async function broadcastRoundRevealed(
-  roomId: string,
-  roundId: string,
   round: Round,
   votes: Vote[],
   participants: Participant[]
 ): Promise<void> {
   const logger = createLogger();
   const endpoint = getWebSocketApiEndpoint();
-  const apiGatewayClient = new ApiGatewayManagementApiClient({ endpoint });
+  const apiGatewayClient = getManagementClient(endpoint);
 
   const message: WebSocketMessage = {
     type: 'roundUpdate',
     payload: { round, votes },
   };
 
-  const activeParticipants = participants.filter(
-    (p) => p.connectionId && p.connectionId !== 'REST'
-  );
+  logger.info('Broadcasting roundUpdate', { participantCount: participants.length });
 
-  logger.info('Broadcasting roundUpdate', { count: activeParticipants.length });
-
-  const promises = activeParticipants.map(async (participant) => {
-    try {
-      await apiGatewayClient.send(
-        new PostToConnectionCommand({
-          ConnectionId: participant.connectionId,
-          Data: JSON.stringify(message),
-        })
-      );
-      logger.info('Successfully sent roundUpdate');
-    } catch (error) {
-      logger.warn('Failed to send message to connection', { error });
-      // If the connection is gone (410) or forbidden (403), clean up the stale connection ID
-      const isStaleConnection =
-        (error as ApiGatewayManagementApiServiceException).$metadata?.httpStatusCode === 410 ||
-        (error as ApiGatewayManagementApiServiceException).$metadata?.httpStatusCode === 403;
-
-      if (
-        isStaleConnection &&
-        participant.connectionId &&
-        participant.roomId &&
-        participant.id
-      ) {
-        try {
-          // Remove connectionId from the participant record
-          await docClient.send(
-            new UpdateCommand({
-              TableName: PARTICIPANTS_TABLE,
-              Key: {
-                roomId: participant.roomId,
-                participantId: participant.id,
-              },
-              UpdateExpression: 'REMOVE connectionId SET lastSeenAt = :now',
-              ExpressionAttributeValues: {
-                ':now': new Date().toISOString(),
-              },
-            })
-          );
-          logger.info('Cleaned up stale connection', { roomId: participant.roomId });
-          // Invalidate participant cache since participant connection changed
-          cacheManager.invalidateParticipants(participant.roomId);
-        } catch (cleanupError) {
-          logger.error('Failed to clean up stale connection', { error: cleanupError });
-        }
-      }
-    }
+  const cleanedParticipants = await sendFanOut({
+    message,
+    participants,
+    client: apiGatewayClient,
   });
 
-  await Promise.allSettled(promises);
+  // Whoever removes a mapping must inform the room: push one roster to the
+  // remaining clients so the ghost heals (the cleaned rows are gone from DDB,
+  // so filtering the local list is equivalent to a fresh fetch).
+  if (cleanedParticipants.length > 0) {
+    try {
+      const survivors = participants.filter(
+        (p) => !cleanedParticipants.some((c) => c.id === p.id)
+      );
+      await sendFanOut({
+        message: {
+          type: 'participantList',
+          payload: { participants: filterPresent(survivors) },
+        },
+        participants: survivors,
+        client: apiGatewayClient,
+      });
+    } catch (error) {
+      logger.warn('Roster refresh broadcast failed', { error });
+    }
+  }
 }
 
 /**
@@ -199,7 +172,7 @@ export const handler = async (): Promise<void> => {
       };
 
       // Broadcast round update to all participants
-      await broadcastRoundRevealed(roomId, roundId, roundData, votes, participants);
+      await broadcastRoundRevealed(roundData, votes, participants);
 
       logger.info('Round auto-revealed via scheduled Lambda and broadcasted', { roundId });
     }
