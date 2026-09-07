@@ -493,119 +493,22 @@ async function handleVote(
     moderators: participants.filter((p) => p.isModerator).length,
   });
 
-  // Fetch all votes for this round to broadcast, with aggressive retry for consistency
-  let votes: Vote[] = [];
-  const expectedVoteCount = activeParticipants.length;
-  logger.debug('Expected vote count', { expectedVoteCount, roundId });
-
-  const MAX_ATTEMPTS = 4;
-  const BASE_DELAY_MS = 100;
-  const MAX_DELAY_MS = 1000;
-  const totalQueryStart = Date.now();
-  let attemptsUsed = 0;
-
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    attemptsUsed++;
-    const queryStart = Date.now();
-    const votesResult = await docClient.send(
-      new QueryCommand({
-        TableName: VOTES_TABLE,
-        KeyConditionExpression: 'roundId = :roundId',
-        ExpressionAttributeValues: {
-          ':roundId': roundId,
-        },
-        ConsistentRead: true,
-      })
-    );
-    const queryDuration = Date.now() - queryStart;
-    votes = (votesResult.Items as Vote[]) || [];
-    logger.debug('Votes query attempt', {
-      attempt: attempt + 1,
-      count: votes.length,
-      queryDuration,
-    });
-
-    // Log which votes we found vs expected participants
-    const foundParticipantIds = votes.map((v) => v.participantId);
-    const missingParticipantIds = activeParticipants
-      .filter((p) => !foundParticipantIds.includes(p.id))
-      .map((p) => p.id);
-
-    if (missingParticipantIds.length > 0) {
-      logger.debug('Missing votes for participants', {
-        missingCount: missingParticipantIds.length,
-      });
-    }
-
-    // If we have all expected votes, break immediately
-    if (votes.length >= expectedVoteCount && expectedVoteCount > 0) {
-      logger.debug('Found all expected votes', { count: expectedVoteCount });
-      break;
-    }
-
-    // If no active participants (shouldn't happen), break
-    if (expectedVoteCount === 0) {
-      logger.debug('No active participants, no votes expected');
-      break;
-    }
-
-    // Wait before retrying (exponential backoff with cap)
-    const delayMs = Math.min(BASE_DELAY_MS * Math.pow(1.5, attempt), MAX_DELAY_MS);
-    logger.debug('Waiting before retry', { delayMs, attempt: attempt + 1 });
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-
-  const totalQueryDuration = Date.now() - totalQueryStart;
-  logger.debug('Total votes query', { totalQueryDuration, attemptsUsed });
-
-  // Check if we're still missing votes after all retries
-  const foundParticipantIds = votes.map((v) => v.participantId);
-  const missingParticipantIdsAfterRetry = activeParticipants
-    .filter((p) => !foundParticipantIds.includes(p.id))
-    .map((p) => p.id);
-
-  // If still missing votes after all retries, try one more time with longer delay
-  if (missingParticipantIdsAfterRetry.length > 0 && votes.length < expectedVoteCount) {
-    logger.warn('Missing votes after retries, waiting for final attempt', {
-      missingCount: missingParticipantIdsAfterRetry.length,
-      expectedVoteCount,
-      roundId,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    // Final attempt
-    const finalVotesResult = await docClient.send(
-      new QueryCommand({
-        TableName: VOTES_TABLE,
-        KeyConditionExpression: 'roundId = :roundId',
-        ExpressionAttributeValues: {
-          ':roundId': roundId,
-        },
-        ConsistentRead: true,
-      })
-    );
-    votes = (finalVotesResult.Items as Vote[]) || [];
-    logger.info('Final votes query after wait', { count: votes.length });
-
-    const finalFoundParticipantIds = votes.map((v) => v.participantId);
-    const finalMissingParticipantIds = activeParticipants
-      .filter((p) => !finalFoundParticipantIds.includes(p.id))
-      .map((p) => p.id);
-
-    if (finalMissingParticipantIds.length > 0) {
-      logger.error('CRITICAL: Still missing votes after final wait', {
-        missingCount: finalMissingParticipantIds.length,
-        expectedVoteCount,
-        roundId,
-      });
-    } else {
-      logger.info('Successfully retrieved all votes after final wait', {
-        count: expectedVoteCount,
-      });
-    }
-  } else if (votes.length === expectedVoteCount) {
-    logger.info('Successfully retrieved all votes', { count: expectedVoteCount, roundId });
-  }
+  // Fetch all votes for this round to broadcast. The transaction above is
+  // committed by the time this read runs, so a single strongly consistent
+  // query sees every vote — the historical retry/polling loop papered over
+  // eventually consistent reads that were never needed after the commit.
+  const votesResult = await docClient.send(
+    new QueryCommand({
+      TableName: VOTES_TABLE,
+      KeyConditionExpression: 'roundId = :roundId',
+      ExpressionAttributeValues: {
+        ':roundId': roundId,
+      },
+      ConsistentRead: true,
+    })
+  );
+  const votes = (votesResult.Items as Vote[]) || [];
+  logger.debug('Votes query', { count: votes.length, roundId });
 
   const allVoted = votes.length === activeParticipants.length && activeParticipants.length > 0;
   logger.info('All voted check', {
@@ -623,10 +526,9 @@ async function handleVote(
     logger.debug('Missing voters', { count: missingVoterIds.length });
   }
 
-  // Fetch room to check auto-reveal settings (cached)
-  const roomSettings = (await getRoomWithCache(roomId)) as Room | undefined;
-  const autoRevealEnabled = roomSettings?.autoRevealEnabled !== false; // default: true
-  const countdownSeconds = roomSettings?.autoRevealCountdownSeconds ?? 3; // default: 3
+  // Auto-reveal settings come from the room read above (cached, no second read)
+  const autoRevealEnabled = room.autoRevealEnabled !== false; // default: true
+  const countdownSeconds = room.autoRevealCountdownSeconds ?? 3; // default: 3
 
   // If everyone voted, auto-reveal is enabled, and round not yet revealed
   if (allVoted && autoRevealEnabled && !round.isRevealed) {

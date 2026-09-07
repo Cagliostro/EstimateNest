@@ -165,7 +165,7 @@ describe('vote handler - concurrent scenarios', () => {
     // Vote transaction
     mockDynamoDB.send.mockResolvedValueOnce({});
 
-    // Votes queries (first participant)
+    // Votes query (first participant)
     const voteItem1 = {
       id: 'vote-id-1',
       roundId,
@@ -174,11 +174,11 @@ describe('vote handler - concurrent scenarios', () => {
       createdAt: new Date().toISOString(),
     };
 
-    for (let i = 0; i < 5; i++) {
-      mockDynamoDB.send.mockResolvedValueOnce({
-        Items: [voteItem1],
-      });
-    }
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [voteItem1],
+    });
+    // Single voter completes the round: schedule the auto-reveal
+    mockDynamoDB.send.mockResolvedValueOnce({});
 
     // Participants cache (first participant)
     mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
@@ -202,14 +202,6 @@ describe('vote handler - concurrent scenarios', () => {
         id: 'fibonacci',
         values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'],
       },
-    });
-
-    // Room cache for auto-reveal settings (first participant)
-    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
-      id: roomId,
-      autoRevealEnabled: true,
-      autoRevealCountdownSeconds: 3,
-      allowAllParticipantsToReveal: false,
     });
 
     // Execute first vote
@@ -247,7 +239,7 @@ describe('vote handler - concurrent scenarios', () => {
     // Vote transaction (second participant)
     mockDynamoDB.send.mockResolvedValueOnce({});
 
-    // Votes queries (both votes now in same round)
+    // Votes query (both votes now in same round)
     const voteItem2 = {
       id: 'vote-id-2',
       roundId,
@@ -256,11 +248,11 @@ describe('vote handler - concurrent scenarios', () => {
       createdAt: new Date().toISOString(),
     };
 
-    for (let i = 0; i < 5; i++) {
-      mockDynamoDB.send.mockResolvedValueOnce({
-        Items: [voteItem1, voteItem2],
-      });
-    }
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [voteItem1, voteItem2],
+    });
+    // All active voters have voted: schedule the auto-reveal
+    mockDynamoDB.send.mockResolvedValueOnce({});
 
     // Participants cache (second participant)
     mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
@@ -297,14 +289,6 @@ describe('vote handler - concurrent scenarios', () => {
       },
     });
 
-    // Room cache for auto-reveal settings (second participant)
-    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
-      id: roomId,
-      autoRevealEnabled: true,
-      autoRevealCountdownSeconds: 3,
-      allowAllParticipantsToReveal: false,
-    });
-
     // Execute second vote
     const response2 = await handler(mockEvent2 as APIGatewayProxyEvent);
     expect(response2.statusCode).toBe(200);
@@ -330,9 +314,12 @@ describe('vote handler - concurrent scenarios', () => {
       isModerator: false,
       connectionId: connectionId2,
     };
+    // Deck read doubles as the auto-reveal settings source (disabled — matches
+    // the dev-smoke flow, so no scheduling update runs after the votes query)
     const deckRoom = {
       id: conflictRoomId,
       deck: { id: 'fibonacci', values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'] },
+      autoRevealEnabled: false,
     };
     const voteItem = {
       id: 'vote-id-retry',
@@ -362,10 +349,8 @@ describe('vote handler - concurrent scenarios', () => {
       });
       // Vote transaction
       configureTx();
-      // Vote-consistency queries (handler re-queries until count matches)
-      for (let i = 0; i < 5; i++) {
-        mockDynamoDB.send.mockResolvedValueOnce({ Items: [voteItem] });
-      }
+      // Single consistent votes query after the committed transaction
+      mockDynamoDB.send.mockResolvedValueOnce({ Items: [voteItem] });
       // Participants fetch (after transaction) — single active participant
       mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
         {
@@ -377,12 +362,6 @@ describe('vote handler - concurrent scenarios', () => {
           lastSeenAt: new Date().toISOString(),
         },
       ]);
-      // Auto-reveal settings (off — matches the dev-smoke flow)
-      mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
-        id: conflictRoomId,
-        autoRevealEnabled: false,
-        autoRevealCountdownSeconds: 3,
-      });
     }
 
     function transactionCanceledError(reasonCodes: string[]): Error {

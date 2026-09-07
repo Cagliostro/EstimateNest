@@ -147,9 +147,7 @@ describe('vote handler', () => {
     // Mock transaction write
     mockDynamoDB.send.mockResolvedValueOnce({});
 
-    // Mock votes query for broadcast - will be called multiple times due to retry logic
-    // Mock 4 attempts in the loop (MAX_ATTEMPTS) and 1 final attempt
-    // Return a vote item matching the participant
+    // Mock the single consistent votes query for broadcast
     const voteItem = {
       id: 'vote-id-123',
       roundId: 'round-id-123', // dummy, will be ignored
@@ -157,11 +155,11 @@ describe('vote handler', () => {
       value: 5,
       createdAt: new Date().toISOString(),
     };
-    for (let i = 0; i < 5; i++) {
-      mockDynamoDB.send.mockResolvedValueOnce({
-        Items: [voteItem],
-      });
-    }
+    mockDynamoDB.send.mockResolvedValueOnce({
+      Items: [voteItem],
+    });
+    // The single voter completes the round: schedule the auto-reveal
+    mockDynamoDB.send.mockResolvedValueOnce({});
 
     // Mock participants cache (for auto-reveal check)
     mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
@@ -195,14 +193,6 @@ describe('vote handler', () => {
         autoRevealCountdownSeconds: 3,
         maxParticipants: 50,
       };
-    });
-
-    // Mock room cache (for auto-reveal settings check)
-    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
-      id: roomId,
-      autoRevealEnabled: true,
-      autoRevealCountdownSeconds: 3,
-      allowAllParticipantsToReveal: false,
     });
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
@@ -254,14 +244,6 @@ describe('vote handler', () => {
         name: 'Fibonacci',
         values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'],
       },
-    });
-
-    // Mock room cache (for auto-reveal settings check)
-    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
-      id: roomId,
-      autoRevealEnabled: true,
-      autoRevealCountdownSeconds: 3,
-      allowAllParticipantsToReveal: false,
     });
 
     // Mock transaction write throwing ConditionalCheckFailedException
@@ -354,9 +336,11 @@ describe('vote handler', () => {
       ],
     });
     mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
-      // deck validation read
+      // deck validation read; also the auto-reveal settings source (disabled
+      // so no scheduling update runs)
       id: roomId,
       deck: { id: 'fibonacci', name: 'Fibonacci', values: [0, 1, 2, 3, 5, 8, 13, 20, 40, 100, '?', '☕'] },
+      autoRevealEnabled: false,
     });
     mockCacheManager.getActiveRoundWithCache.mockResolvedValueOnce(null); // first claim attempt
 
@@ -387,7 +371,7 @@ describe('vote handler', () => {
 
     mockDynamoDB.send.mockResolvedValueOnce({}); // vote transaction
     mockDynamoDB.send.mockResolvedValueOnce({
-      // votes query for the broadcast (breaks after the first full result)
+      // votes query for the broadcast
       Items: [
         {
           id: 'vote-id-123',
@@ -396,13 +380,6 @@ describe('vote handler', () => {
           value: 5,
         },
       ],
-    });
-    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
-      // auto-reveal settings read (disabled so no scheduling update runs)
-      id: roomId,
-      autoRevealEnabled: false,
-      autoRevealCountdownSeconds: 3,
-      allowAllParticipantsToReveal: false,
     });
     mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([
       {
