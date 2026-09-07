@@ -23,7 +23,7 @@ import {
 } from '@estimatenest/shared';
 import { broadcastToRoom, sendToConnection } from '../utils/broadcast';
 import { getCacheManager } from '../utils/cache';
-import { filterPresent } from '../utils/participants';
+import { filterPresent, findParticipantByConnectionId } from '../utils/participants';
 import { handleModeratorVacancy, ModeratorVacancyResult } from '../utils/moderator';
 import { mapRoundItem, resolveExpiresAt } from '../utils/rounds';
 
@@ -38,38 +38,6 @@ function createErrorResponse(message: string, code?: string): string {
 
 function createSuccessResponse(message: string): string {
   return createResponse('ack', { message });
-}
-
-/**
- * ConnectionIdIndex is eventually consistent: a message sent immediately
- * after $connect can miss the brand-new mapping. A miss here would 500 the
- * message and API Gateway closes the connection, feeding reconnect storms
- * (observed in dev: a join raced a concurrent fan-out that had already seen
- * the fresh mapping). Retry briefly before giving up.
- */
-async function findParticipantByConnectionId(
-  connectionId: string
-): Promise<Participant | undefined> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-    }
-    const queryResult = await docClient.send(
-      new QueryCommand({
-        TableName: PARTICIPANTS_TABLE,
-        IndexName: 'ConnectionIdIndex',
-        KeyConditionExpression: 'connectionId = :cid',
-        ExpressionAttributeValues: {
-          ':cid': connectionId,
-        },
-        Limit: 1,
-      })
-    );
-    if (queryResult.Items?.[0]) {
-      return queryResult.Items[0] as Participant;
-    }
-  }
-  return undefined;
 }
 
 /**
@@ -728,23 +696,10 @@ async function handleReveal(
   message: WebSocketMessage & { type: 'reveal' }
 ) {
   const logger = createLogger();
-  const { connectionId } = event.requestContext;
+  const connectionId = event.requestContext.connectionId!;
   const { roundId } = message.payload;
 
-  // Find participant by connectionId
-  const queryResult = await docClient.send(
-    new QueryCommand({
-      TableName: PARTICIPANTS_TABLE,
-      IndexName: 'ConnectionIdIndex',
-      KeyConditionExpression: 'connectionId = :cid',
-      ExpressionAttributeValues: {
-        ':cid': connectionId,
-      },
-      Limit: 1,
-    })
-  );
-
-  const participant = queryResult.Items?.[0] as Participant | undefined;
+  const participant = await findParticipantByConnectionId(connectionId);
   if (!participant) {
     throw new Error('Participant not found');
   }
@@ -992,23 +947,10 @@ async function handleNewRound(
   message: WebSocketMessage & { type: 'newRound' }
 ) {
   const logger = createLogger();
-  const { connectionId } = event.requestContext;
+  const connectionId = event.requestContext.connectionId!;
   const { title, description } = message.payload;
 
-  // Find participant by connectionId
-  const queryResult = await docClient.send(
-    new QueryCommand({
-      TableName: PARTICIPANTS_TABLE,
-      IndexName: 'ConnectionIdIndex',
-      KeyConditionExpression: 'connectionId = :cid',
-      ExpressionAttributeValues: {
-        ':cid': connectionId,
-      },
-      Limit: 1,
-    })
-  );
-
-  const participant = queryResult.Items?.[0] as Participant | undefined;
+  const participant = await findParticipantByConnectionId(connectionId);
   if (!participant) {
     throw new Error('Participant not found');
   }
@@ -1174,27 +1116,14 @@ async function handleUpdateRound(
   event: APIGatewayProxyEvent,
   message: WebSocketMessage & { type: 'updateRound' }
 ) {
-  const { connectionId } = event.requestContext;
+  const connectionId = event.requestContext.connectionId!;
   const { roundId, title, description } = message.payload;
 
   if (!roundId) {
     throw new Error('Missing roundId');
   }
 
-  // Find participant by connectionId
-  const queryResult = await docClient.send(
-    new QueryCommand({
-      TableName: PARTICIPANTS_TABLE,
-      IndexName: 'ConnectionIdIndex',
-      KeyConditionExpression: 'connectionId = :cid',
-      ExpressionAttributeValues: {
-        ':cid': connectionId,
-      },
-      Limit: 1,
-    })
-  );
-
-  const participant = queryResult.Items?.[0] as Participant | undefined;
+  const participant = await findParticipantByConnectionId(connectionId);
   if (!participant) {
     throw new Error('Participant not found');
   }
