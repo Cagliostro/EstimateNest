@@ -29,7 +29,7 @@
     "destroy:prod": "npm run destroy --workspace=infrastructure -- --context env=prod"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2",
+    "concurrently": "^10.0.5",
     "prettier": "^3.9.6",
     "typescript": "^5.4.5"
   },
