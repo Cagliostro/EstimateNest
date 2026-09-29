@@ -1,8 +1,13 @@
 # Go-Live: EstimateNest
 
-- datum: 2026-09-04 (Backfill-Dokumentation; Live-Betrieb läuft bereits)
-- basis: architektur.md, qa-code-bericht.md (PASS), qa-ui-bericht.md (PASS)
-- stand: prod main `2b2a95c` (2026-09-05) — **Prod-Sync PR #33**: BK-015
+- datum: 2026-09-04 (Backfill-Dokumentation; Live-Betrieb läuft bereits);
+  aktualisiert 2026-09-29 (Runde 1 „betriebs-haertung")
+- basis: architektur.md, umsetzungsbericht.md, qa-code-bericht.md (PASS),
+  qa-ui-bericht.md (PASS)
+- stand: Runde 1 lokal abgeschlossen und reviewt (QA-Code-PASS 2026-09-29,
+  QA-UI-PASS 2026-09-29), **Änderungen uncommitted auf `development`** —
+  Deployment steht noch aus (Push = CI-Deploy dev, nur nach Freigabe).
+  Davor: prod main `2b2a95c` (2026-09-05) — **Prod-Sync PR #33**: BK-015
   (CloudFront-Cache-Fix, `8f4006a`) + BK-016 (Leave-Ghosting-Fix,
   `990a36a`) sind auf prod (CI-Deploy #33976704657 grün, prod-verifiziert);
   davor PR #32 (`5869a6d`): Major-Upgrade-Runde #23–#31 (`fbdad74`) +
@@ -25,6 +30,48 @@ Web-App (React) + Serverless-AWS-Backend, live in zwei Umgebungen:
 
 Deploy vollautomatisch über GitHub Actions: Push auf `development` deployt
 dev, Push auf `main` deployt prod. Keine manuellen Deploy-Schritte.
+
+## Runde 1 „betriebs-haertung" — vorbereiteter Stand (2026-09-29)
+
+Was der nächste dev-Deploy mitbringt (Details: architektur.md §10, ADR-10–16;
+umsetzungsbericht.md):
+
+- **Observability:** WS-Connect-Ablehnungen werden geloggt (400/404/429,
+  ADR-10); API-GW-Access-Logs für REST **und** WS in neuen Log-Gruppen
+  `/aws/apigateway/estimatenest-<env>-rest|-ws` (ADR-13); Log-Retention über
+  9 `LogRetention`-Ressourcen: 8 Handler 30 Tage, `scheduled-auto-reveal`
+  14 Tage (ADR-14, behebt „never expire").
+- **Robustheit:** connectionCount-Drift-Selbstheilung im 429-Pfad (ADR-11),
+  429-Retry im WS-Fan-out (3 Versuche, 100/300 ms + Jitter, kein Cleanup bei
+  429; ADR-12), WS-Stage-Throttling moderat angehoben (Burst 50 / Rate 10),
+  App-Level-Heartbeat `ping`/`pong` alle 5 min gegen den 10-min-Idle-Timeout
+  von API Gateway (ADR-16).
+
+Deploy-Besonderheiten:
+
+- 9 neue `Custom::LogRetention`-Ressourcen — deren erstmalige Erstellung
+  dauert einige Minuten (Lambda-Aufruf hinter CloudFormation); im
+  Workflow-Log sichtbar, kein Eingreifen nötig.
+- Protokollerweiterung `ping`/`pong` ist **additiv** (kein Breaking Change);
+  REST-Stage-Name „prod" bleibt unverändert (BasePathMapping!).
+- Erwartete Downtime: keine.
+
+Verifikation nach dem dev-Deploy (erledigt die deploy-abhängigen AKs aus
+qa-code-Bericht; Kommandos aus Projekt-Konventionen):
+
+1. `npm run test:dev-smoke` → 6/6 grün (REQ-NF-011).
+2. Runde-1-Szenarien auf dev: Sitzung > 10 min ohne Reconnect (AK-22.3);
+   Fan-out unter Last (AK-NF-10.3); Rejoin nach Drift (AK-18.4) — falls der
+   Drift-Pfad nicht natürlich auslösbar ist, bleibt er unit-getestet
+   (Log: „Renormalized drifted connectionCount", AK-18.3).
+3. Log-Checks:
+   - Access-Logs beider APIs vorhanden; im WS-Log prüfen, ob
+     `$context.requestTime` ersetzt wird (Annahme aus umsetzungsbericht.md).
+   - `aws logs describe-log-groups` → Retention 30 Tage (8 Handler),
+     14 Tage (`scheduled-auto-reveal`) (AK-19.2).
+   - Seit dem Deploy `AccessDenied` = 0 in den Lambda-Logs (AK-21.2).
+4. Browser-Konsole auf dev: keine `round-history`-Fehler (BK-022-Prüfpunkt
+   aus qa-ui-Bericht).
 
 ## Deployment DEV (automatisch bei Push auf development)
 
@@ -74,15 +121,24 @@ npm run test:dev-smoke   # gegen deployed dev
 ## Rollback
 
 - **Code:** `git revert` des fehlerhaften Commits auf `development` bzw.
-  `main` → automatischer Deploy der alten Version.
+  `main` → automatischer Deploy der alten Version. Hinweis seit Runde 1:
+  die `LogRetention`-Ressourcen folgen dem Stack-Lebenszyklus; die
+  Log-Gruppen selbst haben DeletionPolicy Retain (CloudFormation löscht sie
+  auch bei Stack-Delete nicht) — nach einem Rollback also prüfen, ob
+  Retention/Access-Logging noch dem gewünschten Stand entsprechen.
 - **Infrastruktur:** CDK-Stack je env (`npm run destroy:dev|prod` nur nach
   Absprache); bei CloudFront-Problemen Invalidierung erneut auslösen
   (`aws cloudfront create-invalidation --paths "/*"`).
 
 ## Betrieb
 
-- **logs:** CloudWatch Log Groups je Lambda-Handler; strukturierte JSON-Logs,
-  PII-redigiert (`backend/src/utils/logger.ts`).
+- **logs:** CloudWatch Log Groups je Lambda-Handler (seit Runde 1 mit
+  Retention 30/14 Tage statt „never expire"); strukturierte JSON-Logs,
+  PII-redigiert (`backend/src/utils/logger.ts`). Zusätzlich API-GW-Access-Logs
+  beider APIs (`/aws/apigateway/estimatenest-<env>-rest|-ws`, 30 Tage) mit
+  requestId/status/Latenz/UserAgent — bei Verbindungsproblemen zuerst dort
+  schauen; abgelehnte WS-Connects erscheinen als Warn-Log
+  („WebSocket connect rejected: …") mit Gründen 400/404/429.
 - **monitoring:** Health-Endpoint (`GET {api}/health`) im Deploy-Workflow
   geprüft. **Bewusste Entscheidung (2026-09-04, BK-008): keine
   CloudWatch-Alarme** — ephemere App ohne SLO-Zwang, der Health-Check im
@@ -128,20 +184,31 @@ npm run test:dev-smoke   # gegen deployed dev
   x-cache „Error" ist das normale Label umgeschriebener
   Fehlerantworten, jetzt nur 10 s gecacht).
 
-## Checkliste vor Go-Live (Backfill-Bestätigung)
+## Checkliste vor Go-Live
+
+Runde 1 „betriebs-haertung" (2026-09-29):
+
+- [x] QA-Code-Bericht PASS (Lint 0, Build grün, 132 Backend- + 36 Frontend-Tests, Traceability vollständig; deploy-abhängige AKs markiert)
+- [x] QA-UI-Bericht PASS (lokale E2E 9/9 grün, goldener Pfad Desktop + Mobile verifiziert; AK-22.3 deploy-abhängig)
+- [x] 2 Pflicht-Review-Runden ohne verbleibende Findings
+- [ ] **Freigabe des Users für den Push auf `development` (CI-Deploy dev)** — dann Verifikation laut Abschnitt „Runde 1" oben
+- [ ] Prod-Sync (PR development → main) erst nach separater expliziter Freigabe, Merge ohne `--delete-branch`
+- [x] Docs im Repo unter `docs/` auf Runde-1-Stand aktualisiert (requirements, architektur, go-live) — Kopie vom 2026-09-29, Commit folgt mit der Freigabe
+
+Backfill-Bestätigung (2026-09-04, weiterhin gültig):
 
 - [x] QA-Code-Bericht PASS (Lint 0, Vitest 144 grün, Traceability vollständig)
 - [x] QA-UI-Bericht PASS (dev-smoke 3/3, lokale Suiten grün, manuelle Regressionstests, 0 Konsolenfehler)
 - [x] prod- und dev-Umgebung live (estimatenest.net, dev.estimatenest.net)
 - [x] CI/CD grün (Deploy-Workflow dev: zuletzt erfolgreich nach PR #18)
-- [x] Docs ins Repo kopiert — **bewusst nicht**: Entscheidung 2026-09-04 (BK-005), das DevProzess-Artefakt-Repo bleibt einzige Quelle (siehe Hinweis unten)
 - [x] Freigabe des Users für den Live-Betrieb liegt vor (Projekt läuft seit Monaten)
 
 ## Hinweis: Artefakte im Repo
 
-**Entschieden (2026-09-04, BK-005):** Die finalen Artefakte werden
-**bewusst nicht** unter `docs/devprozess/` ins Projekt-Repo gespiegelt —
-dieses DevProzess-Artefakt-Repo (`~/WebstormProjects/devprozess/estimatenest/`)
-bleibt die einzige Quelle. Grund: keine Duplikation/Drift zwischen zwei
-Quellen; das Ziel-Repo bleibt auf Code/Config beschränkt (Repo-Hygiene,
-BK-006).
+**Aktueller Stand (seit 2026-09-18, Repo-Commit `fac5d28`, löst BK-005 ab):**
+Die finalen Artefakte liegen zusätzlich unter `docs/` im Projekt-Repo
+(`requirements.md`, `architektur.md`, `go-live.md`); das
+DevProzess-Artefakt-Repo (`~/WebstormProjects/devprozess/estimatenest/`)
+führt die Historie und alle weiteren Berichte. Bei jedem Rundenabschluss
+werden die `docs/`-Kopien auf den aktuellen Stand gebracht (Runde 1:
+Kopie vom 2026-09-29, Commit zusammen mit der Freigabe).

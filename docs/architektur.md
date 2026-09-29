@@ -6,6 +6,7 @@
 > bereits abgeschlossen und live (dev + prod).
 
 - datum: 2026-09-04
+- aktualisiert: 2026-09-29 (Runde 1 „betriebs-haertung" — §10)
 - basis: requirements.md
 
 ## 1. Kontext & Ziele
@@ -254,3 +255,291 @@ rekonstruiert:
 - **Kaltstarts:** erste WS-Nachricht kann verzögert sein — akzeptiert
   (Issue #12 am 2026-09-05 nach Triage als akzeptierte Grenze geschlossen;
   Warmup/Provisioned Concurrency würde dem Kosten-ADR widersprechen).
+
+## 10. Runde 1 „betriebs-haertung" (2026-09-29)
+
+Bestands-Runde auf unverändertem Stack (keine neue Nutzerfunktion, keine
+UI-Änderung). Quelle: AWS-Log-Analyse vom 29.09.2026
+(`/tmp/enlogs3/EstimateNest-Loganalyse-2026-09-29.md`, April–September,
+~220k Events); Anforderungen: `requirements.md` Runde 1 (REQ-F-017–023,
+REQ-NF-010–012). Umsetzung als Feature-Runde nach den bestehenden
+GitHub-Actions-Deployregeln (dev automatisch nach Freigabe, prod nur mit
+separater Freigabe).
+
+### 10.1 Ausgangslage (belegte Befunde)
+
+- **Stumme WS-Connect-Ablehnungen:** 23.09.: 558 Verbindungsversuche,
+  38 erfolgreich, 520 abgelehnt (93 %) — 400/404/429 kehren aus
+  `websocket-connect.ts` zurück, **bevor** irgendein Log geschrieben wird.
+- **connectionCount-Drift:** 09-23-Welle deutet auf gedrifteten Zähler
+  (BK-018-Altlast: tote Mappings ohne Count-Decrement); BK-018 heilt nur
+  neue Vorfälle. Zusätzlich: jeder Reconnect führt das bedingte
+  Count-ADD erneut aus (keine Reconnect-Erkennung in
+  `websocket-connect.ts` Z.72–84) — Drift wächst also auch durch
+  Idle-Closes (Befund 10.2/ADR-16).
+- **Fan-out unter Last:** 09.09. bei 155 Verbindungen 82×
+  TooManyRequestsException (WS-Stage Burst 20/Rate 5,
+  `estimateneest-stack.ts` Z.276–281) und **10 endgültige
+  Sendeverluste**; `ws-fanout.ts` behandelt 429 weder mit Retry noch
+  als eigenen Fall, `sendToConnection` (`broadcast.ts` Z.110–111)
+  retryt nur 410.
+- **Beobachtungslücke:** keine API-GW-Access-Logs (REST und WS, deployed
+  `AccessLogSettings: null`, `LoggingLevel: OFF`); REST-4xx-Bot-Traffic
+  (bis ~1.000/Tag) erzeugt keine Lambda-Invocation und ist nirgends
+  sichtbar.
+- **Log-Bestand:** 19 Lambda-Log-Gruppen, alle `retention = None`
+  (291,8 MB; davon 271,8 MB minütlich beschriebene scheduled-Gruppen).
+- **Reconnect-Zyklen:** erfolgreiche Verbindungen im exakten
+  10-Minuten-Takt; 09.10.–09.16. 87–91 % der Verbindungen mit aufgelöster
+  Moderator-Vakanz (`moderator-present`) — Ursache siehe ADR-16.
+- **dev-AccessDenied 02.09.:** einmaliger `AccessDeniedException` im
+  Stale-Cleanup des Vote-Handlers — Ursache identifiziert, siehe ADR-15
+  (kein Handlungsbedarf am Grant).
+- **Dependabot (REQ-F-023, Sichtung):** beide roten PRs belegt —
+  #39 tailwindcss 4 (PostCSS-Plugin ausgelagert → Major-Migration),
+  #36 typescript 7 (typescript-eslint-Peer `<6.1.0`); Empfehlung:
+  zurückstellen bzw. eigene Major-Runde. Kein Architekturbezug.
+
+### 10.2 Entscheidungen (ADR-10 … ADR-16)
+
+#### ADR-10: Rejection-Logging im WS-Connect (REQ-F-017)
+
+- **Kontext:** Die drei Ablehnungspfade (`websocket-connect.ts` Z.36–47
+  Zod-400, Z.59–67 404, Z.85–98 429) waren die einzigen stummen Pfade der
+  WS-Kette; die 93-%-Welle vom 23.09. war nur als Metrik sichtbar.
+- **Entscheidung:** Genau ein `logger.warn` je Rejection mit den
+  verfügbaren, nicht geratenen Attributen (AK-17.3): 400 →
+  `connectionId` + rohe `rawRoomId`/`rawParticipantId` + Fehlerpfade der
+  Zod-Validierung (keine Payload-Dumps); 404 → `roomId`, `participantId`,
+  `connectionId`; 429 → zusätzlich `connectionCount` (gemessener Ist-Wert
+  aus ADR-11) und `maxParticipants`. Warn-Level (erwartbare Client-Fehler,
+  keine Server-Fehler); bestehender PII-redigierter Logger.
+- **Begründung/Einfachheit:** Kein neues Log-Format, keine Metriken —
+  die vorhandene Logger-Infrastruktur reicht; die Selbstheilung (ADR-11)
+  liefert dem 429-Log den Ist-Zähler ohne Zusatz-Call.
+- **Konsequenzen:** +1 Log je Rejection (Volumen über Retention
+  gedeckelt, ADR-14). Retry-Wellen aus Clients werden künftig direkt
+  sichtbar.
+
+#### ADR-11: connectionCount-Selbstheilung im Connect (REQ-F-018)
+
+- **Kontext:** Ein gedrifteter Zähler blockiert Joins bis zum Room-TTL
+  (14 Tage) mit 429; ein Reparatur-Skript ist Nicht-Ziel (ephemere Räume,
+  Interview-Entscheid).
+- **Entscheidung:** Nur im 429-Pfad des Connects (kein Background-Job):
+  Schlägt das bedingte Count-ADD (Z.72–84) mit
+  `ConditionalCheckFailedException` fehl, dann (1) konsistentes Query auf
+  `ParticipantsTable` (`roomId`, `ConsistentRead: true`) → Ist-Zahl =
+  Items mit gesetztem `connectionId`; (2) `UpdateItem` auf das
+  Raum-META: `SET connectionCount = :measured` — nur wenn
+  `measured < maxParticipants`, sonst direkt 429; (3) das bedingte ADD
+  genau einmal wiederholen; bei erneutem CCF → 429 + Warn-Log.
+  Korrektur wird geloggt (Raum, alt→neu, Anlass, AK-18.3).
+- **Begründung:** Messung + Heilung + Join in einem Request (AK-18.1);
+  `SET` auf den gemessenen Wert erzeugt nie negative Zähler (AK-18.2);
+  die Bedingung des ADDs bleibt als Race-Schutz bestehen (ein
+  gleichzeitiger legitimer Connect kann den Zähler nur um sein eigenes
+  +1 verschieben — ±1-Fenster bewusst akzeptiert und bei ephemeren Räumen
+  unkritisch). Konsistenter Read statt Cache (`cache.ts` TTL 3 s,
+  eventual — für eine Renormierung ungeeignet).
+- **Konsequenzen:** +1 Query +1 Update ausschließlich im (seltenen)
+  429-Fall — kein Kostenrisiko im Normalfall. Reconnect-Schwäche des
+  Count-ADD (jeder Reconnect zählt +1) wird durch die Heilung entschärft,
+  die eigentliche Reconnect-Ursache behebt ADR-16.
+
+#### ADR-12: Fan-out-Härtung + moderate Stage-Limits (REQ-NF-010)
+
+- **Kontext:** 82× 429 / 10 Endverluste am 09.09.; Ursache war das
+  Zusammenspiel aus allSettled-parallelem Fan-out (bis 50 Empfänger) und
+  Burst 20/Rate 5.
+- **Entscheidung:** (1) Stage-Limits moderat anheben: Burst 20 → **50**,
+  Rate 5 → **10** (`estimateneest-stack.ts` Z.276–281) — Burst deckt
+  einen vollen Raum-Fan-out (maxParticipants = 50) in einem Schub ab;
+  (2) `ws-fanout.ts`: 429 erhält bis zu 3 Gesamtversuche mit kurzem
+  Backoff (100/300 ms + Jitter); nach Erschöpfung Warn-Log „Failed to send
+  to connection", **kein** Cleanup/Count-Decrement (429 heißt „zu
+  schnell", nicht „weg" — Abgrenzung zu 410/403); (3) `sendToConnection`
+  (`broadcast.ts`): 429 in die bestehende Retry-Familie aufnehmen
+  (maxRetries 3, Backoff `100·2^(n-1)`; nach Erschöpfung `throw` wie
+  bisher, Aufrufer loggt bereits).
+- **Bewusst nicht:** Nachrichten-Bündelung (Mehrfach-Payloads wären eine
+  Protokolländerung ohne belegten Bedarf) und Retry-Unendlich (Lambda-
+  Laufzeitbudget). REST-Throttling/UsagePlan bleiben unverändert
+  (Nicht-Ziel).
+- **Rest-Risiko:** Bei anhaltender Drosselung über das Retry-Budget
+  hinaus ist weiterhin ein Endverlust möglich — das Warn-Log macht ihn
+  sichtbar; Verifikation unter Last gegen dev (AK-NF-10.3).
+
+#### ADR-13: API-GW-Access-Logging für REST und WS (REQ-F-020)
+
+- **Kontext:** Keine Access-Logs; die 4xx-/5xx-Lücke (Bot-Traffic ohne
+  Lambda-Invocation) war der Kern der Beobachtungslücke (Bericht §3).
+- **Entscheidung:** Je Umgebung zwei Log-Gruppen
+  (`/aws/apigateway/estimatenest-<env>-rest` bzw. `-ws`) als
+  `logs.LogGroup` mit 30 Tagen Retention; REST über
+  `restApi`-`deployOptions` (`accessLogDestination`/`accessLogFormat`
+  als Custom-JSON mit den Feldern
+  requestId/sourceIp/status/latency/path/userAgent —
+  `jsonWithStandardFields` liefert weder userAgent noch Latenz, beides
+  ist für die Bot-Erkennung (AK-20.3) nötig);
+  WS über den bereits vorhandenen CfnStage-Override (Z.276–281) um
+  `accessLogSettings` (JSON: requestId, requestTime, status, routeKey,
+  sourceIp, userAgent) ergänzt — eine Antwort-Latenz gibt es bei
+  WebSocket-APIs nicht, `$context.requestTime` liefert den Zeitpunkt.
+  Der REST-Stage-Name bleibt unverändert
+  (CDK-Default „prod" auch in dev): eine Umbenennung würde das
+  Custom-Domain-BasePathMapping berühren — bewusst nicht in dieser Runde.
+- **Begründung:** Schließt die Lücke ohne App-Änderung; JSON-Format ist
+  strukturiert auswertbar; Nutzung vorhandener Override-Stellen hält den
+  Diff klein.
+- **Konsequenzen:** Log-Volumen wenige MB/Monat (10.3). Deploy-
+  Voraussetzung: Account-Einstellung `cloudwatchRoleArn` für die REST-
+  API vorhanden (Prüfschritt 10.4/10.5).
+
+#### ADR-14: Log-Retention per CDK für alle Gruppen (REQ-F-019)
+
+- **Kontext:** 19 Bestandsgruppen ohne Retention; statische
+  `logs.LogGroup`-Konstrukte mit gleichem Namen würden beim Deploy an
+  `ResourceAlreadyExists` scheitern (Gruppen existieren real, Namen sind
+  CFN-autogeneriert).
+- **Entscheidung:** `logs.LogRetention` je Handler-Log-Gruppe
+  (`logGroupName: /aws/lambda/<functionName>` — die Gruppe liegt unter
+  dem Lambda-Präfix, nicht am reinen Funktionsnamen; Token-fähig, nur
+  CR-Property) mit **30 Tagen** Standard, **14 Tagen** für die beiden
+  Scheduled-Auto-Reveal-Gruppen (je Umgebung, Interview-Entscheid);
+  die neuen Access-Log-Gruppen (ADR-13) direkt mit 30 Tagen. Der CR
+  wirkt auch auf die bereits existierenden Gruppen.
+- **Begründung:** Der LogRetention-CR ist der einzige kollisionssichere
+  Weg für bestehende Gruppen (CDK nutzt denselben Mechanismus intern).
+  30 Tage = Diagnosehorizont der Runde (Monatsvergleich); die
+  minütlichen Scheduled-Gruppen (271,8 MB) sind der größte Hebel der
+  CloudWatch-Kostenposition.
+- **Konsequenzen:** Logs älter als die Retention werden gelöscht
+  (bewusst; der Analyse-Bestand liegt extern gesichert vor). Erster
+  Deploy legt die Retention über ~20 CR-Operationen an (idempotent).
+
+#### ADR-15: IAM-Befund zum dev-Cleanup-AccessDenied (REQ-F-021)
+
+- **Kontext:** Bericht-Empfehlung 7 vermutete eine fehlende
+  **Delete**-Berechtigung im Vote-Handler. Die vollständige Log-Recherche
+  dieser Runde (alle AccessDenied-Messages aus den Roh-Pulls) zeigt:
+  Der einzige September-Fall (02.09., dev) war
+  `dynamodb:UpdateItem` auf **RoomsTable** („Failed to clean up stale
+  connection" = der Rooms-Count-Decrement des Fan-out-Cleanups); die
+  April-Fälle (Participants-UpdateItem, Rounds-GSI-Query, Rounds-
+  DeleteItem) stammen aus der Zeit vor der IAM-Vervollständigung
+  (Architektur-Review P0–P2, `e325cb0`…`6af3c11`).
+- **Entscheidung:** **Keine Grant-Änderung.** Der fehlende Grant
+  (`dynamodb:UpdateItem` auf RoomsTable) ist in der Quelle bereits
+  vorhanden (Z.526–533, Kommentar nennt exakt „connectionCount balance
+  in broadcast cleanup"), deployte dev- **und** prod-Rolle deckungsgleich;
+  seither keine AccessDenieds mehr (September-Welle bis 23.09. sauber).
+  Zusätzlich Aktions-Bestandsaufnahme des heutigen Vote-Pfads gegen die
+  Grants: alle genutzten Aktionen gedeckt (Rounds: Get/Query/Put/Update/
+  Delete/Transact; Participants: Query + GSI/Update/Transact; Rooms:
+  Get/Update/Transact; Votes: Query/Transact; RateLimit: Query/Put) —
+  0 ungedeckte Aktionen. Least Privilege bleibt erhalten (keine Grants
+  „auf Vorrat"). Verifikation: Nach dem dev-Deploy läuft der Cleanup-Pfad
+  real im dev-smoke/Rejection-Szenario; danach Log-Check
+  „AccessDenied = 0" (10.4, Schritt 5).
+- **Konsequenzen:** REQ-F-021 wird ohne CDK-Änderung erfüllt; der
+  Berichtswortlaut („Delete ergänzen") ist damit belegt korrigiert.
+
+#### ADR-16: App-Level-Heartbeat gegen den 10-Minuten-Idle-Close (REQ-F-022)
+
+- **Kontext:** WS-Verbindungen enden exakt im 10-Minuten-Takt. Recherche
+  (generisch, ohne Projektinhalte): Der API-GW-WebSocket-Idle-Timeout
+  (10 min) ist **nicht konfigurierbar**; Protokoll-Ping-Frames setzen ihn
+  **nicht** zurück — nur App-Level-Nachrichten. Der Client
+  (`websocket-client.ts`) hat keinerlei Keepalive; nach jedem Close
+  reconnectet er (~1 s, Backoff 1,5^n bis ~5 s, Z.269) und sendet
+  `join` — der Server nimmt ihn auf, was den Moderator-Vakanz-Pfad
+  („rejoin nach Grace" → `moderator-present`) und unnötige
+  Join-/Broadcast-Last erklärt: die 87–91-%-Vakanz-Rate der Welle.
+- **Entscheidung:** Leichtgewichtiger **App-Level-Heartbeat**:
+  neue Message-Typen `ping` (Client→Server) und `pong` (Server→Client)
+  in `packages/shared/src/schemas.ts` (Zod, wie alle Typen); der Client
+  sendet bei offener Verbindung **alle 5 Minuten** `ping` (halb so lang
+  wie der 10-min-Timeout = Puffer); der Server beantwortet mit `pong`
+  über `sendToConnection` an die eigene Verbindung (kein Broadcast,
+  keine Store-Änderung); der Client ignoriert `pong`. Interval startet
+  bei `open`, stoppt bei `close`/`disconnect`. Der Ping läuft durch das
+  bestehende Rate-Limit (1 pro 5 min ≪ 20/s pro Connection+Typ).
+  `local-server.ts` spiegelt ping/pong (CLAUDE.md-Gotcha:
+  WS-Verhalten synchron halten). Bewusst nicht: Backoff-Umbau
+  (1-s-Reconnect ist ohne Idle-Close unkritisch) und Server-seitiger
+  Scheduled-Ping (Kosten/Aufwand schlechter als Client-Heartbeat).
+- **Konsequenzen:** Der einzige nicht-protokollneutrale Punkt der Runde
+  (neuer Typ; Annahme in requirements.md deckt genau diese Ausnahme).
+  Bestehende Clients ohne `ping` funktionieren unverändert (kein
+  Serverfehler, sie behalten nur ihr 10-min-Verhalten bis zum nächsten
+  Reload); neue Clients senden `ping` erst nach Frontend-Deploy. Kein
+  Moderator-Vakanz-Zyklus mehr durch Idle-Closes; Heartbeat-Kosten
+  siehe 10.3.
+
+### 10.3 Kostenschätzung der Runde (zusätzlich zu §7)
+
+Beobachtetes Nutzungsprofil (Sep-Welle: ~13k WS-Messages/Monat Spitze);
+Preisgrößenordnungen AWS eu-central-1, Stand 2026-09.
+
+| Position | Annahme | Zusatz USD/Monat |
+|---|---|---|
+| Access-Logs REST+WS | ~1k 4xx/Tag REST + ~6k WS-Stage-Events/Monat ≈ 35–40 MB Ingest (0,50/GB) + 30 d Speicher | ~0,02–0,05 |
+| Heartbeat (ping/pong) | 5-min-Intervall, ≤ 20 Nutzungsstunden/Monat × ≤ 50 Verbindungen ≈ ≤ 100k Messages; WS-Message 1,00/Mio + Lambda-Invocations | ~0,05–0,15 |
+| Lambda-Selbstheilung/Retries | nur im 429-Fall; Volumen unbedeutend | < 0,01 |
+| IAM/Throttling | keine neuen Kosten | 0 |
+| Retention (ADR-14) | **Senkung** der CloudWatch-Speicherkosten (271,8 MB Scheduled-Logs ohne Ablauf) | negativ im Zeitverlauf |
+| **Summe** | deutlich unter REQ-NF-012 (< 1 USD/Monat) | **< 0,25** |
+
+Unsicherheiten: Access-Log-Volumen schwankt mit Bot-Traffic (bis
+Faktor 2); exakte Cent-Beträge nach dem ersten vollen Monat messbar.
+Quellen: aws.amazon.com/cloudwatch/pricing, aws.amazon.com/api-gateway/pricing
+(Größenordnungen, keine Tiefenrecherche — Beträge sind weit unter jeder
+Relevanzschwelle). Bestehendes Kostenversprechen (§7, ~5–10 €/Monat)
+bleibt eingehalten.
+
+### 10.4 Umsetzungsplan
+
+1. **Shared:** `ping`/`pong`-Typen + Zod-Schemas (Grundlage für Backend,
+   Frontend, local-server).
+2. **Backend:** `websocket-connect.ts` — Rejection-Logging (ADR-10) +
+   Selbstheilung (ADR-11); `ws-fanout.ts`/`broadcast.ts` — 429-Retry
+   (ADR-12); `vote.ts` — `ping`-Case (pong-Antwort);
+   `local-server.ts` — ping/pong-Spiegel. Tests: Rejection-Logs,
+   429-Selbstheilung (gemessen >/< max), Fan-out-429-Retry.
+3. **Frontend:** `websocket-client.ts` — Heartbeat-Interval (5 min,
+   open/close-gebunden), pong-Handler; Tests.
+4. **Infrastruktur:** Throttling 50/10 (ADR-12); Access-Log-Gruppen +
+   Formate (ADR-13); LogRetention-Loop 30/14 Tage (ADR-14). `synth`
+   validiert ohne Deploy.
+5. **Verifikation (nach dev-Freigabe):** Gates (typecheck/lint/build/
+   Vitest) → Push development → CI-Deploy dev → `test:dev-smoke` 6/6 +
+   Runde-1-Szenarien (Drift/429-Pfad, fortlaufende Sitzung > 10 min ohne
+   Reconnect, Fan-out unter Last) → Log-Checks: Access-Logs vorhanden,
+   Retention aktiv (`describe-log-groups`), „AccessDenied = 0" (ADR-15).
+6. **Dokumentation:** requirements-backlog/status, umsetzungsbericht;
+   Pflege-Hinweis zu Dependabot-PRs #36/#39 (BK-010-Rhythmus).
+
+Reihenfolge je Commit lauffähig; `docs/`-Spiegelung erst im Abschluss
+(laut /anleitung).
+
+### 10.5 Risiken
+
+- **REST-Access-Logging benötigt Account-Einstellung**
+  (`cloudwatchRoleArn`, API-GW-weit): Deploy-Vorprüfung
+  `aws apigateway get-account`; falls leer, einmalig `CfnAccount` mit
+  `AmazonAPIGatewayPushToCloudWatchLogs` ergänzen (kleinster Eingriff).
+  WS-Access-Logs sind davon nicht betroffen.
+- **LogRetention-CR-Dauer** beim ersten Deploy (~20 Gruppen,
+  seriell) — einmalig, idempotent, kein Datenverlust.
+- **Selbstheilungs-Race:** parallele Connects um den Renormierungs-
+  Zeitpunkt können den Zähler um ±1 verschieben — bewusst akzeptiert
+  (Bedingung des ADDs bleibt; ephemer). 
+- **Fan-out-Rest-Risiko:** anhaltende Drosselung über das Retry-Budget
+  hinaus → Endverlust bleibt möglich, aber geloggt (ADR-12).
+- **Protokoll-Erweiterung ping/pong:** erfordert Shared-Build vor
+  Backend/Frontend (bekannte Build-Reihenfolge, ADR-4); alte Clients
+  bleiben kompatibel (kein Fehler ohne ping).
+- **Stage-Name REST bleibt „prod" in beiden Umgebungen** — bewusst
+  (Umbenennung würde das BasePathMapping der Custom Domain berühren);
+  als bekannte kosmetische Abweichung dokumentiert.
