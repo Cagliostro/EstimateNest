@@ -140,7 +140,7 @@ export class WebSocketService {
   send(message: WebSocketMessage): void {
     this.log(
       `send called - type: ${message.type}, payload:`,
-      JSON.stringify(message.payload, null, 2)
+      JSON.stringify('payload' in message ? message.payload : undefined, null, 2)
     );
     if (!this.client || this.state !== 'connected') {
       throw new Error('WebSocket is not connected');

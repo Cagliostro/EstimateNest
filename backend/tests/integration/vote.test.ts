@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { handler } from '../../src/handlers/vote.js';
 import { APIGatewayProxyEvent } from 'aws-lambda';
-import { broadcastToRoom } from '../../src/utils/broadcast';
+import { broadcastToRoom, sendToConnection } from '../../src/utils/broadcast';
 
 // Create mock DynamoDB client at module level using vi.hoisted to ensure it's available
 const { mockDynamoDB, mockCacheManager } = vi.hoisted(() => {
@@ -1237,5 +1237,29 @@ describe('vote handler', () => {
         payload: { round: expect.any(Object), votes: expect.any(Array) },
       })
     );
+  });
+
+  it('answers a ping with pong on the same connection (ADR-16)', async () => {
+    // Rate limit: count query + record put
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 0 });
+    mockDynamoDB.send.mockResolvedValueOnce({});
+
+    const pingEvent = {
+      ...mockEvent,
+      body: JSON.stringify({ type: 'ping' }),
+    } as APIGatewayProxyEvent;
+
+    const response = await handler(pingEvent);
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.type).toBe('ack');
+    expect(body.payload.message).toBe('pong');
+    // Answered on the pinging connection — never a room broadcast, no state.
+    expect(sendToConnection).toHaveBeenCalledTimes(1);
+    expect(sendToConnection).toHaveBeenCalledWith(expect.anything(), 'test-connection-id', {
+      type: 'pong',
+    });
+    expect(broadcastToRoom).not.toHaveBeenCalled();
   });
 });

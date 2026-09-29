@@ -117,6 +117,10 @@ export function useRoomConnection() {
         useConnectionStore.getState().setError(message.payload.message);
         break;
 
+      case 'pong':
+        // Heartbeat answer (ADR-16) — nothing to update.
+        break;
+
       case 'ack':
         console.log(`[EstimateNest] [${currentHookId}] Acknowledgment received:`, message.payload);
         // Reset vote sending flag if we were sending a vote

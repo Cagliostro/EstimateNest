@@ -397,6 +397,60 @@ describe('broadcast utility', () => {
       expect(mockCacheManager.invalidateParticipants).not.toHaveBeenCalled();
     });
 
+    it('should retry a throttled (429) fan-out send without cleaning up', async () => {
+      const participants = [
+        {
+          id: 'p1',
+          roomId,
+          participantId: 'part1',
+          connectionId: 'conn1',
+          name: 'Alice',
+          avatarSeed: 'seed1',
+          joinedAt: '2025-01-01T00:00:00Z',
+          lastSeenAt: '2025-01-01T00:00:00Z',
+          isModerator: false,
+        },
+      ];
+      mockCacheManager.getParticipantsWithCache.mockResolvedValue(participants);
+
+      const throttledError = { $metadata: { httpStatusCode: 429 } };
+      mockSend.mockRejectedValueOnce(throttledError).mockResolvedValue({});
+
+      await broadcastToRoom(mockEvent, roomId, message);
+
+      // The throttled send was retried and succeeded; 429 is not a stale
+      // connection — no mapping cleanup, no count balance.
+      expect(mockSend).toHaveBeenCalledTimes(2);
+      expect(mockDocClientSend).not.toHaveBeenCalled();
+      expect(mockCacheManager.invalidateParticipants).not.toHaveBeenCalled();
+    });
+
+    it('should give up on a persistent 429 without cleaning up', async () => {
+      const participants = [
+        {
+          id: 'p1',
+          roomId,
+          participantId: 'part1',
+          connectionId: 'conn1',
+          name: 'Alice',
+          avatarSeed: 'seed1',
+          joinedAt: '2025-01-01T00:00:00Z',
+          lastSeenAt: '2025-01-01T00:00:00Z',
+          isModerator: false,
+        },
+      ];
+      mockCacheManager.getParticipantsWithCache.mockResolvedValue(participants);
+
+      const throttledError = { $metadata: { httpStatusCode: 429 } };
+      mockSend.mockRejectedValue(throttledError); // All attempts throttled
+
+      await broadcastToRoom(mockEvent, roomId, message);
+
+      expect(mockSend).toHaveBeenCalledTimes(3); // 1 attempt + 2 retries
+      expect(mockDocClientSend).not.toHaveBeenCalled();
+      expect(mockCacheManager.invalidateParticipants).not.toHaveBeenCalled();
+    });
+
     it('should handle cleanup failure gracefully', async () => {
       const participants = [
         {
@@ -440,6 +494,20 @@ describe('broadcast utility', () => {
       const goneError = { $metadata: { httpStatusCode: 410 } };
       mockSend
         .mockRejectedValueOnce(goneError) // First attempt fails
+        .mockResolvedValueOnce({}); // Second succeeds
+
+      await sendToConnection(mockEvent, connectionId, message);
+
+      expect(mockSend).toHaveBeenCalledTimes(2);
+    });
+
+    it('should retry on 429 error (stage throttling)', async () => {
+      const connectionId = 'test-conn';
+      const message: WebSocketMessage = { type: 'ack', payload: { message: 'Success' } };
+
+      const throttledError = { $metadata: { httpStatusCode: 429 } };
+      mockSend
+        .mockRejectedValueOnce(throttledError) // First attempt throttled
         .mockResolvedValueOnce({}); // Second succeeds
 
       await sendToConnection(mockEvent, connectionId, message);

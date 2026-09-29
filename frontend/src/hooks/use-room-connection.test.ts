@@ -386,4 +386,20 @@ describe('useRoomConnection', () => {
     expect(mockStores.roomStoreState.revealVotes).not.toHaveBeenCalled();
     expect(mockStores.roomStoreState.stopCountdown).not.toHaveBeenCalled();
   });
+
+  it('ignores a pong heartbeat answer without touching any store (ADR-16)', () => {
+    renderHook(() => useRoomConnection());
+
+    const mockServiceInstance = mockWebSocketService.getInstance();
+    const handler = (mockServiceInstance as any).addMessageHandler.mock.calls[0][0]; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    act(() => {
+      handler({ type: 'pong' });
+    });
+
+    // Pong only proves liveness: no error state, no round/vote handling.
+    expect(mockStores.connectionStoreState.setError).not.toHaveBeenCalled();
+    expect(mockStores.roomStoreState.setCurrentRound).not.toHaveBeenCalled();
+    expect(mockStores.roomStoreState.setVotes).not.toHaveBeenCalled();
+  });
 });

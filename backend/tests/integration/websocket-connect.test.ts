@@ -3,7 +3,7 @@ import { handler } from '../../src/handlers/websocket-connect.js';
 import { APIGatewayProxyEvent } from 'aws-lambda';
 
 // Create mock DynamoDB client at module level using vi.hoisted to ensure it's available
-const { mockDynamoDB, mockCacheManager } = vi.hoisted(() => {
+const { mockDynamoDB, mockCacheManager, mockQueryCommand, mockUpdateCommand } = vi.hoisted(() => {
   return {
     mockDynamoDB: {
       send: vi.fn(),
@@ -13,6 +13,8 @@ const { mockDynamoDB, mockCacheManager } = vi.hoisted(() => {
       getParticipantsWithCache: vi.fn(),
       invalidateParticipants: vi.fn(),
     },
+    mockQueryCommand: vi.fn(),
+    mockUpdateCommand: vi.fn(),
   };
 });
 
@@ -23,9 +25,23 @@ vi.mock('@aws-sdk/lib-dynamodb', () => ({
   DynamoDBDocumentClient: {
     from: vi.fn(() => mockDynamoDB),
   },
-  QueryCommand: vi.fn(),
+  // Real classes record construction so the tests can assert on the built
+  // command inputs; mockDynamoDB.send stays the stubbed transport.
+  QueryCommand: class {
+    input: Record<string, unknown>;
+    constructor(params: Record<string, unknown>) {
+      mockQueryCommand(params);
+      this.input = params;
+    }
+  },
   GetCommand: vi.fn(),
-  UpdateCommand: vi.fn(),
+  UpdateCommand: class {
+    input: Record<string, unknown>;
+    constructor(params: Record<string, unknown>) {
+      mockUpdateCommand(params);
+      this.input = params;
+    }
+  },
   TransactWriteCommand: vi.fn(function (this: { input: unknown }, input: unknown) {
     this.input = input;
   }),
@@ -139,10 +155,12 @@ describe('websocket-connect handler', () => {
       maxParticipants: 100,
     });
 
-    // Mock connection limit check (UpdateCommand with ConditionExpression) - over limit
+    // Guarded increment fails (ConditionalCheckFailedException) - over limit
     const conditionalError = new Error('Conditional check failed');
     (conditionalError as Error & { name: string }).name = 'ConditionalCheckFailedException';
     mockDynamoDB.send.mockRejectedValueOnce(conditionalError);
+    // Measurement confirms the limit is real (ADR-11): no renormalization.
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 100 });
 
     const response = await handler(mockEvent as APIGatewayProxyEvent);
     console.log('Response:', response.statusCode, response.body);
@@ -151,6 +169,8 @@ describe('websocket-connect handler', () => {
     const body = JSON.parse(response.body);
     expect(body.type).toBe('error');
     expect(body.payload.error).toBe('Connection limit exceeded (max 100 connections per room)');
+    // Increment attempt + measurement only — no renormalize, no retry.
+    expect(mockDynamoDB.send).toHaveBeenCalledTimes(2);
   });
 
   it('should return 400 for invalid roomId format', async () => {
@@ -328,5 +348,147 @@ describe('websocket-connect handler', () => {
     const body = JSON.parse(response.body);
     expect(body.type).toBe('error');
     expect(body.payload.error).toBe('Internal server error');
+  });
+
+  it('logs the rejection with the raw query values on invalid params (ADR-10)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockEvent.queryStringParameters = {
+      roomId: 'invalid-room-id',
+      participantId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    };
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(400);
+    const logCall = warnSpy.mock.calls.find((call) =>
+      String(call[0]).includes('WebSocket connect rejected: invalid params')
+    );
+    expect(logCall).toBeDefined();
+    expect(JSON.parse(String(logCall![0]))).toMatchObject({
+      connectionId: 'test-connection-id',
+      roomId: 'invalid-room-id',
+      participantId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    });
+    warnSpy.mockRestore();
+  });
+
+  it('logs the rejection when the room is missing (ADR-10)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockCacheManager.getRoomWithCache.mockResolvedValueOnce(null);
+
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(404);
+    const logCall = warnSpy.mock.calls.find((call) =>
+      String(call[0]).includes('WebSocket connect rejected: room not found')
+    );
+    expect(logCall).toBeDefined();
+    expect(JSON.parse(String(logCall![0]))).toMatchObject({
+      connectionId: 'test-connection-id',
+      roomId: '11111111-2222-4333-8444-555555555555',
+      participantId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    });
+    warnSpy.mockRestore();
+  });
+
+  it('renormalizes a drifted connectionCount and retries the increment (ADR-11)', async () => {
+    const roomId = '11111111-2222-4333-8444-555555555555';
+    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({ id: roomId, maxParticipants: 100 });
+
+    // 1) Guarded increment fails: the drifted counter reads as full. The
+    //    condition failure carries the old room item (raw, not unmarshalled).
+    const ccf = new Error('Conditional check failed');
+    ccf.name = 'ConditionalCheckFailedException';
+    (ccf as unknown as { Item: unknown }).Item = { connectionCount: { N: '100' } };
+    mockDynamoDB.send.mockRejectedValueOnce(ccf);
+    // 2) Measurement: only two live WebSocket mappings remain.
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 2 });
+    // 3) Renormalize (SET), 4) retried increment, 5) participant update,
+    // 6) moderator vacancy read.
+    mockDynamoDB.send.mockResolvedValueOnce({});
+    mockDynamoDB.send.mockResolvedValueOnce({});
+    mockDynamoDB.send.mockResolvedValueOnce({});
+    mockDynamoDB.send.mockResolvedValueOnce({ Item: {} });
+    mockCacheManager.getParticipantsWithCache.mockResolvedValueOnce([]);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(200);
+    // The drift log shows old -> new counter value (ADR-11 / AK-18.3).
+    const driftLog = warnSpy.mock.calls.find((call) =>
+      String(call[0]).includes('Renormalized drifted connectionCount')
+    );
+    expect(driftLog).toBeDefined();
+    expect(JSON.parse(String(driftLog![0]))).toMatchObject({
+      previousConnectionCount: 100,
+      connectionCount: 2,
+    });
+    warnSpy.mockRestore();
+    // The measurement is a consistent query counting only real mappings.
+    const queryCall = mockQueryCommand.mock.calls.find(
+      (call) => (call[0] as { ConsistentRead?: boolean }).ConsistentRead === true
+    );
+    expect(queryCall).toBeDefined();
+    expect(queryCall![0]).toMatchObject({
+      KeyConditionExpression: 'roomId = :roomId',
+      FilterExpression: 'connectionId <> :rest',
+      ConsistentRead: true,
+    });
+    // The guarded increment asks for the pre-increment item so the drift is
+    // measurable from the log.
+    const incrementCall = mockUpdateCommand.mock.calls.find((call) =>
+      (call[0] as { UpdateExpression?: string }).UpdateExpression?.startsWith(
+        'ADD connectionCount'
+      )
+    );
+    expect(incrementCall).toBeDefined();
+    expect(incrementCall![0]).toMatchObject({
+      ReturnValuesOnConditionCheckFailure: 'ALL_OLD',
+    });
+    // The counter is renormalized before the retried increment.
+    const setCall = mockUpdateCommand.mock.calls.find((call) =>
+      (call[0] as { UpdateExpression?: string }).UpdateExpression?.startsWith(
+        'SET connectionCount'
+      )
+    );
+    expect(setCall).toBeDefined();
+    expect(setCall![0]).toMatchObject({ ExpressionAttributeValues: { ':measured': 2 } });
+    expect(mockDynamoDB.send).toHaveBeenCalledTimes(6);
+  });
+
+  it('rejects with 429 when the measured count confirms the limit (ADR-11)', async () => {
+    mockCacheManager.getRoomWithCache.mockResolvedValueOnce({
+      id: '11111111-2222-4333-8444-555555555555',
+      maxParticipants: 100,
+    });
+    const ccf = new Error('Conditional check failed');
+    ccf.name = 'ConditionalCheckFailedException';
+    mockDynamoDB.send.mockRejectedValueOnce(ccf);
+    // Measurement confirms 100 live connections — genuinely full.
+    mockDynamoDB.send.mockResolvedValueOnce({ Count: 100 });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const response = await handler(mockEvent as APIGatewayProxyEvent);
+
+    expect(response.statusCode).toBe(429);
+    // No renormalization, no retried increment: increment + measurement only.
+    expect(mockDynamoDB.send).toHaveBeenCalledTimes(2);
+    expect(
+      mockUpdateCommand.mock.calls.some((call) =>
+        (call[0] as { UpdateExpression?: string }).UpdateExpression?.startsWith(
+          'SET connectionCount'
+        )
+      )
+    ).toBe(false);
+    const logCall = warnSpy.mock.calls.find((call) =>
+      String(call[0]).includes('WebSocket connect rejected: connection limit reached')
+    );
+    expect(logCall).toBeDefined();
+    expect(JSON.parse(String(logCall![0]))).toMatchObject({
+      connectionCount: 100,
+      maxParticipants: 100,
+    });
+    warnSpy.mockRestore();
   });
 });

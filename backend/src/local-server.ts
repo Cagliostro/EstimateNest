@@ -558,6 +558,12 @@ async function handleWebSocketMessage(
       break;
     }
 
+    case 'ping': {
+      // Keepalive (ADR-16): answer on the same connection; no state change.
+      ws.send(JSON.stringify({ type: 'pong' }));
+      break;
+    }
+
     default:
       ws.send(
         JSON.stringify({

@@ -13,6 +13,7 @@ import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as subscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
@@ -267,17 +268,38 @@ export class EstimateNestStack extends cdk.Stack {
       ),
     });
 
+    // API Gateway access logs (ADR-13): invocation-level visibility on both
+    // APIs, kept for 30 days like the Lambda log groups (ADR-14).
+    const webSocketAccessLogGroup = new logs.LogGroup(this, 'WebSocketAccessLogGroup', {
+      logGroupName: `/aws/apigateway/estimatenest-${props.envName}-ws`,
+      retention: logs.RetentionDays.ONE_MONTH,
+    });
+
     const webSocketStage = new apigatewayv2.WebSocketStage(this, 'WebSocketStage', {
       webSocketApi,
       stageName: props.envName,
       autoDeploy: true,
     });
 
-    // Add throttling and idle timeout settings via L1 construct
+    // Add throttling, access logging and idle timeout settings via L1 construct
     const cfnStage = webSocketStage.node.defaultChild as apigatewayv2.CfnStage;
+    // Modest headroom above the old 20/5: clients retry throttled sends and
+    // the fan-out backs off, so the stage limits stay the last safety net,
+    // not the primary flow control (ADR-12).
     cfnStage.defaultRouteSettings = {
-      throttlingBurstLimit: 20,
-      throttlingRateLimit: 5,
+      throttlingBurstLimit: 50,
+      throttlingRateLimit: 10,
+    };
+    cfnStage.accessLogSettings = {
+      destinationArn: webSocketAccessLogGroup.logGroupArn,
+      format: JSON.stringify({
+        requestId: '$context.requestId',
+        requestTime: '$context.requestTime',
+        sourceIp: '$context.identity.sourceIp',
+        status: '$context.status',
+        routeKey: '$context.routeKey',
+        userAgent: '$context.identity.userAgent',
+      }),
     };
 
     // ====================
@@ -456,6 +478,30 @@ export class EstimateNestStack extends cdk.Stack {
       }
     );
 
+    // Log retention (ADR-14): the log groups were unbounded before. The
+    // every-minute auto-reveal keeps two weeks, every other handler a month.
+    // LogRetention targets the log group by its exact name — Lambda groups
+    // live under the /aws/lambda/ prefix, not at the function name itself.
+    [
+      createRoomHandler,
+      websocketConnectHandler,
+      websocketDisconnectHandler,
+      voteHandler,
+      joinRoomHandler,
+      roundHistoryHandler,
+      updateRoomHandler,
+      healthHandler,
+    ].forEach((func) => {
+      new logs.LogRetention(this, `LogRetention-${func.node.id}`, {
+        logGroupName: `/aws/lambda/${func.functionName}`,
+        retention: logs.RetentionDays.ONE_MONTH,
+      });
+    });
+    new logs.LogRetention(this, 'LogRetention-ScheduledAutoReveal', {
+      logGroupName: `/aws/lambda/${scheduledAutoRevealHandler.functionName}`,
+      retention: logs.RetentionDays.TWO_WEEKS,
+    });
+
     // EventBridge rule to trigger auto-reveal every minute
     const autoRevealRule = new events.Rule(this, 'AutoRevealRule', {
       schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
@@ -599,6 +645,11 @@ export class EstimateNestStack extends cdk.Stack {
     // TODO: Revert to stricter CORS after debugging
     const corsAllowOrigins = apigateway.Cors.ALL_ORIGINS;
 
+    const restAccessLogGroup = new logs.LogGroup(this, 'RestAccessLogGroup', {
+      logGroupName: `/aws/apigateway/estimatenest-${props.envName}-rest`,
+      retention: logs.RetentionDays.ONE_MONTH,
+    });
+
     const restApi = new apigateway.RestApi(this, 'RestApi', {
       restApiName: `estimatenest-rest-${props.envName}`,
       defaultCorsPreflightOptions: {
@@ -606,6 +657,23 @@ export class EstimateNestStack extends cdk.Stack {
         allowMethods: apigateway.Cors.ALL_METHODS,
         allowHeaders: ['*'],
         allowCredentials: false,
+      },
+      deployOptions: {
+        // Access logging (ADR-13): the ADR-required fields — the standard
+        // set lacks userAgent and latency. The stage keeps its default
+        // name 'prod' — the BasePathMapping below targets it.
+        accessLogDestination: new apigateway.LogGroupLogDestination(restAccessLogGroup),
+        accessLogFormat: apigateway.AccessLogFormat.custom(
+          JSON.stringify({
+            requestId: '$context.requestId',
+            requestTime: '$context.requestTime',
+            sourceIp: '$context.identity.sourceIp',
+            status: '$context.status',
+            latency: '$context.responseLatency',
+            path: '$context.path',
+            userAgent: '$context.identity.userAgent',
+          })
+        ),
       },
     });
 

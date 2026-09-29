@@ -4,6 +4,11 @@ import { config } from './config';
 type MessageHandler = (message: WebSocketMessage) => void;
 type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
+// API Gateway closes WebSocket connections after 10 minutes without app-level
+// messages (the idle timeout is not configurable and protocol ping frames do
+// not count). Ping halfway through so quiet-but-live sessions stay open (ADR-16).
+const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+
 export interface ConnectionOptions {
   roomId: string;
   participantId: string;
@@ -19,6 +24,7 @@ export class WebSocketClient {
   private ws: WebSocket | null = null;
   private state: ConnectionState = 'disconnected';
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectCount = 0;
   private shouldReconnect = true;
   private options: ConnectionOptions;
@@ -84,6 +90,7 @@ export class WebSocketClient {
       } catch (error) {
         this.warn('Failed to send join message:', error);
       }
+      this.startHeartbeat();
     };
 
     this.ws.onmessage = (event) => {
@@ -139,6 +146,7 @@ export class WebSocketClient {
 
     this.ws.onclose = (event) => {
       this.log('WebSocket closed:', event.code, event.reason);
+      this.stopHeartbeat();
       this.setState('disconnected');
 
       if (this.reconnectTimer) {
@@ -181,6 +189,7 @@ export class WebSocketClient {
   disconnect(): void {
     this.log('WebSocketClient.disconnect called');
     this.shouldReconnect = false;
+    this.stopHeartbeat();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -245,6 +254,24 @@ export class WebSocketClient {
       this.log('WebSocket state change:', this.state, '->', newState);
       this.state = newState;
       this.options.onStateChange?.(newState);
+    }
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      try {
+        this.send({ type: 'ping' });
+      } catch (error) {
+        this.warn('Heartbeat ping failed:', error);
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
     }
   }
 

@@ -77,15 +77,37 @@ export async function sendFanOut(options: SendFanOutOptions): Promise<Participan
   );
   const cleanedParticipants: Participant[] = [];
 
+  // 429 means "slow down", not "gone": retry briefly so a throttled stage
+  // burst does not drop fan-out messages (ADR-12). 100/300 ms + jitter keeps
+  // the Lambda well inside its timeout.
+  const sendWithThrottleRetry = async (connectionId: string): Promise<void> => {
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await client.send(
+          new PostToConnectionCommand({
+            ConnectionId: connectionId,
+            Data: JSON.stringify(message),
+          })
+        );
+        return;
+      } catch (error) {
+        const status = (error as ApiGatewayManagementApiServiceException).$metadata
+          ?.httpStatusCode;
+        if (status !== 429 || attempt === maxAttempts) {
+          throw error;
+        }
+        const delayMs = 100 * Math.pow(3, attempt - 1) + Math.random() * 50;
+        logger.info('Connection throttled, retrying', { connectionId, delayMs, attempt });
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  };
+
   // Send message to each active WebSocket connection
   const promises = activeParticipants.map(async (participant) => {
     try {
-      await client.send(
-        new PostToConnectionCommand({
-          ConnectionId: participant.connectionId,
-          Data: JSON.stringify(message),
-        })
-      );
+      await sendWithThrottleRetry(participant.connectionId);
     } catch (error) {
       logger.warn('Failed to send message to connection', { error });
 

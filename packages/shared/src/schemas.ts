@@ -119,6 +119,18 @@ export const updateRoundMessageSchema = z.object({
   }),
 });
 
+// Keepalive (ADR-16): API Gateway closes idle WebSocket connections after 10
+// minutes and only app-level messages reset that timer. The client pings every
+// 5 minutes; the server answers with pong on the same connection. No payload,
+// no state.
+export const pingMessageSchema = z.object({
+  type: z.literal('ping'),
+});
+
+export const pongMessageSchema = z.object({
+  type: z.literal('pong'),
+});
+
 export const participantListMessageSchema = z.object({
   type: z.literal('participantList'),
   payload: z.object({
@@ -173,6 +185,8 @@ export const webSocketMessageSchema = z.discriminatedUnion('type', [
   revealMessageSchema,
   newRoundMessageSchema,
   updateRoundMessageSchema,
+  pingMessageSchema,
+  pongMessageSchema,
   participantListMessageSchema,
   roundUpdateMessageSchema,
   participantUpdatedMessageSchema,

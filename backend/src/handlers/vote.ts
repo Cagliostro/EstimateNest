@@ -1105,6 +1105,17 @@ async function handleUpdateRound(
   return { message: 'Round updated' };
 }
 
+/**
+ * Keepalive (ADR-16): the client pings every 5 minutes so the API Gateway
+ * 10-minute idle timeout does not close quiet-but-live connections. Answer on
+ * the same connection — no broadcast, no state.
+ */
+async function handlePing(event: APIGatewayProxyEvent): Promise<{ message: string }> {
+  const connectionId = event.requestContext.connectionId!;
+  await sendToConnection(event, connectionId, { type: 'pong' });
+  return { message: 'pong' };
+}
+
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   const logger = createLogger();
   let message: WebSocketMessage;
@@ -1174,6 +1185,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         break;
       case 'updateRound':
         result = await handleUpdateRound(event, message);
+        break;
+      case 'ping':
+        result = await handlePing(event);
         break;
       default:
         return {

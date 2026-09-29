@@ -137,6 +137,8 @@ export type WebSocketMessage =
   | { type: 'reveal'; payload: { roundId: string } }
   | { type: 'newRound'; payload: { title?: string; description?: string } }
   | { type: 'updateRound'; payload: { roundId: string; title?: string; description?: string } }
+  | { type: 'ping' }
+  | { type: 'pong' }
   | { type: 'participantList'; payload: { participants: Participant[] } }
   | { type: 'roundUpdate'; payload: { round: Round; votes: Vote[] } }
   | { type: 'participantUpdated'; payload: { success: boolean; name: string } }

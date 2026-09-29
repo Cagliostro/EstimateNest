@@ -107,18 +107,19 @@ export async function sendToConnection(
       return;
     } catch (error) {
       lastError = error;
-      const isGoneException =
-        (error as ApiGatewayManagementApiServiceException).$metadata?.httpStatusCode === 410;
+      const status = (error as ApiGatewayManagementApiServiceException).$metadata?.httpStatusCode;
+      // 410 = gone (reconnect race), 429 = stage throttled — both transient.
+      const isRetryable = status === 410 || status === 429;
       logger.warn('Failed to send to connection', { attempt, error });
 
-      if (isGoneException && attempt < maxRetries) {
+      if (isRetryable && attempt < maxRetries) {
         // Wait before retrying (exponential backoff)
         const delayMs = 100 * Math.pow(2, attempt - 1);
-        logger.info('Connection gone, retrying', { delayMs });
+        logger.info('Retrying connection send', { delayMs, status });
         await new Promise((resolve) => setTimeout(resolve, delayMs));
         continue;
       }
-      // Not a gone exception or no more retries
+      // Not a retryable error or no more retries
       break;
     }
   }
